@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"cloud.google.com/go/civil"
 )
@@ -95,7 +96,7 @@ func decodeScalar(dataType string, b []byte) (any, error) {
 		if i := bytes.IndexByte(b, 0); i >= 0 {
 			b = b[:i]
 		}
-		return string(b), nil
+		return cp1252Decode(b), nil
 	case "WSTRING":
 		n := len(b) &^ 1
 		for i := 0; i+1 < len(b); i += 2 {
@@ -210,12 +211,19 @@ func encodeScalar(dataType string, v any, length uint32) ([]byte, error) {
 		if strings.IndexByte(s, 0) >= 0 {
 			return nil, fmt.Errorf("STRING %q contains a NUL, which would end it on the PLC", s)
 		}
-		// The last byte is the terminator the PLC expects.
-		if length < 1 || uint32(len(s)) > length-1 {
-			return nil, fmt.Errorf("STRING of %d bytes does not fit %d bytes with its terminator", len(s), length)
+		if !utf8.ValidString(s) {
+			return nil, fmt.Errorf("STRING %q is not valid UTF-8", s)
+		}
+		cp, err := cp1252Encode(s)
+		if err != nil {
+			return nil, err
+		}
+		// One byte per character; the last byte is the terminator the PLC expects.
+		if length < 1 || uint32(len(cp)) > length-1 {
+			return nil, fmt.Errorf("STRING of %d characters does not fit %d bytes with its terminator", len(cp), length)
 		}
 		buf := make([]byte, length)
-		copy(buf, s)
+		copy(buf, cp)
 		return buf, nil
 	case "WSTRING":
 		s, ok := v.(string)
@@ -224,6 +232,9 @@ func encodeScalar(dataType string, v any, length uint32) ([]byte, error) {
 		}
 		if strings.IndexByte(s, 0) >= 0 {
 			return nil, fmt.Errorf("WSTRING %q contains a NUL, which would end it on the PLC", s)
+		}
+		if !utf8.ValidString(s) {
+			return nil, fmt.Errorf("WSTRING %q is not valid UTF-8", s)
 		}
 		units := utf16.Encode([]rune(s))
 		if length < 2 || uint32(len(units)) > (length-2)/2 {

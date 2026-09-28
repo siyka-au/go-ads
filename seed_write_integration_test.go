@@ -73,7 +73,7 @@ var writeEdges = map[string][]any{
 	"dLDateVar": {date(1677, 9, 22), date(1900, 1, 1), date(1969, 12, 31), date(1970, 1, 1), date(2024, 2, 29), date(2262, 4, 11)},
 	"dtLDateTimeVar": {dateTime(1677, 9, 21, 0, 12, 43, 145_224_192), dateTime(1969, 12, 31, 23, 59, 59, 999_999_999),
 		dateTime(1970, 1, 1, 0, 0, 0, 0), dateTime(2024, 2, 29, 12, 34, 56, 789_012_345), dateTime(2262, 4, 11, 23, 47, 16, 854_775_807)},
-	"sStringVar": {"", "a", "S=1", printableASCII(), strings.Repeat("x", 255), "héllo € ✓"},
+	"sStringVar": {"", "a", "S=1", printableASCII(), strings.Repeat("x", 255), strings.Repeat("é", 255), "Grüße € ÄÖÜ ñ ©"},
 }
 
 // writeRejects lists values each member's type cannot hold. Every path must
@@ -99,7 +99,7 @@ var writeRejects = map[string][]any{
 	"tdLTimeOfDayVar": {civil.Time{Hour: 24}, civil.Time{Minute: 60}},
 	"dLDateVar":       {date(1677, 9, 21), date(2262, 4, 12)},
 	"dtLDateTimeVar":  {dateTime(1677, 9, 21, 0, 12, 43, 145_224_191), dateTime(2262, 4, 11, 23, 47, 16, 854_775_808)},
-	"sStringVar":      {strings.Repeat("x", 256), "a\x00b", 42},
+	"sStringVar":      {strings.Repeat("x", 256), strings.Repeat("é", 256), "a\x00b", "中", "✓", 42},
 }
 
 // writeFields lists FB_WriteTest's scalar members in a stable order.
