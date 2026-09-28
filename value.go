@@ -277,6 +277,26 @@ func parseDateTime(s string) (time.Time, error) {
 	return time.Parse("2006-01-02 15:04:05.999999999", strings.Replace(s, "T", " ", 1))
 }
 
+// copyData returns v with its maps and slices copied, so a caller holding a
+// struct or array value cannot alter the cache's. Scalars are values already.
+func copyData(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = copyData(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = copyData(e)
+		}
+		return out
+	}
+	return v
+}
+
 // isScalarType reports whether dataType is a primitive decodeScalar handles.
 func isScalarType(dataType string) bool {
 	_, fixed := scalarWidths[dataType]

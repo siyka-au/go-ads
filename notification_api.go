@@ -319,8 +319,10 @@ type StaleInfo struct {
 // "this sample may be stale" signal with the reason in a single check —
 // callers do `if u.Stale != nil { /* handle stale */ }`.
 type Update struct {
-	Variable  string
-	Value     string
+	Variable string
+	Value    string
+	// Data is the sample decoded to its Go type, as ReadValue returns it.
+	Data      any
 	TimeStamp time.Time
 	Stale     *StaleInfo
 }

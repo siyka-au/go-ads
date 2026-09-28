@@ -406,12 +406,14 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 			"handle", handle, "symbol", fullName, "dataType", live.DataType, "error", err)
 		return
 	}
+	data := copyData(live.Data)
 	sess.cache.lock.Unlock()
 
 	sess.logger.Log(context.Background(), LevelTrace, "update received", "update", value)
 	updateStruct := &Update{
 		Variable:  fullName,
 		Value:     value,
+		Data:      data,
 		TimeStamp: notificationTime,
 	}
 	// One-shot Stale flag (R-NOT-017): consume on first delivered sample.

@@ -72,24 +72,34 @@ func (sess *Session) writeToSymbolRetry(ctx context.Context, symbolName string, 
 // ReadFromSymbol reads a PLC symbol by name and returns its stringified
 // value (handle resolved on-demand and cached).
 func (sess *Session) ReadFromSymbol(ctx context.Context, symbolName string) (string, error) {
-	return sess.readFromSymbolRetry(ctx, symbolName, 1)
+	value, _, err := sess.readFromSymbolRetry(ctx, symbolName, 1)
+	return value, err
 }
 
-func (sess *Session) readFromSymbolRetry(ctx context.Context, symbolName string, retriesLeft int) (string, error) {
+// ReadValue reads a PLC symbol by name and returns its value as a Go type:
+// see the table in value.go. A struct or array needs the datatype table
+// (LoadSymbols) and comes back as map[string]any or []any, freshly allocated
+// per call.
+func (sess *Session) ReadValue(ctx context.Context, symbolName string) (any, error) {
+	_, data, err := sess.readFromSymbolRetry(ctx, symbolName, 1)
+	return data, err
+}
+
+func (sess *Session) readFromSymbolRetry(ctx context.Context, symbolName string, retriesLeft int) (string, any, error) {
 	gen := sess.epoch()
 
 	symbol, err := sess.getSymbol(ctx, symbolName)
 	if err != nil {
-		return "", fmt.Errorf("read %q: %w", symbolName, err)
+		return "", nil, fmt.Errorf("read %q: %w", symbolName, err)
 	}
 
 	// Check cache under lock
 	sess.cache.lock.Lock()
 	now := time.Now()
 	if now.Sub(symbol.LastUpdateTime) < symbol.MinUpdateInterval && symbol.Value != "" {
-		cached := symbol.Value
+		cached, data := symbol.Value, copyData(symbol.Data)
 		sess.cache.lock.Unlock()
-		return cached, nil
+		return cached, data, nil
 	}
 	handle := symbol.Handle
 	length := symbol.Length
@@ -109,7 +119,7 @@ func (sess *Session) readFromSymbolRetry(ctx context.Context, symbolName string,
 		if retriesLeft > 0 && sess.epoch() != gen {
 			return sess.readFromSymbolRetry(ctx, symbolName, retriesLeft-1)
 		}
-		return "", fmt.Errorf("read %q: %w", symbolName, err)
+		return "", nil, fmt.Errorf("read %q: %w", symbolName, err)
 	}
 
 	// R-CACHE-009 supplementary detection: the cached symbol.Length disagreeing
@@ -123,7 +133,7 @@ func (sess *Session) readFromSymbolRetry(ctx context.Context, symbolName string,
 	// errors.As on the caller side keeps matching.
 	if data != nil && length > 0 && uint32(len(data)) != length {
 		sess.handleStaleDetection(ReturnCodeDeviceInvalidSize)
-		return "", fmt.Errorf("read %q: %w", symbolName, ReturnCodeDeviceInvalidSize)
+		return "", nil, fmt.Errorf("read %q: %w", symbolName, ReturnCodeDeviceInvalidSize)
 	}
 
 	// parse() mutates symbol fields (Value, Valid, etc.) so it must
@@ -132,17 +142,18 @@ func (sess *Session) readFromSymbolRetry(ctx context.Context, symbolName string,
 	value, err := symbol.parse(data, 0, datatypes)
 	if err != nil {
 		sess.cache.lock.Unlock()
-		return "", fmt.Errorf("read %q: parse failed: %w", symbolName, err)
+		return "", nil, fmt.Errorf("read %q: parse failed: %w", symbolName, err)
 	}
 	symbol.LastUpdateTime = time.Now()
 	symbol.Value = value
+	typed := copyData(symbol.Data)
 	sess.cache.lock.Unlock()
 
 	sess.logger.Log(context.Background(), LevelTrace, "Read from symbol",
 		"symbol", symbolName,
 		"Value", value)
 
-	return value, nil
+	return value, typed, nil
 }
 
 // symbolSumAddress returns the group and offset for a symbol inside a sum command.
@@ -172,12 +183,21 @@ func symbolSumAddress(sym *symbol) (group, offset uint32) {
 // leaves thirty-nine present. Any other error means the transport failed and no
 // outcome is known. Reading none returns nil, nil.
 func (sess *Session) ReadMultipleSymbols(ctx context.Context, names []string) (map[string]string, error) {
-	return sess.readMultipleSymbolsRetry(ctx, names, 1)
+	values, _, err := sess.readMultipleSymbolsRetry(ctx, names, 1)
+	return values, err
 }
 
-func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []string, retriesLeft int) (map[string]string, error) {
+// ReadValues is ReadMultipleSymbols returning each value as a Go type, as
+// ReadValue does. Failures are named in a *BatchError and the map holds the
+// rest.
+func (sess *Session) ReadValues(ctx context.Context, names []string) (map[string]any, error) {
+	_, data, err := sess.readMultipleSymbolsRetry(ctx, names, 1)
+	return data, err
+}
+
+func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []string, retriesLeft int) (map[string]string, map[string]any, error) {
 	if len(names) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	gen := sess.epoch()
@@ -221,7 +241,7 @@ func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []strin
 		// Every name failed to resolve. Same shape as any other all-failed
 		// batch: the contract must not depend on where in the call the items
 		// died, nor on how many were asked for.
-		return nil, newBatchError("read", len(names), 0, failed)
+		return nil, nil, newBatchError("read", len(names), 0, failed)
 	}
 
 	results, err := sess.client.Load().SumRead(ctx, requests)
@@ -231,7 +251,7 @@ func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []strin
 		if retriesLeft > 0 && sess.epoch() != gen {
 			return sess.readMultipleSymbolsRetry(ctx, names, retriesLeft-1)
 		}
-		return nil, fmt.Errorf("batch read failed: %w", err)
+		return nil, nil, fmt.Errorf("batch read failed: %w", err)
 	}
 
 	// R-CACHE-009: fire online-change detection for first stale per-item code.
@@ -249,6 +269,7 @@ func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []strin
 	}
 
 	values := make(map[string]string, len(results))
+	typed := make(map[string]any, len(results))
 	sess.cache.lock.Lock()
 	defer sess.cache.lock.Unlock()
 
@@ -289,6 +310,7 @@ func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []strin
 		live.LastUpdateTime = now
 		live.Value = value
 		values[infos[i].name] = value
+		typed[infos[i].name] = copyData(live.Data)
 	}
 
 	// Fewer results than requests: the tail has no verdict at all, which is
@@ -298,7 +320,7 @@ func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []strin
 		failed = append(failed, BatchItemError{Symbol: infos[i].name, Skipped: ErrBatchNoResult})
 	}
 
-	return values, newBatchError("read", len(names), len(values), failed)
+	return values, typed, newBatchError("read", len(names), len(values), failed)
 }
 
 // WriteMultipleSymbols writes several symbols in one round-trip, returning a map
