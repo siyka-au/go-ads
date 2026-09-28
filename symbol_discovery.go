@@ -435,18 +435,17 @@ func (c *Client) GetSymbolInfoByName(ctx context.Context, symbolName string) (*s
 	dataType := normalizeStringDataType(string(dt))
 	flags := SymbolFlag(entry.Flags)
 	return &symbol{
-		FullName:          string(name), // PLC-returned casing (authoritative)
-		Name:              string(name),
-		DataType:          dataType,
-		Comment:           string(comment),
-		Group:             entry.IGroup,
-		Offset:            entry.IOffs,
-		Length:            entry.Size,
-		BaseType:          ADSDataType(entry.DataType),
-		Flags:             flags,
-		ContextMask:       flags.ContextMask(),
-		LastUpdateTime:    time.Now(),
-		MinUpdateInterval: 50 * time.Millisecond,
+		FullName:       string(name), // PLC-returned casing (authoritative)
+		Name:           string(name),
+		DataType:       dataType,
+		Comment:        string(comment),
+		Group:          entry.IGroup,
+		Offset:         entry.IOffs,
+		Length:         entry.Size,
+		BaseType:       ADSDataType(entry.DataType),
+		Flags:          flags,
+		ContextMask:    flags.ContextMask(),
+		LastUpdateTime: time.Now(),
 	}, nil
 }
 

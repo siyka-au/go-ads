@@ -498,5 +498,10 @@ func (s *symbol) scalarType(datatypes map[string]SymbolUploadDataType) (string, 
 			"symbol", s.DataType, "size", s.Length, "baseType", s.BaseType, "inferred", inferred)
 		return inferred, nil
 	}
+	// A struct, or an alias the table would resolve, looks the same from here as
+	// a type this library cannot decode; without the table, name the fix.
+	if len(datatypes) == 0 {
+		return "", fmt.Errorf("unknown format cannot parse: %s is not a primitive type and the datatype table is not loaded; call LoadSymbols()", s.DataType)
+	}
 	return "", fmt.Errorf("unknown format cannot parse: %s", s.DataType)
 }

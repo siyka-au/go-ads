@@ -2,16 +2,24 @@
 
 package ads
 
-// Typed-value tests against the AdsGo_Testing PLC project
-// (siyka/ads-go/plc/testing). Every output of Main.fbTypeTest is a
-// deterministic function of nSeed, so each test writes a seed and compares the
-// Go values ReadValue/ReadValues/Update.Data return with ones computed here.
+// Integration tests against the AdsGo_Testing PLC project
+// (siyka/ads-go/plc/testing). They assert Go values throughout.
 //
-// Opt in with ADS_SEED_PLC=1, plus:
-//   ADS_PLC_IP       - PLC IP address, or 127.0.0.1 for a local runtime
-//   ADS_TARGET_AMS   - AMS NetID of the runtime
-//   ADS_TARGET_PORT  - AMS port of the PLC project (default 851)
-//   ADS_LOCAL_MODE   - true to go through the local TwinCAT router
+//   - Main.fbTypeTest computes every output from nSeed each cycle, so reads are
+//     checked against values the PLC itself derived, independent of this
+//     library's encoder.
+//   - Main.fbWriteTest is owned by the tests: the PLC never touches it. Once the
+//     reads above prove decoding correct, write-then-read round trips there
+//     test the encoder without circularity.
+//   - Main.fbStructTest holds one struct under each pack_mode (0, 2, 4, 8).
+//
+// Opt in with ADS_SEED_PLC=1. Settings come from the environment or a .env
+// file at the repo root (gitignored):
+//
+//	ADS_PLC_IP       PLC IP address, or 127.0.0.1 for a runtime on this host
+//	ADS_TARGET_AMS   AMS NetID of the runtime
+//	ADS_TARGET_PORT  AMS port of the PLC project (default 851)
+//	ADS_LOCAL_MODE   true to go through the local TwinCAT router
 //
 //	go test -tags integration -run TestSeed -v .
 
@@ -20,7 +28,7 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,10 +37,45 @@ import (
 	"cloud.google.com/go/civil"
 )
 
-const seedFB = "Main.fbTypeTest."
+const (
+	seedFB   = "Main.fbTypeTest."
+	writeFB  = "Main.fbWriteTest."
+	structFB = "Main.fbStructTest."
+)
 
+// loadSeedEnv sets KEY=VALUE pairs from .env that are not already set.
+func loadSeedEnv(t *testing.T) {
+	t.Helper()
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			k, v = strings.TrimSpace(k), strings.Trim(strings.TrimSpace(v), `"'`)
+			if _, set := os.LookupEnv(k); !set {
+				t.Setenv(k, v)
+			}
+		}
+	}
+}
+
+// seedSession connects to the seed PLC with the datatype table loaded, and
+// restores Main.fbTypeTest's control variables when the test ends.
 func seedSession(t *testing.T) *Session {
 	t.Helper()
+	sess := openSeedSession(t, true)
+	restoreSeedState(t, sess)
+	return sess
+}
+
+func openSeedSession(t *testing.T, loadSymbols bool) *Session {
+	t.Helper()
+	loadSeedEnv(t)
 	if os.Getenv("ADS_SEED_PLC") == "" {
 		t.Skip("ADS_SEED_PLC not set")
 	}
@@ -55,44 +98,40 @@ func seedSession(t *testing.T) *Session {
 	// NewSession's context bounds the session's lifetime, so it must outlive
 	// this function; the timeout applies to connecting only.
 	sess, err := NewSession(context.Background(), AMSEndpoint{IP: getEnvOrDefault("ADS_PLC_IP", "127.0.0.1"), Port: 48898, AMS: target}, opts...)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	if err := sess.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	if err := sess.LoadSymbols(ctx); err != nil {
-		t.Fatalf("LoadSymbols: %v", err)
+	if loadSymbols {
+		if err := sess.LoadSymbols(ctx); err != nil {
+			t.Fatalf("LoadSymbols: %v", err)
+		}
 	}
-	restoreSeedState(t, sess)
 	return sess
 }
 
-// restoreSeedState puts nSeed and bAutoMode back as they were when the test
-// ends.
+// restoreSeedState puts fbTypeTest's control variables back as they were.
 func restoreSeedState(t *testing.T, sess *Session) {
 	t.Helper()
-	ctx := context.Background()
-	seed, err := sess.ReadValue(ctx, seedFB+"nSeed")
+	names := []string{seedFB + "nSeed", seedFB + "bAutoMode", seedFB + "nAutoTickInterval"}
+	saved, err := sess.ReadValues(context.Background(), names)
 	if err != nil {
-		t.Fatalf("read nSeed: %v", err)
-	}
-	auto, err := sess.ReadValue(ctx, seedFB+"bAutoMode")
-	if err != nil {
-		t.Fatalf("read bAutoMode: %v", err)
+		t.Fatalf("read control state: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = sess.WriteValue(ctx, seedFB+"nSeed", seed)
-		_ = sess.WriteValue(ctx, seedFB+"bAutoMode", auto)
+		if _, err := sess.WriteValues(context.Background(), saved); err != nil {
+			t.Errorf("restore control state: %v", err)
+		}
 	})
 }
 
 // setSeed stops auto-increment and writes nSeed, then confirms both the write
-// (nSeed reads back) and a PLC cycle with it (nUdintVar, derived from nSeed,
-// matches).
+// (nSeed reads back) and a PLC cycle with it (nUdintVar, derived from nSeed).
 func setSeed(t *testing.T, sess *Session, seed uint32) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -116,8 +155,10 @@ func setSeed(t *testing.T, sess *Session, seed uint32) {
 	}
 }
 
-func unixDate(sec int64) civil.Date         { return civil.DateOf(time.Unix(sec, 0).UTC()) }
-func unixDateTime(sec int64) civil.DateTime { return civil.DateTimeOf(time.Unix(sec, 0).UTC()) }
+func civilTimeOfDuration(d time.Duration) civil.Time {
+	return civil.Time{Hour: int(d / time.Hour), Minute: int(d % time.Hour / time.Minute),
+		Second: int(d % time.Minute / time.Second), Nanosecond: int(d % time.Second)}
+}
 
 // seedScalars is what FB_TypeTest computes from nSeed, as Go values.
 func seedScalars(s uint32) map[string]any {
@@ -138,282 +179,295 @@ func seedScalars(s uint32) map[string]any {
 		"fRealVar":        float32(s),
 		"fLrealVar":       float64(s),
 		"tTimeVar":        time.Duration(s) * time.Millisecond,
-		"tdTimeOfDayVar":  civilTimeOf(time.Duration(int64(s)%msPerDay) * time.Millisecond),
-		"dDateVar":        unixDate(int64(s)), // UDINT_TO_DATE keeps only the day
-		"dtDateTimeVar":   unixDateTime(int64(s)),
+		"tdTimeOfDayVar":  civilTimeOfDuration(time.Duration(int64(s)%msPerDay) * time.Millisecond),
+		"dDateVar":        civil.DateOf(time.Unix(int64(s), 0).UTC()), // UDINT_TO_DATE keeps the day
+		"dtDateTimeVar":   civil.DateTimeOf(time.Unix(int64(s), 0).UTC()),
 		"tLtimeVar":       time.Duration(s),
-		"tdLTimeOfDayVar": civilTimeOf(time.Duration(s)),
-		"dLDateVar":       civil.DateOf(time.Unix(0, int64(s)).UTC()),
+		"tdLTimeOfDayVar": civilTimeOfDuration(time.Duration(s)),
+		"dLDateVar":       civil.DateOf(time.Unix(0, int64(s)).UTC()), // ULINT_TO_LDATE keeps the day
 		"dtLDateTimeVar":  civil.DateTimeOf(time.Unix(0, int64(s)).UTC()),
 		"sStringVar":      "S=" + strconv.FormatUint(uint64(s), 10),
 	}
 }
 
-// Seeds cover sign wrap of every narrow type, a TIME over 24 h, a TOD with
-// seconds and milliseconds, and the top of UDINT.
-var typedSeeds = []uint32{0, 1, 127, 128, 255, 256, 32767, 32768, 65535, 65536, 100001, 90_061_001, math.MaxInt32, math.MaxInt32 + 1, math.MaxUint32}
-
-func TestSeedReadValues(t *testing.T) {
-	sess := seedSession(t)
-	names := make([]string, 0, len(seedScalars(0)))
-	for field := range seedScalars(0) {
-		names = append(names, seedFB+field)
+func seedFields() []string {
+	fields := make([]string, 0, 24)
+	for f := range seedScalars(0) {
+		fields = append(fields, f)
 	}
-	for _, seed := range typedSeeds {
-		t.Run(fmt.Sprint(seed), func(t *testing.T) {
-			setSeed(t, sess, seed)
-			got, err := sess.ReadValues(context.Background(), names)
-			if err != nil {
-				t.Fatalf("ReadValues: %v", err)
+	sort.Strings(fields)
+	return fields
+}
+
+// sameValue compares Go values as the library returns them, treating NaNs of
+// the same type as equal and telling -0 from +0.
+func sameValue(a, b any) bool {
+	switch x := a.(type) {
+	case float32:
+		y, ok := b.(float32)
+		if !ok {
+			return false
+		}
+		if x != x || y != y {
+			return x != x && y != y
+		}
+		return x == y && math.Signbit(float64(x)) == math.Signbit(float64(y))
+	case float64:
+		y, ok := b.(float64)
+		if !ok {
+			return false
+		}
+		if x != x || y != y {
+			return x != x && y != y
+		}
+		return x == y && math.Signbit(x) == math.Signbit(y)
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for k, v := range x {
+			if w, ok := y[k]; !ok || !sameValue(v, w) {
+				return false
 			}
-			for field, want := range seedScalars(seed) {
-				if v := got[seedFB+field]; v != want {
-					t.Errorf("%s = %#v (%T), want %#v (%T)", field, v, v, want, want)
-				}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !sameValue(x[i], y[i]) {
+				return false
 			}
-		})
+		}
+		return true
+	}
+	return a == b
+}
+
+func assertValue(t *testing.T, label string, got, want any) {
+	t.Helper()
+	if !sameValue(got, want) {
+		t.Errorf("%s = %#v (%T), want %#v (%T)", label, got, got, want, want)
 	}
 }
 
-// ReadValue and ReadValues must agree, one symbol at a time.
-func TestSeedReadValue(t *testing.T) {
-	sess := seedSession(t)
-	const seed = 90_061_001
-	setSeed(t, sess, seed)
-	for field, want := range seedScalars(seed) {
-		v, err := sess.ReadValue(context.Background(), seedFB+field)
-		if err != nil {
-			t.Errorf("%s: %v", field, err)
-			continue
-		}
-		if v != want {
-			t.Errorf("%s = %#v (%T), want %#v (%T)", field, v, v, want, want)
-		}
-	}
+// Seeds cover the wrap of every narrow type, float32's last exact integer and
+// the first it rounds, TOD's last millisecond and its rollover, a TIME over
+// 24 h, and the edges of DINT and UDINT.
+var seedCases = []struct {
+	name string
+	seed uint32
+}{
+	{"zero", 0},
+	{"one", 1},
+	{"sint_max", 127},
+	{"sint_wrap", 128},
+	{"byte_max", 255},
+	{"byte_wrap", 256},
+	{"int_max", 32_767},
+	{"int_wrap", 32_768},
+	{"uint_max", 65_535},
+	{"uint_wrap", 65_536},
+	{"real_exact_max", 16_777_215},
+	{"real_rounds", 16_777_217},
+	{"tod_last_ms", 86_399_999},
+	{"tod_rolls_over", 86_400_000},
+	{"time_over_24h", 90_061_001},
+	{"dint_max", math.MaxInt32},
+	{"dint_wrap", math.MaxInt32 + 1},
+	{"udint_max", math.MaxUint32},
 }
 
-func TestSeedStruct(t *testing.T) {
-	sess := seedSession(t)
-	const seed = 100001
-	setSeed(t, sess, seed)
-	v, err := sess.ReadValue(context.Background(), seedFB+"stStructVar")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, ok := v.(map[string]any)
-	if !ok {
-		t.Fatalf("stStructVar is %T, want map[string]any", v)
-	}
-	want := seedScalars(seed)
-	want["nSeed"] = uint32(seed)
-	for field, w := range want {
-		if got[field] != w {
-			t.Errorf("stStructVar.%s = %#v (%T), want %#v (%T)", field, got[field], got[field], w, w)
-		}
-	}
-}
-
-func TestSeedArrays(t *testing.T) {
-	sess := seedSession(t)
-	const seed = 32760 // INT elements cross 32767 → -32768
-	setSeed(t, sess, seed)
-	got, err := sess.ReadValues(context.Background(), []string{seedFB + "aIntArray", seedFB + "aDintArray", seedFB + "aIntArray2d"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantInt, wantDint := make([]any, 10), make([]any, 10)
+func expectedArrays(s uint32) map[string]any {
+	a, d := make([]any, 10), make([]any, 10)
 	for i := range uint32(10) {
-		wantInt[i] = int16(seed + i)
-		wantDint[i] = int32(seed + i)
+		a[i] = int16(s + i)
+		d[i] = int32(s + i)
 	}
-	want2d := make([]any, 3)
+	a2 := make([]any, 3)
 	for i := range uint32(3) {
 		row := make([]any, 3)
 		for j := range uint32(3) {
-			row[j] = int16(seed + i*3 + j)
+			row[j] = int16(s + i*3 + j)
 		}
-		want2d[i] = row
+		a2[i] = row
 	}
-	for name, want := range map[string][]any{"aIntArray": wantInt, "aDintArray": wantDint, "aIntArray2d": want2d} {
-		if !reflect.DeepEqual(got[seedFB+name], want) {
-			t.Errorf("%s = %#v, want %#v", name, got[seedFB+name], want)
-		}
-	}
+	return map[string]any{"aIntArray": a, "aDintArray": d, "aIntArray2d": a2}
 }
 
-// A change written by another session straight after subscribing must arrive
-// as its own value. It used to arrive carrying the value it replaced.
-func TestSeedNotificationTyped(t *testing.T) {
-	sess := seedSession(t)
-	writer := seedSession(t)
-	setSeed(t, writer, 1)
-
-	ch := make(chan *Update, 64)
-	var configs []NotificationConfig
-	for field := range seedScalars(0) {
-		if field == "sStringVar" {
-			continue // the PLC rewrites it every cycle, so it notifies every cycle
-		}
-		configs = append(configs, NotificationConfig{SymbolName: seedFB + field, CycleTime: 10 * time.Millisecond, TransmissionMode: TransModeServerOnChange})
-	}
-	if _, err := sess.AddSymbolNotifications(context.Background(), configs, ch); err != nil {
-		t.Fatal(err)
-	}
-	const seed = 100002
-	if err := writer.WriteValue(context.Background(), seedFB+"nSeed", uint32(seed)); err != nil {
-		t.Fatal(err)
-	}
-
-	want := seedScalars(seed)
-	pending := len(configs)
-	seen := map[string]bool{}
-	deadline := time.After(5 * time.Second)
-	for pending > 0 {
-		select {
-		case u := <-ch:
-			field := u.Variable[len(seedFB):]
-			if u.Value == want[field] && !seen[field] {
-				seen[field] = true
-				pending--
-			}
-		case <-deadline:
-			for _, c := range configs {
-				if field := c.SymbolName[len(seedFB):]; !seen[field] {
-					t.Errorf("%s: never received %#v", field, want[field])
-				}
-			}
-			return
-		}
-	}
-}
-
-const writeFB = "Main.fbWriteTest."
-
-// Write Go values of every type FB_WriteTest declares, at the edges of each
-// range, and read each back as the same Go value.
-func TestSeedWriteValues(t *testing.T) {
+// Every seed, read three ways: all scalars in one batch, the struct whole, and
+// the arrays whole.
+func TestSeedReadMatrix(t *testing.T) {
 	sess := seedSession(t)
 	ctx := context.Background()
-	sets := []map[string]any{
-		{
-			"bBoolVar": true, "nSintVar": int8(math.MinInt8), "nUsintVar": uint8(math.MaxUint8), "nByteVar": uint8(0xA5),
-			"nIntVar": int16(math.MinInt16), "nUintVar": uint16(math.MaxUint16), "nWordVar": uint16(0xBEEF),
-			"nDintVar": int32(math.MinInt32), "nUdintVar": uint32(math.MaxUint32), "nDwordVar": uint32(0xDEADBEEF),
-			"nLintVar": int64(math.MinInt64), "nUlintVar": uint64(math.MaxUint64), "nLwordVar": uint64(1 << 63),
-			"fRealVar": float32(-1.5e-38), "fLrealVar": math.MaxFloat64,
-			"tTimeVar":       time.Duration(math.MaxUint32) * time.Millisecond,
-			"tdTimeOfDayVar": civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_000_000},
-			"dDateVar":       civil.Date{Year: 2106, Month: 2, Day: 7},
-			"dtDateTimeVar":  civil.DateTime{Date: civil.Date{Year: 2106, Month: 2, Day: 7}, Time: civil.Time{Hour: 6, Minute: 28, Second: 15}},
-			"sStringVar":     strings.Repeat("x", 255),
-		},
-		{
-			"bBoolVar": false, "nSintVar": int8(math.MaxInt8), "nUsintVar": uint8(0), "nByteVar": uint8(0),
-			"nIntVar": int16(math.MaxInt16), "nUintVar": uint16(0), "nWordVar": uint16(0),
-			"nDintVar": int32(math.MaxInt32), "nUdintVar": uint32(0), "nDwordVar": uint32(0),
-			"nLintVar": int64(math.MaxInt64), "nUlintVar": uint64(0), "nLwordVar": uint64(0),
-			"fRealVar": float32(math.Inf(1)), "fLrealVar": -0.0,
-			"tTimeVar":       time.Duration(0),
-			"tdTimeOfDayVar": civil.Time{},
-			"dDateVar":       civil.Date{Year: 1970, Month: 1, Day: 1},
-			"dtDateTimeVar":  civil.DateTime{Date: civil.Date{Year: 2024, Month: 2, Day: 29}, Time: civil.Time{Hour: 12}},
-			"sStringVar":     "",
-		},
+	fields := seedFields()
+	names := make([]string, len(fields))
+	for i, f := range fields {
+		names[i] = seedFB + f
 	}
-	for i, set := range sets {
-		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			values := make(map[string]any, len(set))
-			for field, v := range set {
-				values[writeFB+field] = v
-			}
-			if _, err := sess.WriteValues(ctx, values); err != nil {
-				t.Fatalf("WriteValues: %v", err)
-			}
-			names := make([]string, 0, len(values))
-			for name := range values {
-				names = append(names, name)
-			}
+	for _, tc := range seedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			setSeed(t, sess, tc.seed)
+			want := seedScalars(tc.seed)
+
 			got, err := sess.ReadValues(ctx, names)
 			if err != nil {
 				t.Fatalf("ReadValues: %v", err)
 			}
-			for name, want := range values {
-				if got[name] != want {
-					t.Errorf("%s = %#v (%T), want %#v (%T)", name, got[name], got[name], want, want)
+			for _, f := range fields {
+				assertValue(t, f, got[seedFB+f], want[f])
+			}
+
+			v, err := sess.ReadValue(ctx, seedFB+"stStructVar")
+			if err != nil {
+				t.Fatalf("ReadValue stStructVar: %v", err)
+			}
+			st, ok := v.(map[string]any)
+			if !ok {
+				t.Fatalf("stStructVar is %T, want map[string]any", v)
+			}
+			assertValue(t, "stStructVar.nSeed", st["nSeed"], tc.seed)
+			for _, f := range fields {
+				assertValue(t, "stStructVar."+f, st[f], want[f])
+			}
+			if len(st) != len(fields)+3 { // + nSeed, bAutoMode, nAutoTickInterval
+				t.Errorf("stStructVar has %d members, want %d", len(st), len(fields)+3)
+			}
+
+			for name, w := range expectedArrays(tc.seed) {
+				v, err := sess.ReadValue(ctx, seedFB+name)
+				if err != nil {
+					t.Errorf("ReadValue %s: %v", name, err)
+					continue
+				}
+				assertValue(t, name, v, w)
+			}
+		})
+	}
+}
+
+// One seed through every way of naming a value: each scalar alone, each struct
+// member by path, each array element by index -- with the datatype table and
+// without it (symbols resolved on demand by the PLC).
+func TestSeedReadAccessPaths(t *testing.T) {
+	const seed = 100_001
+	for _, mode := range []struct {
+		name string
+		load bool
+	}{{"loaded", true}, {"on_demand", false}} {
+		t.Run(mode.name, func(t *testing.T) {
+			sess := openSeedSession(t, mode.load)
+			restoreSeedState(t, sess)
+			setSeed(t, sess, seed)
+			ctx := context.Background()
+			want := seedScalars(seed)
+
+			for _, base := range []string{seedFB, seedFB + "stStructVar."} {
+				for _, f := range seedFields() {
+					v, err := sess.ReadValue(ctx, base+f)
+					if err != nil {
+						t.Errorf("ReadValue %s%s: %v", base, f, err)
+						continue
+					}
+					assertValue(t, base+f, v, want[f])
+				}
+			}
+
+			arrays := expectedArrays(seed)
+			for i := range 10 {
+				name := fmt.Sprintf("%saIntArray[%d]", seedFB, i)
+				v, err := sess.ReadValue(ctx, name)
+				if err != nil {
+					t.Errorf("ReadValue %s: %v", name, err)
+					continue
+				}
+				assertValue(t, name, v, arrays["aIntArray"].([]any)[i])
+			}
+			for i := range 3 {
+				for j := range 3 {
+					name := fmt.Sprintf("%saIntArray2d[%d,%d]", seedFB, i, j) // IEC syntax
+					v, err := sess.ReadValue(ctx, name)
+					if err != nil {
+						t.Errorf("ReadValue %s: %v", name, err)
+						continue
+					}
+					assertValue(t, name, v, arrays["aIntArray2d"].([]any)[i].([]any)[j])
 				}
 			}
 		})
 	}
-	// One at a time through WriteValue, with untyped Go integers.
-	for field, v := range map[string]any{"nIntVar": -7, "nUdintVar": 7, "nUlintVar": 7} {
-		if err := sess.WriteValue(ctx, writeFB+field, v); err != nil {
-			t.Errorf("WriteValue %s: %v", field, err)
+}
+
+// Without the datatype table a struct or array cannot be decoded; the error
+// must say so rather than misread it.
+func TestSeedCompositeNeedsDatatypeTable(t *testing.T) {
+	sess := openSeedSession(t, false)
+	for _, name := range []string{"stStructVar", "aIntArray", "aIntArray2d"} {
+		_, err := sess.ReadValue(context.Background(), seedFB+name)
+		if err == nil || !strings.Contains(err.Error(), "LoadSymbols") {
+			t.Errorf("%s without the table: err = %v, want one pointing at LoadSymbols", name, err)
 		}
-	}
-	got, err := sess.ReadValues(ctx, []string{writeFB + "nIntVar", writeFB + "nUdintVar", writeFB + "nUlintVar"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[writeFB+"nIntVar"] != int16(-7) || got[writeFB+"nUdintVar"] != uint32(7) || got[writeFB+"nUlintVar"] != uint64(7) {
-		t.Errorf("WriteValue with untyped ints read back as %#v", got)
 	}
 }
 
-// A value the PLC type cannot hold is refused before anything is sent.
-func TestSeedWriteValueRejects(t *testing.T) {
+// The symbol metadata a consumer sees: TwinCAT's type names and sizes.
+func TestSeedSymbolMetadata(t *testing.T) {
 	sess := seedSession(t)
-	ctx := context.Background()
-	if err := sess.WriteValue(ctx, writeFB+"nIntVar", int16(5)); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name, dataType string
+		length         uint32
+	}{
+		{"bBoolVar", "BOOL", 1}, {"nSintVar", "SINT", 1}, {"nUsintVar", "USINT", 1}, {"nByteVar", "BYTE", 1},
+		{"nIntVar", "INT", 2}, {"nUintVar", "UINT", 2}, {"nWordVar", "WORD", 2},
+		{"nDintVar", "DINT", 4}, {"nUdintVar", "UDINT", 4}, {"nDwordVar", "DWORD", 4},
+		{"nLintVar", "LINT", 8}, {"nUlintVar", "ULINT", 8}, {"nLwordVar", "LWORD", 8},
+		{"fRealVar", "REAL", 4}, {"fLrealVar", "LREAL", 8},
+		{"tTimeVar", "TIME", 4}, {"tdTimeOfDayVar", "TIME_OF_DAY", 4}, {"dDateVar", "DATE", 4}, {"dtDateTimeVar", "DATE_AND_TIME", 4},
+		{"tLtimeVar", "LTIME", 8}, {"tdLTimeOfDayVar", "LTIME_OF_DAY", 8}, {"dLDateVar", "LDATE", 8}, {"dtLDateTimeVar", "LDATE_AND_TIME", 8},
+		{"sStringVar", "STRING", 256},
+		{"aIntArray", "ARRAY [0..9] OF INT", 20},
+		{"aDintArray", "ARRAY [0..9] OF DINT", 40},
+		{"aIntArray2d", "ARRAY [0..2,0..2] OF INT", 18},
+		{"stStructVar", "ST_TypeTestStruct", 0}, // size logged, not fixed here
 	}
-	for field, v := range map[string]any{"nIntVar": 40000, "tTimeVar": "1s", "fRealVar": 1.5, "sStringVar": strings.Repeat("x", 256)} {
-		if err := sess.WriteValue(ctx, writeFB+field, v); err == nil {
-			t.Errorf("WriteValue %s = %#v: expected an error", field, v)
-		}
-	}
-	if v, _ := sess.ReadValue(ctx, writeFB+"nIntVar"); v != int16(5) {
-		t.Errorf("nIntVar = %#v after a refused write, want int16(5)", v)
-	}
-}
-
-// A struct and arrays written whole read back whole.
-func TestSeedWriteComposite(t *testing.T) {
-	sess := seedSession(t)
-	ctx := context.Background()
-	// Start from the struct as the PLC has it, so every member is present.
-	v, err := sess.ReadValue(ctx, writeFB+"stStructVar")
-	if err != nil {
-		t.Fatal(err)
-	}
-	st := v.(map[string]any)
-	st["nSeed"] = uint32(4242)
-	st["nIntVar"] = int16(-4242)
-	st["tTimeVar"] = 49 * time.Hour
-	st["sStringVar"] = "written whole"
-	st["dtDateTimeVar"] = civil.DateTime{Date: civil.Date{Year: 2026, Month: 9, Day: 28}, Time: civil.Time{Hour: 20, Minute: 30}}
-
-	arr := make([]any, 10)
-	for i := range arr {
-		arr[i] = int16(i * -1000)
-	}
-	arr2d := []any{
-		[]any{int16(1), int16(2), int16(3)},
-		[]any{int16(4), int16(5), int16(6)},
-		[]any{int16(7), int16(8), int16(math.MinInt16)},
-	}
-	want := map[string]any{writeFB + "stStructVar": st, writeFB + "aIntArray": arr, writeFB + "aIntArray2d": arr2d}
-	for name, v := range want {
-		if err := sess.WriteValue(ctx, name, v); err != nil {
-			t.Fatalf("WriteValue %s: %v", name, err)
-		}
-	}
-	for name, w := range want {
-		got, err := sess.ReadValue(ctx, name)
+	for _, tt := range tests {
+		v, err := sess.GetSymbol(context.Background(), seedFB+tt.name)
 		if err != nil {
-			t.Fatalf("ReadValue %s: %v", name, err)
+			t.Errorf("GetSymbol %s: %v", tt.name, err)
+			continue
 		}
-		if !reflect.DeepEqual(got, w) {
-			t.Errorf("%s = %#v, want %#v", name, got, w)
+		if v.DataType != tt.dataType {
+			t.Errorf("%s: DataType %q, want %q", tt.name, v.DataType, tt.dataType)
 		}
+		if tt.length != 0 && v.Length != tt.length {
+			t.Errorf("%s: Length %d, want %d", tt.name, v.Length, tt.length)
+		}
+		if tt.length == 0 {
+			t.Logf("%s: Length %d, %d members", tt.name, v.Length, len(v.Children()))
+		}
+	}
+}
+
+// ReadValue always reads from the PLC. It used to serve a value decoded less
+// than 50 ms earlier from cache, so a struct read straight after a change the
+// PLC made (here, derived from a new seed) returned the old value.
+func TestSeedReadValueIsNeverStale(t *testing.T) {
+	sess := seedSession(t)
+	ctx := context.Background()
+	for _, seed := range []uint32{11, 12, 13} {
+		setSeed(t, sess, seed)
+		v, err := sess.ReadValue(ctx, seedFB+"stStructVar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertValue(t, fmt.Sprintf("stStructVar.nSeed after seed %d", seed), v.(map[string]any)["nSeed"], seed)
+		a, err := sess.ReadValue(ctx, seedFB+"aIntArray")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertValue(t, fmt.Sprintf("aIntArray[0] after seed %d", seed), a.([]any)[0], int16(seed))
 	}
 }

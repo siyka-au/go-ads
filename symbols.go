@@ -121,19 +121,18 @@ type SymbolUploadInfo struct {
 // is Handle -- zeroed on reload, and an observed zero simply fails the next PLC
 // call and prompts a re-resolve. Parent/Children form a tree fixed at discovery.
 type symbol struct {
-	FullName          string
-	LastUpdateTime    time.Time
-	MinUpdateInterval time.Duration
-	Name              string
-	DataType          string
-	Comment           string
-	Handle            uint32
-	Group             uint32
-	Offset            uint32
-	Length            uint32
-	BaseType          ADSDataType // protocol ADST_ code (e.g., ADSTReal32=4 for REAL)
-	Flags             SymbolFlag
-	ContextMask       uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
+	FullName       string
+	LastUpdateTime time.Time
+	Name           string
+	DataType       string
+	Comment        string
+	Handle         uint32
+	Group          uint32
+	Offset         uint32
+	Length         uint32
+	BaseType       ADSDataType // protocol ADST_ code (e.g., ADSTReal32=4 for REAL)
+	Flags          SymbolFlag
+	ContextMask    uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
 
 	Value       any // decoded to its Go type; see value.go
 	Valid       bool
@@ -530,18 +529,17 @@ func addChildren(s *symbol, symbols map[string]*symbol) {
 func addSymbol(uploadSym symbolUploadSymbol, datatypes map[string]SymbolUploadDataType, lg *slog.Logger) *symbol {
 	flags := SymbolFlag(uploadSym.SymbolEntry.Flags)
 	sym := &symbol{
-		Name:              uploadSym.Name,
-		LastUpdateTime:    time.Now(),
-		MinUpdateInterval: 50 * time.Millisecond,
-		FullName:          uploadSym.Name,
-		DataType:          uploadSym.DataType,
-		Comment:           uploadSym.Comment,
-		Length:            uploadSym.SymbolEntry.Size,
-		BaseType:          ADSDataType(uploadSym.SymbolEntry.DataType),
-		Group:             uploadSym.SymbolEntry.IGroup,
-		Offset:            uploadSym.SymbolEntry.IOffs,
-		Flags:             flags,
-		ContextMask:       flags.ContextMask(),
+		Name:           uploadSym.Name,
+		LastUpdateTime: time.Now(),
+		FullName:       uploadSym.Name,
+		DataType:       uploadSym.DataType,
+		Comment:        uploadSym.Comment,
+		Length:         uploadSym.SymbolEntry.Size,
+		BaseType:       ADSDataType(uploadSym.SymbolEntry.DataType),
+		Group:          uploadSym.SymbolEntry.IGroup,
+		Offset:         uploadSym.SymbolEntry.IOffs,
+		Flags:          flags,
+		ContextMask:    flags.ContextMask(),
 	}
 
 	dt, ok := datatypes[uploadSym.DataType]
@@ -589,14 +587,13 @@ func (data *SymbolUploadDataType) addOffsetDepth(parent *symbol, datatypes map[s
 			// this path again when the datatype table arrives after the symbol list.
 			// Without this their parse and serialise warnings fall back to the
 			// package default logger, which is the bypass this change set removes.
-			logger:            lg,
-			Name:              segment.Name,
-			LastUpdateTime:    time.Now(),
-			MinUpdateInterval: 50 * time.Millisecond,
-			FullName:          path,
-			DataType:          segment.DataType,
-			Comment:           segment.Comment,
-			Length:            segment.DatatypeEntry.Size,
+			logger:         lg,
+			Name:           segment.Name,
+			LastUpdateTime: time.Now(),
+			FullName:       path,
+			DataType:       segment.DataType,
+			Comment:        segment.Comment,
+			Length:         segment.DatatypeEntry.Size,
 			// Left at ADSTVoid, a member resolved by guess instead: BOOL became
 			// BYTE on TC3, SINT on TC2. Composites still report ADSTBigType.
 			BaseType: ADSDataType(segment.DatatypeEntry.DataType),

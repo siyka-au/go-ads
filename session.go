@@ -2904,8 +2904,8 @@ func configureKeepAlive(c net.Conn) {
 
 // zeroOldSymbolHandles invalidates each symbol in the map: Handle=0 forces
 // re-resolution, defending against the PLC reusing a handle for a different
-// symbol, and clearing the cached value stops a Read inside MinUpdateInterval
-// returning pre-disconnect data. Nil-safe.
+// symbol, and clearing the cached value stops a view of it showing
+// pre-disconnect data. Nil-safe.
 func zeroOldSymbolHandles(m map[string]*symbol) {
 	for _, s := range m {
 		if s != nil {

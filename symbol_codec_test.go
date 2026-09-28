@@ -35,14 +35,13 @@ func TestDecode_RejectsOversizedSymbolLength(t *testing.T) {
 }
 
 // A change decoded straight after the previous sample must be stored and
-// returned. The store used to skip values arriving within MinUpdateInterval
-// of the last one, so a notification carried the value it was replacing.
+// returned. The store used to skip values arriving within 50 ms of the last
+// one, so a notification carried the value it was replacing.
 func TestDecode_BackToBackChangesAreNotDropped(t *testing.T) {
 	sym := &symbol{
-		Name:              "x",
-		DataType:          "UDINT",
-		Length:            4,
-		MinUpdateInterval: time.Hour, // far longer than the gap between decodes
+		Name:     "x",
+		DataType: "UDINT",
+		Length:   4,
 	}
 	for _, want := range []uint32{1, 100002, 7} {
 		got := decodeOK(t, sym, leu32(want), nil)

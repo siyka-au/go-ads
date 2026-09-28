@@ -50,10 +50,9 @@ func (s *symbol) decode(data []byte, offset int, datatypes map[string]SymbolUplo
 }
 
 // store records a freshly decoded value. It always stores: the data came off
-// the wire, so it is the current value. MinUpdateInterval is a read-cache TTL
-// (see readValueRetry), not a rate limit on decoding -- applying it here
-// dropped any change arriving within the interval of the previous one, so a
-// notification returned the value it was replacing.
+// the wire, so it is the current value. A rate limit here once dropped any
+// change arriving within 50 ms of the previous one, so a notification returned
+// the value it was replacing.
 func (s *symbol) store(v any) {
 	s.LastUpdateTime = time.Now()
 	s.Value = v

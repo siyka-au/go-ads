@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // WriteValue writes value, a Go value of the type ReadValue returns for the
@@ -93,13 +92,10 @@ func (sess *Session) readValueRetry(ctx context.Context, symbolName string, retr
 		return nil, fmt.Errorf("read %q: %w", symbolName, err)
 	}
 
-	// Serve from cache when a value decoded within MinUpdateInterval is held.
+	// Always read from the PLC: a cached value can be stale even moments after
+	// it was decoded, because a write elsewhere (or the PLC program) can change
+	// it without touching this symbol's cache entry.
 	sess.cache.lock.Lock()
-	if symbol.ValueParsed && time.Since(symbol.LastUpdateTime) < symbol.MinUpdateInterval {
-		cached := copyData(symbol.Value)
-		sess.cache.lock.Unlock()
-		return cached, nil
-	}
 	handle := symbol.Handle
 	length := symbol.Length
 	datatypes := sess.cache.datatypes
