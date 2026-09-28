@@ -2,6 +2,7 @@ package ads
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -326,5 +327,98 @@ func TestEncode2DArrayRoundTrip(t *testing.T) {
 		if _, err := sym.encode(v, datatypes); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
+	}
+}
+
+// bitStructSymbol builds a 2-byte struct of 16 BIT members, as TwinCAT reports
+// them: flag 0x20 set, Offs and Size in bits.
+func bitStructSymbol() (*symbol, map[string]SymbolUploadDataType) {
+	children := map[string]*SymbolUploadDataType{}
+	for i := range 16 {
+		name := fmt.Sprintf("b%d", i)
+		children[name] = &SymbolUploadDataType{Name: name, DataType: "BIT",
+			DatatypeEntry: datatypeEntry{Offs: uint32(i), Size: 1, Flags: 0xA2, DataType: 33}}
+	}
+	datatypes := map[string]SymbolUploadDataType{
+		"ST_Bits": {Name: "ST_Bits", DatatypeEntry: datatypeEntry{Size: 2, Flags: 0x81}, Children: children},
+	}
+	return addSymbol(symbolUploadSymbol{Name: "MAIN.bits", DataType: "ST_Bits", SymbolEntry: symbolEntry{Size: 2}}, datatypes, nil), datatypes
+}
+
+func TestDecodeBitMembers(t *testing.T) {
+	sym, datatypes := bitStructSymbol()
+	for _, pattern := range []uint16{0, 0xFFFF, 0x0001, 0x8000, 0x5555, 0xAAAA, 0x1234} {
+		got, err := sym.decode(u16(pattern), 0, datatypes)
+		if err != nil {
+			t.Fatalf("%#04x: %v", pattern, err)
+		}
+		m := got.(map[string]any)
+		for i := range 16 {
+			if want := pattern&(1<<i) != 0; m[fmt.Sprintf("b%d", i)] != want {
+				t.Errorf("%#04x: b%d = %v, want %v", pattern, i, m[fmt.Sprintf("b%d", i)], want)
+			}
+		}
+	}
+}
+
+func TestEncodeBitMembers(t *testing.T) {
+	sym, datatypes := bitStructSymbol()
+	for _, pattern := range []uint16{0, 0xFFFF, 0x0001, 0x8000, 0x5555, 0xAAAA, 0x1234} {
+		v := map[string]any{}
+		for i := range 16 {
+			v[fmt.Sprintf("b%d", i)] = pattern&(1<<i) != 0
+		}
+		got, err := sym.encode(v, datatypes)
+		if err != nil {
+			t.Fatalf("%#04x: %v", pattern, err)
+		}
+		if !reflect.DeepEqual(got, u16(pattern)) {
+			t.Errorf("%#04x: encoded % x", pattern, got)
+		}
+	}
+	if _, err := sym.encode(map[string]any{"b0": 1}, datatypes); err == nil {
+		t.Error("a non-bool BIT: expected an error")
+	}
+}
+
+// Three dimensions nest one level deeper than two; the recursion that expands
+// each level must hold at depth.
+func TestDataTree3DArray(t *testing.T) {
+	const typeName = "ARRAY [0..1,0..2,-1..1] OF INT"
+	datatypes := map[string]SymbolUploadDataType{
+		typeName: {
+			Name: typeName, DataType: "INT", DatatypeEntry: datatypeEntry{Size: 36, ArrayDim: 3},
+			Children: makeArrayChildren([]datatypeArrayInfo{{0, 2}, {0, 3}, {uint32(0xFFFFFFFF), 3}}, "INT", 36, nil),
+		},
+	}
+	sym := addSymbol(symbolUploadSymbol{Name: "MAIN.a3", DataType: typeName, SymbolEntry: symbolEntry{Size: 36}}, datatypes, nil)
+	var data []byte
+	for i := range 18 {
+		data = append(data, u16(uint16(i))...)
+	}
+	got, err := sym.decode(data, 0, datatypes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]any, 2)
+	n := int16(0)
+	for i := range 2 {
+		plane := make([]any, 3)
+		for j := range 3 {
+			row := make([]any, 3)
+			for k := range 3 {
+				row[k] = n
+				n++
+			}
+			plane[j] = row
+		}
+		want[i] = plane
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+	back, err := sym.encode(want, datatypes)
+	if err != nil || !reflect.DeepEqual(back, data) {
+		t.Errorf("encode: % x, %v", back, err)
 	}
 }

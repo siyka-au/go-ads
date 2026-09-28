@@ -395,6 +395,18 @@ func (s *symbol) encode(v any, datatypes map[string]SymbolUploadDataType) ([]byt
 	}
 	buf := make([]byte, s.Length)
 	put := func(c *symbol, cv any, label string) error {
+		if c.BitMember {
+			// A BIT member sets one bit of the parent; Offset counts bits.
+			b, ok := cv.(bool)
+			if !ok {
+				return fmt.Errorf("%s: BIT takes bool, got %T", label, cv)
+			}
+			if c.Length != 1 || uint64(c.Offset)/8 >= uint64(len(buf)) {
+				return fmt.Errorf("%s: bit %d (width %d) does not fit the %d-byte value", label, c.Offset, c.Length, len(buf))
+			}
+			WriteBit(buf, int(c.Offset), b)
+			return nil
+		}
 		cb, err := c.encode(cv, datatypes)
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)

@@ -25,7 +25,13 @@ func (s *symbol) decode(data []byte, offset int, datatypes map[string]SymbolUplo
 
 	if len(s.Children) > 0 {
 		for _, child := range s.Children {
-			if _, err := child.decode(data[offset:stop], int(child.Offset), datatypes); err != nil {
+			var err error
+			if child.BitMember {
+				err = child.decodeBit(data[offset:stop])
+			} else {
+				_, err = child.decode(data[offset:stop], int(child.Offset), datatypes)
+			}
+			if err != nil {
 				return nil, fmt.Errorf("decoding child %q: %w", child.Name, err)
 			}
 		}
@@ -47,6 +53,19 @@ func (s *symbol) decode(data []byte, offset int, datatypes map[string]SymbolUplo
 	}
 	s.store(v)
 	return s.Value, nil
+}
+
+// decodeBit decodes a BIT member from its parent's bytes: Offset counts bits
+// from the start of parent.
+func (s *symbol) decodeBit(parent []byte) error {
+	if s.Length != 1 {
+		return fmt.Errorf("%s is %d bits wide; only single BIT members are supported", s.Name, s.Length)
+	}
+	if uint64(s.Offset)/8 >= uint64(len(parent)) {
+		return fmt.Errorf("bit %d of %s is past the %d-byte parent", s.Offset, s.Name, len(parent))
+	}
+	s.store(ReadBit(parent, int(s.Offset)))
+	return nil
 }
 
 // store records a freshly decoded value. It always stores: the data came off
