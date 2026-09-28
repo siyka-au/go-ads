@@ -2,6 +2,10 @@
 
 A pure Go library for communicating with Beckhoff TwinCAT PLCs using the ADS (Automation Device Specification) protocol.
 
+A fork of [RuneRoven/go-ads](https://github.com/RuneRoven/go-ads), published as `github.com/siyka-au/go-ads/v3`.
+
+> **v3 breaking change**: values are Go types. `ReadValue`/`ReadValues`/`WriteValue`/`WriteValues` replace the string methods, `Update.Value` and `SymbolView.Value` are `any`, and `GetJSON` is gone — see [Values](#values) and [CHANGELOG.md](CHANGELOG.md).
+>
 > **v2.2 breaking change**: every RPC method takes a `context.Context` as the first argument. `NewSession` accepts a typed `AMSEndpoint` plus options instead of 7 positional arguments. `Connect` takes `ctx` instead of a local-mode bool (use `WithLocalMode()`). `Symbol` is unexported (use `SymbolView`). `Update.Stale` is now `*StaleInfo`. See [CHANGELOG.md](CHANGELOG.md) for the full migration sketch.
 >
 > **v2.1 breaking change**: the previous `Connection` type has been renamed to `Session`, and the raw RPC surface has been split off into a separate `Client` type.
@@ -26,7 +30,7 @@ A pure Go library for communicating with Beckhoff TwinCAT PLCs using the ADS (Au
 ## Install
 
 ```bash
-go get github.com/RuneRoven/go-ads/v2
+go get github.com/siyka-au/go-ads/v3
 ```
 
 ## Quick start
@@ -39,7 +43,7 @@ import (
 	"fmt"
 	"time"
 
-	ads "github.com/RuneRoven/go-ads/v2"
+	ads "github.com/siyka-au/go-ads/v3"
 )
 
 func main() {

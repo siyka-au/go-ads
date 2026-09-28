@@ -1,4 +1,4 @@
-module github.com/RuneRoven/go-ads/v2
+module github.com/siyka-au/go-ads/v3
 
 go 1.26.2
 
