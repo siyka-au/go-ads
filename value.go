@@ -206,6 +206,10 @@ func encodeScalar(dataType string, v any, length uint32) ([]byte, error) {
 		if !ok {
 			return nil, typeError(dataType, v, "string")
 		}
+		// A NUL ends the string on the PLC, so the rest would be lost.
+		if strings.IndexByte(s, 0) >= 0 {
+			return nil, fmt.Errorf("STRING %q contains a NUL, which would end it on the PLC", s)
+		}
 		// The last byte is the terminator the PLC expects.
 		if length < 1 || uint32(len(s)) > length-1 {
 			return nil, fmt.Errorf("STRING of %d bytes does not fit %d bytes with its terminator", len(s), length)
@@ -217,6 +221,9 @@ func encodeScalar(dataType string, v any, length uint32) ([]byte, error) {
 		s, ok := v.(string)
 		if !ok {
 			return nil, typeError(dataType, v, "string")
+		}
+		if strings.IndexByte(s, 0) >= 0 {
+			return nil, fmt.Errorf("WSTRING %q contains a NUL, which would end it on the PLC", s)
 		}
 		units := utf16.Encode([]rune(s))
 		if length < 2 || uint32(len(units)) > (length-2)/2 {

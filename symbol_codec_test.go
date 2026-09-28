@@ -347,6 +347,9 @@ func TestEncodeInvalidValues(t *testing.T) {
 		// A WSTRING needs 2 bytes for its terminator (F-17).
 		{"WSTRING/length_0", "WSTRING", 0, "hi"},
 		{"WSTRING/length_1", "WSTRING", 1, "hi"},
+		// A NUL would end the string on the PLC and lose the rest.
+		{"STRING/embedded_nul", "STRING", 10, "a\x00b"},
+		{"WSTRING/embedded_nul", "WSTRING", 10, "a\x00b"},
 		// Too long for the declared size is refused, not truncated.
 		{"STRING/overflow", "STRING", 4, "Hello"},
 		{"WSTRING/overflow", "WSTRING", 6, "ABCDE"},
