@@ -266,6 +266,7 @@ type SymbolView struct {
 	ContextMask uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
 	Parsed      bool  // true if Value has been decoded at least once at snapshot time
 	IsRoot      bool  // true if this symbol has no parent (top-level program/global var)
+	BitMember   bool  // a BIT member of a struct: Offset and Length count bits
 	Value       any   // the cached value as its Go type (see value.go); a copy
 
 	conn *Session
@@ -471,6 +472,7 @@ func (s *symbol) view(conn *Session) SymbolView {
 		ContextMask: s.ContextMask,
 		Parsed:      s.Valid,
 		IsRoot:      s.Parent == nil,
+		BitMember:   s.BitMember,
 		Value:       copyData(s.Value),
 		conn:        conn,
 	}

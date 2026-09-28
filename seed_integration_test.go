@@ -295,7 +295,30 @@ func expectedArrays(s uint32) map[string]any {
 		}
 		a2[i] = row
 	}
-	return map[string]any{"aIntArray": a, "aDintArray": d, "aIntArray2d": a2}
+	// fbTypeTest's aDintArray is ARRAY[-9..9]: element i = DINT(seed) + i, so
+	// the slice starts at index -9.
+	neg := make([]any, 19)
+	for k := range 19 {
+		neg[k] = int32(s) + int32(k-9)
+	}
+	// aStructVar is ten ST_TypeTestSubStructs, each holding the scalars.
+	structs := make([]any, 10)
+	for k := range structs {
+		structs[k] = seedScalars(s)
+	}
+	return map[string]any{"aIntArray": a, "aDintArray": neg, "aIntArray2d": a2, "aStructVar": structs}
+}
+
+// gvlArrays is FB_GvlTest's arrays: aDintArray there is ARRAY[0..9].
+func gvlArrays(s uint32) map[string]any {
+	out := expectedArrays(s)
+	d := make([]any, 10)
+	for i := range uint32(10) {
+		d[i] = int32(s + i)
+	}
+	out["aDintArray"] = d
+	delete(out, "aStructVar")
+	return out
 }
 
 // Every seed, read three ways: all scalars in one batch, the struct whole, and
@@ -333,8 +356,9 @@ func TestSeedReadMatrix(t *testing.T) {
 			for _, f := range fields {
 				assertValue(t, "stStructVar."+f, st[f], want[f])
 			}
-			if len(st) != len(fields)+3 { // + nSeed, bAutoMode, nAutoTickInterval
-				t.Errorf("stStructVar has %d members, want %d", len(st), len(fields)+3)
+			assertValue(t, "stStructVar.stSubStructVar", st["stSubStructVar"], want)
+			if len(st) != len(fields)+4 { // + nSeed, bAutoMode, nAutoTickInterval, stSubStructVar
+				t.Errorf("stStructVar has %d members, want %d", len(st), len(fields)+4)
 			}
 
 			for name, w := range expectedArrays(tc.seed) {
@@ -365,7 +389,8 @@ func TestSeedReadAccessPaths(t *testing.T) {
 			ctx := context.Background()
 			want := seedScalars(seed)
 
-			for _, base := range []string{seedFB, seedFB + "stStructVar."} {
+			bases := []string{seedFB, seedFB + "stStructVar.", seedFB + "stStructVar.stSubStructVar.", seedFB + "aStructVar[0].", seedFB + "aStructVar[9]."}
+			for _, base := range bases {
 				for _, f := range seedFields() {
 					v, err := sess.ReadValue(ctx, base+f)
 					if err != nil {
@@ -397,6 +422,26 @@ func TestSeedReadAccessPaths(t *testing.T) {
 					assertValue(t, name, v, arrays["aIntArray2d"].([]any)[i].([]any)[j])
 				}
 			}
+			for i := -9; i <= 9; i++ {
+				name := fmt.Sprintf("%saDintArray[%d]", seedFB, i)
+				v, err := sess.ReadValue(ctx, name)
+				if err != nil {
+					t.Errorf("ReadValue %s: %v", name, err)
+					continue
+				}
+				assertValue(t, name, v, arrays["aDintArray"].([]any)[i+9])
+			}
+			// An array element that is itself a struct, read whole: a struct, so
+			// only with the datatype table (TestSeedCompositeNeedsDatatypeTable
+			// covers the on-demand error).
+			if mode.load {
+				v, err := sess.ReadValue(ctx, seedFB+"aStructVar[4]")
+				if err != nil {
+					t.Errorf("ReadValue aStructVar[4]: %v", err)
+				} else {
+					assertValue(t, "aStructVar[4]", v, want)
+				}
+			}
 		})
 	}
 }
@@ -405,7 +450,7 @@ func TestSeedReadAccessPaths(t *testing.T) {
 // must say so rather than misread it.
 func TestSeedCompositeNeedsDatatypeTable(t *testing.T) {
 	sess := openSeedSession(t, false)
-	for _, name := range []string{"stStructVar", "aIntArray", "aIntArray2d"} {
+	for _, name := range []string{"stStructVar", "aIntArray", "aIntArray2d", "aDintArray", "aStructVar", "aStructVar[4]", "stStructVar.stSubStructVar"} {
 		_, err := sess.ReadValue(context.Background(), seedFB+name)
 		if err == nil || !strings.Contains(err.Error(), "LoadSymbols") {
 			t.Errorf("%s without the table: err = %v, want one pointing at LoadSymbols", name, err)
@@ -429,7 +474,8 @@ func TestSeedSymbolMetadata(t *testing.T) {
 		{"tLtimeVar", "LTIME", 8}, {"tdLTimeOfDayVar", "LTIME_OF_DAY", 8}, {"dLDateVar", "LDATE", 8}, {"dtLDateTimeVar", "LDATE_AND_TIME", 8},
 		{"sStringVar", "STRING", 256},
 		{"aIntArray", "ARRAY [0..9] OF INT", 20},
-		{"aDintArray", "ARRAY [0..9] OF DINT", 40},
+		{"aDintArray", "ARRAY [-9..9] OF DINT", 76},
+		{"aStructVar", "ARRAY [0..9] OF ST_TypeTestSubStruct", 0},
 		{"aIntArray2d", "ARRAY [0..2,0..2] OF INT", 18},
 		{"stStructVar", "ST_TypeTestStruct", 0}, // size logged, not fixed here
 	}

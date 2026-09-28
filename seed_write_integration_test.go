@@ -110,7 +110,7 @@ func writeFields() []string { return seedFields() }
 func TestSeedWriteEdgesEachPath(t *testing.T) {
 	sess := seedSession(t)
 	ctx := context.Background()
-	for _, base := range []string{writeFB, writeFB + "stStructVar."} {
+	for _, base := range []string{writeFB, writeFB + "stStructVar.", writeFB + "stStructVar.stSubStructVar."} {
 		for _, f := range writeFields() {
 			for i, v := range writeEdges[f] {
 				name := base + f
@@ -186,6 +186,8 @@ func TestSeedWriteEdgesStructWhole(t *testing.T) {
 			set["nSeed"] = uint32(k * 1_000_003)
 			set["bAutoMode"] = k%2 == 1
 			set["nAutoTickInterval"] = uint32(math.MaxUint32 - k)
+			// The nested struct takes the next set, so it differs from its parent.
+			set["stSubStructVar"] = edgeSet(k + 1)
 			if err := sess.WriteValue(ctx, st, set); err != nil {
 				t.Fatalf("WriteValue struct: %v", err)
 			}
@@ -338,6 +340,7 @@ func TestSeedWriteStructRejects(t *testing.T) {
 	const st = writeFB + "stStructVar"
 	full := edgeSet(0)
 	full["nSeed"], full["bAutoMode"], full["nAutoTickInterval"] = uint32(1), false, uint32(2)
+	full["stSubStructVar"] = edgeSet(1)
 	if err := sess.WriteValue(ctx, st, full); err != nil {
 		t.Fatal(err)
 	}
