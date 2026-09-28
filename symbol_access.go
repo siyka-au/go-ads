@@ -7,13 +7,37 @@ import (
 	"time"
 )
 
+// encoder serialises one value for a symbol, given the datatype table.
+type encoder func(sym *symbol, datatypes map[string]SymbolUploadDataType) ([]byte, error)
+
+func stringEncoder(value string) encoder {
+	return func(sym *symbol, datatypes map[string]SymbolUploadDataType) ([]byte, error) {
+		return sym.writeToNode(value, datatypes)
+	}
+}
+
+func valueEncoder(value any) encoder {
+	return func(sym *symbol, datatypes map[string]SymbolUploadDataType) ([]byte, error) {
+		return sym.encode(value, datatypes)
+	}
+}
+
 // WriteToSymbol writes a value to a PLC symbol by name (handle resolved
 // on-demand and cached).
 func (sess *Session) WriteToSymbol(ctx context.Context, symbolName string, value string) error {
-	return sess.writeToSymbolRetry(ctx, symbolName, value, 1)
+	return sess.writeToSymbolRetry(ctx, symbolName, stringEncoder(value), value, 1)
 }
 
-func (sess *Session) writeToSymbolRetry(ctx context.Context, symbolName string, value string, retriesLeft int) error {
+// WriteValue writes value, a Go value of the type ReadValue returns for the
+// symbol, to a PLC symbol by name. Integer types also take any Go integer in
+// range. A struct takes a map naming every member; an array a slice of exactly
+// its element count, nested per dimension. Structs and arrays need the
+// datatype table (LoadSymbols).
+func (sess *Session) WriteValue(ctx context.Context, symbolName string, value any) error {
+	return sess.writeToSymbolRetry(ctx, symbolName, valueEncoder(value), value, 1)
+}
+
+func (sess *Session) writeToSymbolRetry(ctx context.Context, symbolName string, enc encoder, value any, retriesLeft int) error {
 	gen := sess.epoch()
 
 	symbol, err := sess.getSymbol(ctx, symbolName)
@@ -29,7 +53,7 @@ func (sess *Session) writeToSymbolRetry(ctx context.Context, symbolName string, 
 	handle := symbol.Handle
 	sess.cache.lock.Unlock()
 
-	data, err := symbol.writeToNode(value, datatypes)
+	data, err := enc(symbol, datatypes)
 	if err != nil {
 		return fmt.Errorf("write to %q: serialization failed: %w", symbolName, err)
 	}
@@ -45,7 +69,7 @@ func (sess *Session) writeToSymbolRetry(ctx context.Context, symbolName string, 
 		// If a reconnect happened during our operation, retry once with fresh handles
 		sess.waitForReconnect()
 		if retriesLeft > 0 && sess.epoch() != gen {
-			return sess.writeToSymbolRetry(ctx, symbolName, value, retriesLeft-1)
+			return sess.writeToSymbolRetry(ctx, symbolName, enc, value, retriesLeft-1)
 		}
 		return fmt.Errorf("write to %q: %w", symbolName, err)
 	}
@@ -332,10 +356,24 @@ func (sess *Session) readMultipleSymbolsRetry(ctx context.Context, names []strin
 // library never sent it; any other error means the transport failed and no
 // outcome is known. Writing none returns nil, nil.
 func (sess *Session) WriteMultipleSymbols(ctx context.Context, values map[string]string) (map[string]ReturnCode, error) {
-	return sess.writeMultipleSymbolsRetry(ctx, values, 1)
+	encs := make(map[string]encoder, len(values))
+	for name, v := range values {
+		encs[name] = stringEncoder(v)
+	}
+	return sess.writeMultipleSymbolsRetry(ctx, encs, 1)
 }
 
-func (sess *Session) writeMultipleSymbolsRetry(ctx context.Context, values map[string]string, retriesLeft int) (map[string]ReturnCode, error) {
+// WriteValues is WriteMultipleSymbols taking Go values, as WriteValue does.
+// The same caution applies: read success from the *BatchError, not the map.
+func (sess *Session) WriteValues(ctx context.Context, values map[string]any) (map[string]ReturnCode, error) {
+	encs := make(map[string]encoder, len(values))
+	for name, v := range values {
+		encs[name] = valueEncoder(v)
+	}
+	return sess.writeMultipleSymbolsRetry(ctx, encs, 1)
+}
+
+func (sess *Session) writeMultipleSymbolsRetry(ctx context.Context, values map[string]encoder, retriesLeft int) (map[string]ReturnCode, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -359,7 +397,7 @@ func (sess *Session) writeMultipleSymbolsRetry(ctx context.Context, values map[s
 	// success — the one finding in this API that can move a physical output.
 	var failed []BatchItemError
 
-	for name, value := range values {
+	for name, enc := range values {
 		symbol, err := sess.getSymbol(ctx, name)
 		if err != nil {
 			sess.logger.Error("error getting symbol for batch write", "error", err, "symbol", name)
@@ -370,7 +408,7 @@ func (sess *Session) writeMultipleSymbolsRetry(ctx context.Context, values map[s
 			continue
 		}
 
-		data, err := symbol.writeToNode(value, datatypes)
+		data, err := enc(symbol, datatypes)
 		if err != nil {
 			sess.logger.Error("error serializing symbol for batch write", "error", err, "symbol", name)
 			failed = append(failed, BatchItemError{

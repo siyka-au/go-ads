@@ -22,6 +22,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -282,6 +283,137 @@ func TestSeedNotificationTyped(t *testing.T) {
 				}
 			}
 			return
+		}
+	}
+}
+
+const writeFB = "Main.fbWriteTest."
+
+// Write Go values of every type FB_WriteTest declares, at the edges of each
+// range, and read each back as the same Go value.
+func TestSeedWriteValues(t *testing.T) {
+	sess := seedSession(t)
+	ctx := context.Background()
+	sets := []map[string]any{
+		{
+			"bBoolVar": true, "nSintVar": int8(math.MinInt8), "nUsintVar": uint8(math.MaxUint8), "nByteVar": uint8(0xA5),
+			"nIntVar": int16(math.MinInt16), "nUintVar": uint16(math.MaxUint16), "nWordVar": uint16(0xBEEF),
+			"nDintVar": int32(math.MinInt32), "nUdintVar": uint32(math.MaxUint32), "nDwordVar": uint32(0xDEADBEEF),
+			"nLintVar": int64(math.MinInt64), "nUlintVar": uint64(math.MaxUint64), "nLwordVar": uint64(1 << 63),
+			"fRealVar": float32(-1.5e-38), "fLrealVar": math.MaxFloat64,
+			"tTimeVar":       time.Duration(math.MaxUint32) * time.Millisecond,
+			"tdTimeOfDayVar": civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_000_000},
+			"dDateVar":       civil.Date{Year: 2106, Month: 2, Day: 7},
+			"dtDateTimeVar":  civil.DateTime{Date: civil.Date{Year: 2106, Month: 2, Day: 7}, Time: civil.Time{Hour: 6, Minute: 28, Second: 15}},
+			"sStringVar":     strings.Repeat("x", 255),
+		},
+		{
+			"bBoolVar": false, "nSintVar": int8(math.MaxInt8), "nUsintVar": uint8(0), "nByteVar": uint8(0),
+			"nIntVar": int16(math.MaxInt16), "nUintVar": uint16(0), "nWordVar": uint16(0),
+			"nDintVar": int32(math.MaxInt32), "nUdintVar": uint32(0), "nDwordVar": uint32(0),
+			"nLintVar": int64(math.MaxInt64), "nUlintVar": uint64(0), "nLwordVar": uint64(0),
+			"fRealVar": float32(math.Inf(1)), "fLrealVar": -0.0,
+			"tTimeVar":       time.Duration(0),
+			"tdTimeOfDayVar": civil.Time{},
+			"dDateVar":       civil.Date{Year: 1970, Month: 1, Day: 1},
+			"dtDateTimeVar":  civil.DateTime{Date: civil.Date{Year: 2024, Month: 2, Day: 29}, Time: civil.Time{Hour: 12}},
+			"sStringVar":     "",
+		},
+	}
+	for i, set := range sets {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			values := make(map[string]any, len(set))
+			for field, v := range set {
+				values[writeFB+field] = v
+			}
+			if _, err := sess.WriteValues(ctx, values); err != nil {
+				t.Fatalf("WriteValues: %v", err)
+			}
+			names := make([]string, 0, len(values))
+			for name := range values {
+				names = append(names, name)
+			}
+			got, err := sess.ReadValues(ctx, names)
+			if err != nil {
+				t.Fatalf("ReadValues: %v", err)
+			}
+			for name, want := range values {
+				if got[name] != want {
+					t.Errorf("%s = %#v (%T), want %#v (%T)", name, got[name], got[name], want, want)
+				}
+			}
+		})
+	}
+	// One at a time through WriteValue, with untyped Go integers.
+	for field, v := range map[string]any{"nIntVar": -7, "nUdintVar": 7, "nUlintVar": 7} {
+		if err := sess.WriteValue(ctx, writeFB+field, v); err != nil {
+			t.Errorf("WriteValue %s: %v", field, err)
+		}
+	}
+	got, err := sess.ReadValues(ctx, []string{writeFB + "nIntVar", writeFB + "nUdintVar", writeFB + "nUlintVar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[writeFB+"nIntVar"] != int16(-7) || got[writeFB+"nUdintVar"] != uint32(7) || got[writeFB+"nUlintVar"] != uint64(7) {
+		t.Errorf("WriteValue with untyped ints read back as %#v", got)
+	}
+}
+
+// A value the PLC type cannot hold is refused before anything is sent.
+func TestSeedWriteValueRejects(t *testing.T) {
+	sess := seedSession(t)
+	ctx := context.Background()
+	if err := sess.WriteValue(ctx, writeFB+"nIntVar", int16(5)); err != nil {
+		t.Fatal(err)
+	}
+	for field, v := range map[string]any{"nIntVar": 40000, "tTimeVar": "1s", "fRealVar": 1.5, "sStringVar": strings.Repeat("x", 256)} {
+		if err := sess.WriteValue(ctx, writeFB+field, v); err == nil {
+			t.Errorf("WriteValue %s = %#v: expected an error", field, v)
+		}
+	}
+	if v, _ := sess.ReadValue(ctx, writeFB+"nIntVar"); v != int16(5) {
+		t.Errorf("nIntVar = %#v after a refused write, want int16(5)", v)
+	}
+}
+
+// A struct and arrays written whole read back whole.
+func TestSeedWriteComposite(t *testing.T) {
+	sess := seedSession(t)
+	ctx := context.Background()
+	// Start from the struct as the PLC has it, so every member is present.
+	v, err := sess.ReadValue(ctx, writeFB+"stStructVar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := v.(map[string]any)
+	st["nSeed"] = uint32(4242)
+	st["nIntVar"] = int16(-4242)
+	st["tTimeVar"] = 49 * time.Hour
+	st["sStringVar"] = "written whole"
+	st["dtDateTimeVar"] = civil.DateTime{Date: civil.Date{Year: 2026, Month: 9, Day: 28}, Time: civil.Time{Hour: 20, Minute: 30}}
+
+	arr := make([]any, 10)
+	for i := range arr {
+		arr[i] = int16(i * -1000)
+	}
+	arr2d := []any{
+		[]any{int16(1), int16(2), int16(3)},
+		[]any{int16(4), int16(5), int16(6)},
+		[]any{int16(7), int16(8), int16(math.MinInt16)},
+	}
+	want := map[string]any{writeFB + "stStructVar": st, writeFB + "aIntArray": arr, writeFB + "aIntArray2d": arr2d}
+	for name, v := range want {
+		if err := sess.WriteValue(ctx, name, v); err != nil {
+			t.Fatalf("WriteValue %s: %v", name, err)
+		}
+	}
+	for name, w := range want {
+		got, err := sess.ReadValue(ctx, name)
+		if err != nil {
+			t.Fatalf("ReadValue %s: %v", name, err)
+		}
+		if !reflect.DeepEqual(got, w) {
+			t.Errorf("%s = %#v, want %#v", name, got, w)
 		}
 	}
 }

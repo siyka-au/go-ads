@@ -277,6 +277,294 @@ func parseDateTime(s string) (time.Time, error) {
 	return time.Parse("2006-01-02 15:04:05.999999999", strings.Replace(s, "T", " ", 1))
 }
 
+// encodeScalar encodes v as dataType. length is the symbol's declared size,
+// used by STRING and WSTRING. v must be the Go type decodeScalar returns for
+// dataType, except that integer types take any Go integer within range.
+func encodeScalar(dataType string, v any, length uint32) ([]byte, error) {
+	le := binary.LittleEndian
+	switch dataType {
+	case "BOOL":
+		b, ok := v.(bool)
+		if !ok {
+			return nil, typeError(dataType, v, "bool")
+		}
+		if b {
+			return []byte{1}, nil
+		}
+		return []byte{0}, nil
+	case "SINT":
+		n, err := intInRange(dataType, v, math.MinInt8, math.MaxInt8)
+		return []byte{byte(n)}, err
+	case "USINT", "BYTE":
+		n, err := uintInRange(dataType, v, math.MaxUint8)
+		return []byte{byte(n)}, err
+	case "INT", "INT16":
+		n, err := intInRange(dataType, v, math.MinInt16, math.MaxInt16)
+		return le.AppendUint16(nil, uint16(n)), err
+	case "UINT", "UINT16", "WORD":
+		n, err := uintInRange(dataType, v, math.MaxUint16)
+		return le.AppendUint16(nil, uint16(n)), err
+	case "DINT":
+		n, err := intInRange(dataType, v, math.MinInt32, math.MaxInt32)
+		return le.AppendUint32(nil, uint32(n)), err
+	case "UDINT", "DWORD":
+		n, err := uintInRange(dataType, v, math.MaxUint32)
+		return le.AppendUint32(nil, uint32(n)), err
+	case "LINT":
+		n, err := intInRange(dataType, v, math.MinInt64, math.MaxInt64)
+		return le.AppendUint64(nil, uint64(n)), err
+	case "ULINT", "LWORD":
+		n, err := uintInRange(dataType, v, math.MaxUint64)
+		return le.AppendUint64(nil, n), err
+	case "REAL":
+		f, ok := v.(float32)
+		if !ok {
+			return nil, typeError(dataType, v, "float32")
+		}
+		return le.AppendUint32(nil, math.Float32bits(f)), nil
+	case "LREAL":
+		f, ok := v.(float64)
+		if !ok {
+			return nil, typeError(dataType, v, "float64")
+		}
+		return le.AppendUint64(nil, math.Float64bits(f)), nil
+	case "STRING":
+		s, ok := v.(string)
+		if !ok {
+			return nil, typeError(dataType, v, "string")
+		}
+		// The last byte is the terminator the PLC expects.
+		if length < 1 || uint32(len(s)) > length-1 {
+			return nil, fmt.Errorf("STRING of %d bytes does not fit %d bytes with its terminator", len(s), length)
+		}
+		buf := make([]byte, length)
+		copy(buf, s)
+		return buf, nil
+	case "WSTRING":
+		s, ok := v.(string)
+		if !ok {
+			return nil, typeError(dataType, v, "string")
+		}
+		units := utf16.Encode([]rune(s))
+		if length < 2 || uint32(len(units)) > (length-2)/2 {
+			return nil, fmt.Errorf("WSTRING of %d UTF-16 units does not fit %d bytes with its terminator", len(units), length)
+		}
+		buf := make([]byte, length)
+		for i, u := range units {
+			le.PutUint16(buf[i*2:], u)
+		}
+		return buf, nil
+	case "TIME":
+		d, ok := v.(time.Duration)
+		if !ok {
+			return nil, typeError(dataType, v, "time.Duration")
+		}
+		if d < 0 || d%time.Millisecond != 0 || d/time.Millisecond > math.MaxUint32 {
+			return nil, fmt.Errorf("TIME %v must be whole milliseconds from 0 to %d ms", d, uint32(math.MaxUint32))
+		}
+		return le.AppendUint32(nil, uint32(d/time.Millisecond)), nil
+	case "LTIME":
+		d, ok := v.(time.Duration)
+		if !ok {
+			return nil, typeError(dataType, v, "time.Duration")
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("LTIME %v is negative", d)
+		}
+		return le.AppendUint64(nil, uint64(d)), nil
+	case "TOD", "TIME_OF_DAY", "LTOD", "LTIME_OF_DAY":
+		t, ok := v.(civil.Time)
+		if !ok {
+			return nil, typeError(dataType, v, "civil.Time")
+		}
+		if !t.IsValid() {
+			return nil, fmt.Errorf("%s %v is not a valid time of day", dataType, t)
+		}
+		d := time.Duration(t.Hour)*time.Hour + time.Duration(t.Minute)*time.Minute +
+			time.Duration(t.Second)*time.Second + time.Duration(t.Nanosecond)
+		if dataType == "LTOD" || dataType == "LTIME_OF_DAY" {
+			return le.AppendUint64(nil, uint64(d)), nil
+		}
+		if d%time.Millisecond != 0 {
+			return nil, fmt.Errorf("TOD %v must be whole milliseconds", t)
+		}
+		return le.AppendUint32(nil, uint32(d/time.Millisecond)), nil
+	case "DATE", "LDATE":
+		d, ok := v.(civil.Date)
+		if !ok {
+			return nil, typeError(dataType, v, "civil.Date")
+		}
+		if !d.IsValid() {
+			return nil, fmt.Errorf("%s %v is not a valid date", dataType, d)
+		}
+		return encodeInstant(dataType, d.In(time.UTC))
+	case "DT", "DATE_AND_TIME", "LDT", "LDATE_AND_TIME":
+		dt, ok := v.(civil.DateTime)
+		if !ok {
+			return nil, typeError(dataType, v, "civil.DateTime")
+		}
+		if !dt.IsValid() {
+			return nil, fmt.Errorf("%s %v is not a valid date and time", dataType, dt)
+		}
+		return encodeInstant(dataType, dt.In(time.UTC))
+	}
+	return nil, fmt.Errorf("datatype %q write is not implemented yet", dataType)
+}
+
+// encodeInstant stores t as seconds (DATE, DT: uint32 from 1970) or
+// nanoseconds (LDATE, LDT: int64 from 1970), refusing what the type cannot hold.
+func encodeInstant(dataType string, t time.Time) ([]byte, error) {
+	le := binary.LittleEndian
+	if strings.HasPrefix(dataType, "L") {
+		// time.Time spans far more than int64 nanoseconds do; UnixNano is
+		// undefined outside 1677..2262, so check the range first.
+		if t.Before(time.Unix(0, math.MinInt64)) || t.After(time.Unix(0, math.MaxInt64)) {
+			return nil, fmt.Errorf("%s %v is outside 1677-09-21 to 2262-04-11", dataType, t)
+		}
+		return le.AppendUint64(nil, uint64(t.UnixNano())), nil
+	}
+	if t.Nanosecond() != 0 {
+		return nil, fmt.Errorf("%s %v must be whole seconds", dataType, t)
+	}
+	sec := t.Unix()
+	if sec < 0 || sec > math.MaxUint32 {
+		return nil, fmt.Errorf("%s %v is outside 1970-01-01 to 2106-02-07", dataType, t)
+	}
+	return le.AppendUint32(nil, uint32(sec)), nil
+}
+
+func typeError(dataType string, v any, want string) error {
+	return fmt.Errorf("%s takes %s, got %T", dataType, want, v)
+}
+
+// intInRange returns v, any Go integer, as int64 if it lies in [lo, hi].
+func intInRange(dataType string, v any, lo, hi int64) (int64, error) {
+	var n int64
+	switch x := v.(type) {
+	case int:
+		n = int64(x)
+	case int8:
+		n = int64(x)
+	case int16:
+		n = int64(x)
+	case int32:
+		n = int64(x)
+	case int64:
+		n = x
+	case uint, uint8, uint16, uint32, uint64:
+		u, err := uintInRange(dataType, v, uint64(hi))
+		return int64(u), err
+	default:
+		return 0, typeError(dataType, v, "an integer")
+	}
+	if n < lo || n > hi {
+		return 0, fmt.Errorf("%s %d is outside %d to %d", dataType, n, lo, hi)
+	}
+	return n, nil
+}
+
+// uintInRange returns v, any Go integer, as uint64 if it lies in [0, hi].
+func uintInRange(dataType string, v any, hi uint64) (uint64, error) {
+	var n uint64
+	switch x := v.(type) {
+	case uint:
+		n = uint64(x)
+	case uint8:
+		n = uint64(x)
+	case uint16:
+		n = uint64(x)
+	case uint32:
+		n = uint64(x)
+	case uint64:
+		n = x
+	case int, int8, int16, int32, int64:
+		i, err := intInRange(dataType, v, math.MinInt64, math.MaxInt64)
+		if err != nil {
+			return 0, err
+		}
+		if i < 0 {
+			return 0, fmt.Errorf("%s %d is outside 0 to %d", dataType, i, hi)
+		}
+		n = uint64(i)
+	default:
+		return 0, typeError(dataType, v, "an integer")
+	}
+	if n > hi {
+		return 0, fmt.Errorf("%s %d is outside 0 to %d", dataType, n, hi)
+	}
+	return n, nil
+}
+
+// encode serialises v, in the shape ReadValue returns for this symbol, into
+// the symbol's bytes. A struct takes a map naming every member and nothing
+// else; an array a slice of exactly its element count, nested per dimension.
+func (s *symbol) encode(v any, datatypes map[string]SymbolUploadDataType) ([]byte, error) {
+	if len(s.Children) == 0 {
+		dt, err := s.scalarType(datatypes)
+		if err != nil {
+			return nil, err
+		}
+		b, err := encodeScalar(dt, v, s.Length)
+		if err != nil {
+			return nil, err
+		}
+		if uint32(len(b)) != s.Length {
+			return nil, fmt.Errorf("%s encodes to %d bytes, symbol is %d", dt, len(b), s.Length)
+		}
+		return b, nil
+	}
+	buf := make([]byte, s.Length)
+	put := func(c *symbol, cv any, label string) error {
+		cb, err := c.encode(cv, datatypes)
+		if err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		if end := uint64(c.Offset) + uint64(len(cb)); end > uint64(len(buf)) {
+			return fmt.Errorf("%s: ends at %d, past the %d-byte value", label, end, len(buf))
+		}
+		copy(buf[c.Offset:], cb)
+		return nil
+	}
+	for _, c := range s.Children {
+		if isArrayElement(c) {
+			elems := sortedElements(s.Children)
+			list, ok := v.([]any)
+			if !ok {
+				return nil, fmt.Errorf("%s is an array and takes []any, got %T", s.DataType, v)
+			}
+			if len(list) != len(elems) {
+				return nil, fmt.Errorf("%s has %d elements, got %d", s.DataType, len(elems), len(list))
+			}
+			for i, e := range elems {
+				if err := put(e, list[i], e.Name); err != nil {
+					return nil, err
+				}
+			}
+			return buf, nil
+		}
+		break
+	}
+	fields, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s is a struct and takes map[string]any, got %T", s.DataType, v)
+	}
+	for name := range fields {
+		if _, ok := s.Children[name]; !ok {
+			return nil, fmt.Errorf("%s has no member %q", s.DataType, name)
+		}
+	}
+	for name, c := range s.Children {
+		fv, ok := fields[name]
+		if !ok {
+			return nil, fmt.Errorf("%s: member %q missing; a struct write sets every member", s.DataType, name)
+		}
+		if err := put(c, fv, name); err != nil {
+			return nil, err
+		}
+	}
+	return buf, nil
+}
+
 // copyData returns v with its maps and slices copied, so a caller holding a
 // struct or array value cannot alter the cache's. Scalars are values already.
 func copyData(v any) any {
