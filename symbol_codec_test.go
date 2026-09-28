@@ -339,8 +339,14 @@ func TestWriteToNodeRoundTrip(t *testing.T) {
 		{"TIME/midnight", "TIME", 4, "00:00:00"},
 		{"TIME/with_ms", "TIME", 4, "12:34:56.789"},
 		// TOD
-		{"TOD/15:30", "TOD", 4, "15:30"},
-		{"TOD/midnight", "TOD", 4, "00:00"},
+		{"TOD/15:30:00", "TOD", 4, "15:30:00"},
+		{"TOD/midnight", "TOD", 4, "00:00:00"},
+		{"TOD/with_ms", "TOD", 4, "23:59:59.999"},
+		{"TIME/over_24h", "TIME", 4, "25:01:01.001"},
+		{"LTIME/ns", "LTIME", 8, "1000:00:00.000000001"},
+		{"LTOD/ns", "LTOD", 8, "23:59:59.999999999"},
+		{"LDATE/pre_epoch", "LDATE", 8, "1900-06-15"},
+		{"LDT/ns", "LDT", 8, "2262-04-11 23:47:16.854775807"},
 		// DATE
 		{"DATE/2024-01-15", "DATE", 4, "2024-01-15"},
 		{"DATE/2000-06-15", "DATE", 4, "2000-06-15"},
@@ -818,8 +824,9 @@ func TestSymbolParseTemporalTypes(t *testing.T) {
 		{"TIME/max_ms", "TIME", 4, leu32(23*3600000 + 59*60000 + 59*1000 + 999), "23:59:59.999"},
 		{"TIME/1h_exact", "TIME", 4, leu32(3600000), "01:00:00"},
 		// TOD
-		{"TOD/midnight", "TOD", 4, leu32(0), "00:00"},
-		{"TOD/end_of_day", "TOD", 4, leu32(23*3600000 + 59*60000), "23:59"},
+		{"TOD/midnight", "TOD", 4, leu32(0), "00:00:00"},
+		{"TOD/end_of_day", "TOD", 4, leu32(23*3600000 + 59*60000 + 59*1000 + 999), "23:59:59.999"},
+		{"TIME/over_24h", "TIME", 4, leu32(90061001), "25:01:01.001"},
 		// DATE
 		{"DATE/epoch", "DATE", 4, leu32(0), "1970-01-01"},
 		{"DATE/leap_year", "DATE", 4, leu32(1709164800), "2024-02-29"},
@@ -864,7 +871,7 @@ func TestWriteToNodeTemporalAliases(t *testing.T) {
 		length   uint32
 		value    string
 	}{
-		{"TIME_OF_DAY/14:30", "TIME_OF_DAY", 4, "14:30"},
+		{"TIME_OF_DAY/14:30:00", "TIME_OF_DAY", 4, "14:30:00"},
 		{"DATE_AND_TIME/full", "DATE_AND_TIME", 4, "2024-06-15 23:59:59"},
 	}
 	for _, tt := range tests {

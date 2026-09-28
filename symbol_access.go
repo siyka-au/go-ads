@@ -58,6 +58,7 @@ func (sess *Session) writeToSymbolRetry(ctx context.Context, symbolName string, 
 	sess.cache.lock.Lock()
 	if live := sess.cache.symbols[symbolKey(symbolName)]; live != nil {
 		live.Value = ""
+		live.Data = nil
 		live.ValueParsed = false
 	}
 	sess.cache.lock.Unlock()
@@ -414,6 +415,7 @@ func (sess *Session) writeMultipleSymbolsRetry(ctx context.Context, values map[s
 		if result.Error == ReturnCodeNoErrors {
 			if live := sess.cache.symbols[symbolKey(infos[i].name)]; live != nil {
 				live.Value = ""
+				live.Data = nil
 				live.ValueParsed = false
 			}
 		}

@@ -2911,6 +2911,7 @@ func zeroOldSymbolHandles(m map[string]*symbol) {
 		if s != nil {
 			s.Handle = 0
 			s.Value = ""
+			s.Data = nil
 			s.Valid = false
 			s.ValueParsed = false
 			s.LastUpdateTime = time.Time{}

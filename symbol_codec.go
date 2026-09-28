@@ -27,15 +27,14 @@ func (s *symbol) parse(data []byte, offset int, datatypes map[string]SymbolUploa
 		stop = len(data)
 	}
 
-	var newValue string
 	if len(s.Children) > 0 {
 		for _, value := range s.Children {
 			if _, err := value.parse(data[offset:stop], int(value.Offset), datatypes); err != nil {
 				return "", fmt.Errorf("parsing child %q: %w", value.Name, err)
 			}
 		}
-		newValue = s.getJSON()
-		s.updateValue(newValue)
+		s.Data = s.dataTree()
+		s.updateValue(s.getJSON())
 		return s.Value, nil
 	}
 
@@ -43,190 +42,16 @@ func (s *symbol) parse(data []byte, offset int, datatypes map[string]SymbolUploa
 		return "", fmt.Errorf("data too short for %s at offset %d: need %d bytes, got %d", s.DataType, start, s.Length, len(data)-start)
 	}
 
-	switch s.DataType {
-	case "BOOL":
-		if stop-start != 1 {
-			return "", fmt.Errorf("BOOL Size Wrong")
-		}
-		if data[start:stop][0] > 0 {
-			newValue = "true"
-		} else {
-			newValue = "false"
-		}
-	case "BYTE", "USINT": // Unsigned Short INT 0 to 255
-		if stop-start != 1 {
-			return "", fmt.Errorf("BYTE Size Wrong")
-		}
-		newValue = strconv.FormatUint(uint64(data[start]), 10)
-	case "SINT": // Short INT -128 to 127
-		if stop-start != 1 {
-			return "", fmt.Errorf("SINT Size Wrong")
-		}
-		newValue = strconv.FormatInt(int64(int8(data[start])), 10)
-	case "UINT", "WORD", "UINT16":
-		if stop-start != 2 {
-			return "", fmt.Errorf("WORD Size Wrong")
-		}
-		i := binary.LittleEndian.Uint16(data[start:stop])
-		newValue = strconv.FormatUint(uint64(i), 10)
-	case "UDINT", "DWORD":
-		if stop-start != 4 {
-			return "", fmt.Errorf("DWORD Size Wrong")
-		}
-		i := binary.LittleEndian.Uint32(data[start:stop])
-		newValue = strconv.FormatUint(uint64(i), 10)
-	case "INT", "INT16":
-		if stop-start != 2 {
-			return "", fmt.Errorf("INT Size Wrong")
-		}
-		i := int16(binary.LittleEndian.Uint16(data[start:stop]))
-		newValue = strconv.FormatInt(int64(i), 10)
-	case "DINT":
-		if stop-start != 4 {
-			return "", fmt.Errorf("DINT Size Wrong")
-		}
-		i := int32(binary.LittleEndian.Uint32(data[start:stop]))
-		newValue = strconv.FormatInt(int64(i), 10)
-	case "REAL":
-		if stop-start != 4 {
-			return "", fmt.Errorf("REAL Size Wrong")
-		}
-		i := binary.LittleEndian.Uint32(data[start:stop])
-		f := math.Float32frombits(i)
-		newValue = strconv.FormatFloat(float64(f), 'f', -1, 32)
-	case "LREAL":
-		if stop-start != 8 {
-			return "", fmt.Errorf("LREAL Size Wrong")
-		}
-		i := binary.LittleEndian.Uint64(data[start:stop])
-		f := math.Float64frombits(i)
-		newValue = strconv.FormatFloat(f, 'f', -1, 64)
-	case "LINT":
-		if stop-start != 8 {
-			return "", fmt.Errorf("LINT Size Wrong")
-		}
-		i := int64(binary.LittleEndian.Uint64(data[start:stop]))
-		newValue = strconv.FormatInt(i, 10)
-	case "ULINT", "LWORD":
-		if stop-start != 8 {
-			return "", fmt.Errorf("ULINT Size Wrong")
-		}
-		i := binary.LittleEndian.Uint64(data[start:stop])
-		newValue = strconv.FormatUint(i, 10)
-	case "STRING":
-		raw := data[start:stop]
-		idx := bytes.IndexByte(raw, 0)
-		if idx < 0 {
-			idx = len(raw)
-		}
-		newValue = string(raw[:idx])
-	case "WSTRING":
-		raw := data[start:stop]
-		// Find UTF-16LE null terminator (0x0000 on 2-byte boundary)
-		n := len(raw) &^ 1 // round down to even
-		for i := 0; i+1 < len(raw); i += 2 {
-			if raw[i] == 0 && raw[i+1] == 0 {
-				n = i
-				break
-			}
-		}
-		runes := make([]uint16, n/2)
-		for i := 0; i < n; i += 2 {
-			runes[i/2] = binary.LittleEndian.Uint16(raw[i:])
-		}
-		newValue = string(utf16.Decode(runes))
-	case "TIME":
-		if stop-start != 4 {
-			return "", fmt.Errorf("TIME Size Wrong")
-		}
-		i := binary.LittleEndian.Uint32(data[start:stop])
-		t := time.Unix(0, int64(uint64(i)*uint64(time.Millisecond))).UTC()
-
-		newValue = t.Truncate(time.Millisecond).Format("15:04:05.999999999")
-	case "TOD", "TIME_OF_DAY":
-		if stop-start != 4 {
-			return "", fmt.Errorf("TOD Size Wrong")
-		}
-		i := binary.LittleEndian.Uint32(data[start:stop])
-		t := time.Unix(0, int64(uint64(i)*uint64(time.Millisecond))).UTC()
-
-		newValue = t.Truncate(time.Millisecond).Format("15:04")
-	case "DATE":
-		if stop-start != 4 {
-			return "", fmt.Errorf("DATE Size Wrong")
-		}
-		i := binary.LittleEndian.Uint32(data[start:stop])
-		t := time.Unix(int64(i), 0).UTC()
-
-		newValue = t.Format("2006-01-02")
-	case "DT", "DATE_AND_TIME":
-		if stop-start != 4 {
-			return "", fmt.Errorf("DT Size Wrong")
-		}
-		i := binary.LittleEndian.Uint32(data[start:stop])
-		t := time.Unix(int64(i), 0).UTC()
-
-		newValue = t.Truncate(time.Millisecond).Format("2006-01-02 15:04:05")
-	default:
-		// Try resolving type alias via datatype table (enums, type aliases)
-		if datatypes != nil {
-			if dt, ok := datatypes[s.DataType]; ok {
-				if slices.Contains(parseableTypes, dt.DataType) {
-					resolved := *s
-					resolved.DataType = dt.DataType
-					val, err := resolved.parse(data, offset, nil)
-					if err != nil {
-						return "", err
-					}
-					s.updateValue(val)
-					return s.Value, nil
-				}
-			}
-		}
-		// Use ADST_ numeric type code from protocol (authoritative).
-		// The PLC sends the correct base type (e.g., ADSTReal32=4 for a REAL-based alias).
-		if resolved := adsTypeToString(s.BaseType); resolved != "" {
-			// An array reports its element's ADST_ code with the whole array's
-			// Length, so resolving on BaseType alone would hand the scalar case
-			// 40 bytes to read a 4-byte DINT. That reports "DINT Size Wrong" --
-			// a type the caller never asked for, and no hint that the datatype
-			// table is what is missing. Children (and with them per-element
-			// parsing) are only linked when that table resolves the type, so
-			// name the real problem.
-			if w := adsTypeWidth(s.BaseType); w > 0 && w != s.Length {
-				return "", fmt.Errorf("cannot parse %s: %d bytes, but its base type %s is %d bytes — "+
-					"this looks like an array or struct, which needs the datatype table; call LoadSymbols()",
-					s.DataType, s.Length, resolved, w)
-			}
-			cp := *s
-			cp.DataType = resolved
-			val, err := cp.parse(data, offset, nil)
-			if err != nil {
-				return "", err
-			}
-			s.updateValue(val)
-			return s.Value, nil
-		}
-		// Last resort: infer base type from symbol size when ADST_ code is
-		// unavailable (BaseType=0 or BIGTYPE) and the datatype table didn't
-		// resolve. Only 1- and 2-byte widths are inferred — see
-		// inferBaseType doc for why 4/8 are refused.
-		if inferred := inferBaseType(s.Length, s.BaseType); inferred != "" {
-			s.warnInferenceOnce("inferring base type from size (no datatype table loaded; LoadSymbols() recommended for user-defined types)",
-				"symbol", s.DataType, "size", s.Length, "baseType", s.BaseType, "inferred", inferred)
-			resolved := *s
-			resolved.DataType = inferred
-			val, err := resolved.parse(data, offset, nil)
-			if err != nil {
-				return "", err
-			}
-			s.updateValue(val)
-			return s.Value, nil
-		}
-		return "", fmt.Errorf("unknown format cannot parse: %s", s.DataType)
+	dt, err := s.scalarType(datatypes)
+	if err != nil {
+		return "", err
 	}
-
-	s.updateValue(newValue)
+	v, err := decodeScalar(dt, data[start:stop])
+	if err != nil {
+		return "", err
+	}
+	s.Data = v
+	s.updateValue(formatScalar(v))
 	return s.Value, nil
 }
 
@@ -268,6 +93,12 @@ var parseableTypes = []string{
 	"LINT",
 	"ULINT",
 	"LWORD",
+	"LTIME",
+	"LTOD",
+	"LTIME_OF_DAY",
+	"LDATE",
+	"LDT",
+	"LDATE_AND_TIME",
 }
 
 // inferBaseType guesses a base type from a symbol's byte size, the last resort
@@ -462,28 +293,47 @@ func (s *symbol) writeToNode(value string, datatypes map[string]SymbolUploadData
 			return nil, fmt.Errorf("binary.Write ULINT failed: %w", err)
 		}
 	case "TIME":
-		t, e := time.Parse("15:04:05.999999999", value)
+		d, e := parseClock(value)
 		if e != nil {
-			t, e = time.Parse("15:04:05", value)
-			if e != nil {
-				return nil, fmt.Errorf("TIME: expected format 15:04:05 or 15:04:05.999999999: %w", e)
-			}
+			return nil, fmt.Errorf("TIME: %w", e)
 		}
-		target := time.Date(1970, 1, 1, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
-		ms := uint32(target.UnixNano() / int64(time.Millisecond))
-		if err := binary.Write(buf, binary.LittleEndian, &ms); err != nil {
-			return nil, fmt.Errorf("binary.Write TIME failed: %w", err)
+		if d < 0 || d/time.Millisecond > math.MaxUint32 {
+			return nil, fmt.Errorf("TIME %s is outside 0 to %d ms", value, uint32(math.MaxUint32))
 		}
+		buf.Write(binary.LittleEndian.AppendUint32(nil, uint32(d/time.Millisecond)))
+	case "LTIME":
+		d, e := parseClock(value)
+		if e != nil {
+			return nil, fmt.Errorf("LTIME: %w", e)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("LTIME %s is negative", value)
+		}
+		buf.Write(binary.LittleEndian.AppendUint64(nil, uint64(d)))
 	case "TOD", "TIME_OF_DAY":
-		t, e := time.Parse("15:04", value)
+		d, e := parseTimeOfDay(value)
 		if e != nil {
-			return nil, fmt.Errorf("TOD: expected format 15:04: %w", e)
+			return nil, fmt.Errorf("TOD: %w", e)
 		}
-		target := time.Date(1970, 1, 1, t.Hour(), t.Minute(), 0, 0, time.UTC)
-		ms := uint32(target.UnixNano() / int64(time.Millisecond))
-		if err := binary.Write(buf, binary.LittleEndian, &ms); err != nil {
-			return nil, fmt.Errorf("binary.Write TOD failed: %w", err)
+		buf.Write(binary.LittleEndian.AppendUint32(nil, uint32(d/time.Millisecond)))
+	case "LTOD", "LTIME_OF_DAY":
+		d, e := parseTimeOfDay(value)
+		if e != nil {
+			return nil, fmt.Errorf("LTOD: %w", e)
 		}
+		buf.Write(binary.LittleEndian.AppendUint64(nil, uint64(d)))
+	case "LDATE":
+		t, e := time.Parse("2006-01-02", value)
+		if e != nil {
+			return nil, fmt.Errorf("LDATE: expected format 2006-01-02: %w", e)
+		}
+		buf.Write(binary.LittleEndian.AppendUint64(nil, uint64(t.UnixNano())))
+	case "LDT", "LDATE_AND_TIME":
+		t, e := parseDateTime(value)
+		if e != nil {
+			return nil, fmt.Errorf("LDT: expected format 2006-01-02 15:04:05.999999999: %w", e)
+		}
+		buf.Write(binary.LittleEndian.AppendUint64(nil, uint64(t.UnixNano())))
 	case "DATE":
 		t, e := time.Parse("2006-01-02", value)
 		if e != nil {
@@ -496,7 +346,7 @@ func (s *symbol) writeToNode(value string, datatypes map[string]SymbolUploadData
 			return nil, fmt.Errorf("binary.Write DATE failed: %w", err)
 		}
 	case "DT", "DATE_AND_TIME":
-		t, e := time.Parse("2006-01-02 15:04:05", value)
+		t, e := parseDateTime(value)
 		if e != nil {
 			return nil, fmt.Errorf("DT: expected format 2006-01-02 15:04:05: %w", e)
 		}

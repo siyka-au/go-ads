@@ -2,15 +2,19 @@ package ads
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"cloud.google.com/go/civil"
 )
 
 // symbolCache owns the connection-level symbol metadata: the symbol map, the
@@ -137,6 +141,7 @@ type symbol struct {
 	ContextMask       uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
 
 	Value       string
+	Data        any // Value decoded to its Go type; see value.go
 	Valid       bool
 	ValueParsed bool // true after first successful parse
 
@@ -846,7 +851,50 @@ func (s *symbol) getJSON() string {
 	return string(jsonData)
 }
 
-var stringsList = map[string]struct{}{"STRING": {}, "WSTRING": {}, "TIME": {}, "TOD": {}, "TIME_OF_DAY": {}, "DATE": {}, "DT": {}, "DATE_AND_TIME": {}}
+var stringsList = map[string]struct{}{
+	"STRING": {}, "WSTRING": {},
+	"TIME": {}, "TOD": {}, "TIME_OF_DAY": {}, "DATE": {}, "DT": {}, "DATE_AND_TIME": {},
+	"LTIME": {}, "LTOD": {}, "LTIME_OF_DAY": {}, "LDATE": {}, "LDT": {}, "LDATE_AND_TIME": {},
+}
+
+// isArrayElement reports whether a child is an array element ("[3]") rather
+// than a struct member.
+func isArrayElement(s *symbol) bool { return len(s.Name) > 0 && s.Name[0] == '[' }
+
+// sortedElements returns an array's elements in index order. Elements sit
+// back to back, so offset order is index order.
+func sortedElements(children map[string]*symbol) []*symbol {
+	out := make([]*symbol, 0, len(children))
+	for _, c := range children {
+		out = append(out, c)
+	}
+	slices.SortFunc(out, func(a, b *symbol) int { return cmp.Compare(a.Offset, b.Offset) })
+	return out
+}
+
+// dataTree assembles a composite's typed value from its children's Data:
+// []any for an array, map[string]any for a struct. Caller holds cache.lock.
+func (s *symbol) dataTree() any {
+	if len(s.Children) == 0 {
+		return s.Data
+	}
+	for _, c := range s.Children {
+		if isArrayElement(c) {
+			elems := sortedElements(s.Children)
+			out := make([]any, len(elems))
+			for i, e := range elems {
+				out[i] = e.dataTree()
+			}
+			return out
+		}
+		break
+	}
+	out := make(map[string]any, len(s.Children))
+	for name, c := range s.Children {
+		out[name] = c.dataTree()
+	}
+	return out
+}
 
 // signedIntTypes / unsignedIntTypes / floatTypes are the IEC 61131-3 base
 // type names that symbol_codec.parse writes into s.Value as decimal
@@ -901,6 +949,9 @@ func (s *symbol) parseTree() (rData interface{}) {
 					"symbol", s.Name, "dataType", s.DataType, "value", s.Value, "error", err)
 			}
 			rData = v
+		case s.Data != nil:
+			// User-defined scalar (enum, alias) already decoded to its base type.
+			rData = jsonScalar(s.Data)
 		default:
 			// Unknown / user-defined scalar (enum alias, TIME-derived,
 			// pointer, REFERENCE TO, etc.). Fall back to float64 to
@@ -914,15 +965,42 @@ func (s *symbol) parseTree() (rData interface{}) {
 			rData = v
 		}
 	} else {
+		for _, child := range s.Children {
+			if isArrayElement(child) {
+				elems := sortedElements(s.Children)
+				list := make([]any, len(elems))
+				for i, e := range elems {
+					list[i] = e.parseTree()
+				}
+				return list
+			}
+			break
+		}
 		localMap := make(map[string]interface{})
 		for _, child := range s.Children {
-			key := strings.ReplaceAll(child.Name, "[", `"[`)
-			key = strings.ReplaceAll(key, "]", `]"`)
-			localMap[key] = child.parseTree()
+			localMap[child.Name] = child.parseTree()
 		}
 		rData = localMap
 	}
 	return
+}
+
+// jsonScalar maps a typed value onto what encoding/json should emit: dates,
+// times and non-finite floats as their string form, everything else as is.
+func jsonScalar(v any) any {
+	switch x := v.(type) {
+	case time.Duration, civil.Time, civil.Date, civil.DateTime:
+		return formatScalar(v)
+	case float32:
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return formatScalar(v)
+		}
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return formatScalar(v)
+		}
+	}
+	return v
 }
 
 func isInSet(s string, set map[string]struct{}) bool {
