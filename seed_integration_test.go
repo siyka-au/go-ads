@@ -76,17 +76,17 @@ func seedSession(t *testing.T) *Session {
 func restoreSeedState(t *testing.T, sess *Session) {
 	t.Helper()
 	ctx := context.Background()
-	seed, err := sess.ReadFromSymbol(ctx, seedFB+"nSeed")
+	seed, err := sess.ReadValue(ctx, seedFB+"nSeed")
 	if err != nil {
 		t.Fatalf("read nSeed: %v", err)
 	}
-	auto, err := sess.ReadFromSymbol(ctx, seedFB+"bAutoMode")
+	auto, err := sess.ReadValue(ctx, seedFB+"bAutoMode")
 	if err != nil {
 		t.Fatalf("read bAutoMode: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = sess.WriteToSymbol(ctx, seedFB+"nSeed", seed)
-		_ = sess.WriteToSymbol(ctx, seedFB+"bAutoMode", auto)
+		_ = sess.WriteValue(ctx, seedFB+"nSeed", seed)
+		_ = sess.WriteValue(ctx, seedFB+"bAutoMode", auto)
 	})
 }
 
@@ -97,10 +97,10 @@ func setSeed(t *testing.T, sess *Session, seed uint32) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := sess.WriteToSymbol(ctx, seedFB+"bAutoMode", "false"); err != nil {
+	if err := sess.WriteValue(ctx, seedFB+"bAutoMode", false); err != nil {
 		t.Fatalf("write bAutoMode: %v", err)
 	}
-	if err := sess.WriteToSymbol(ctx, seedFB+"nSeed", strconv.FormatUint(uint64(seed), 10)); err != nil {
+	if err := sess.WriteValue(ctx, seedFB+"nSeed", seed); err != nil {
 		t.Fatalf("write nSeed: %v", err)
 	}
 	for {
@@ -260,7 +260,7 @@ func TestSeedNotificationTyped(t *testing.T) {
 		t.Fatal(err)
 	}
 	const seed = 100002
-	if err := writer.WriteToSymbol(context.Background(), seedFB+"nSeed", strconv.Itoa(seed)); err != nil {
+	if err := writer.WriteValue(context.Background(), seedFB+"nSeed", uint32(seed)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -272,7 +272,7 @@ func TestSeedNotificationTyped(t *testing.T) {
 		select {
 		case u := <-ch:
 			field := u.Variable[len(seedFB):]
-			if u.Data == want[field] && !seen[field] {
+			if u.Value == want[field] && !seen[field] {
 				seen[field] = true
 				pending--
 			}

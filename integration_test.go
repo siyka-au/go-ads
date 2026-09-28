@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"cloud.google.com/go/civil"
 )
 
 // Integration tests require a real Beckhoff PLC.
@@ -307,7 +309,7 @@ func TestIntegrationReadStructWithEnum(t *testing.T) {
 		}
 	}
 
-	value, err := conn.ReadFromSymbol(context.Background(), structName)
+	value, err := conn.ReadValue(context.Background(), structName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol(%q) failed: %v", structName, err)
 	}
@@ -318,7 +320,7 @@ func TestIntegrationReadStructWithEnum(t *testing.T) {
 		// F-31: empty Value is valid for empty STRING/WSTRING leaves and for
 		// non-leaf nodes (their value is computed from children via GetJSON,
 		// which may produce an empty/{} string).
-		if len(child.Children()) == 0 && child.Value == "" && child.DataType != "STRING" && child.DataType != "WSTRING" {
+		if len(child.Children()) == 0 && child.Value == nil && child.DataType != "STRING" && child.DataType != "WSTRING" {
 			t.Errorf("child %q has empty Value after struct read", childName)
 		}
 	}
@@ -341,7 +343,7 @@ func TestIntegrationReadSymbol(t *testing.T) {
 	}
 
 	// ReadFromSymbol uses on-demand resolution if symbol not already loaded
-	value, err := conn.ReadFromSymbol(context.Background(), symbolName)
+	value, err := conn.ReadValue(context.Background(), symbolName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol(%q) failed: %v", symbolName, err)
 	}
@@ -784,58 +786,86 @@ func TestIntegrationCloseReleasesNotificationHandles(t *testing.T) {
 // ensuring the test always writes a different value.
 type writeTestCase struct {
 	envVar    string
-	testValue string
-	altValue  string
+	testValue any
+	altValue  any
 }
 
+// Values are the Go types ReadValue returns for each PLC type.
 var writeTestCases = []writeTestCase{
 	// Boolean
-	{"ADS_WRITE_BOOL", "true", "false"},
+	{"ADS_WRITE_BOOL", true, false},
 	// Signed integers
-	{"ADS_WRITE_SINT", "-42", "100"},
-	{"ADS_WRITE_INT", "42", "100"},
-	{"ADS_WRITE_DINT", "100000", "200000"},
+	{"ADS_WRITE_SINT", int8(-42), int8(100)},
+	{"ADS_WRITE_INT", int16(42), int16(100)},
+	{"ADS_WRITE_DINT", int32(100000), int32(200000)},
 	// Unsigned integers
-	{"ADS_WRITE_USINT", "200", "100"},
-	{"ADS_WRITE_UINT", "50000", "30000"},
-	{"ADS_WRITE_UDINT", "3000000", "1000000"},
+	{"ADS_WRITE_USINT", uint8(200), uint8(100)},
+	{"ADS_WRITE_UINT", uint16(50000), uint16(30000)},
+	{"ADS_WRITE_UDINT", uint32(3000000), uint32(1000000)},
 	// Floating point
-	{"ADS_WRITE_REAL", "3.14", "6.28"},
-	{"ADS_WRITE_LREAL", "2.718281828", "1.414213562"},
+	{"ADS_WRITE_REAL", float32(3.14), float32(6.28)},
+	{"ADS_WRITE_LREAL", 2.718281828, 1.414213562},
 	// String
 	{"ADS_WRITE_STRING", "hello", "world"},
 	// Bit fields
-	{"ADS_WRITE_BYTE", "170", "85"},
-	{"ADS_WRITE_WORD", "43690", "21845"},
-	{"ADS_WRITE_DWORD", "2863311530", "1431655765"},
+	{"ADS_WRITE_BYTE", uint8(170), uint8(85)},
+	{"ADS_WRITE_WORD", uint16(43690), uint16(21845)},
+	{"ADS_WRITE_DWORD", uint32(2863311530), uint32(1431655765)},
 	// Time types
-	{"ADS_WRITE_TIME", "01:23:45.678", "00:00:01"},
-	{"ADS_WRITE_DATE", "2024-06-15", "2000-01-01"},
-	{"ADS_WRITE_DT", "2024-06-15 13:30:00", "2000-01-01 00:00:00"},
-	{"ADS_WRITE_TOD", "13:45", "00:01"},
+	{"ADS_WRITE_TIME", time.Hour + 23*time.Minute + 45*time.Second + 678*time.Millisecond, time.Second},
+	{"ADS_WRITE_DATE", civil.Date{Year: 2024, Month: 6, Day: 15}, civil.Date{Year: 2000, Month: 1, Day: 1}},
+	{"ADS_WRITE_DT", civil.DateTime{Date: civil.Date{Year: 2024, Month: 6, Day: 15}, Time: civil.Time{Hour: 13, Minute: 30}}, civil.DateTime{Date: civil.Date{Year: 2000, Month: 1, Day: 1}}},
+	{"ADS_WRITE_TOD", civil.Time{Hour: 13, Minute: 45}, civil.Time{Minute: 1}},
 }
 
-// valuesApproxEqual compares two value strings. For float types (REAL/LREAL),
-// it uses approximate comparison to handle float32/float64 round-trip differences.
-// The envVar hint (e.g. "ADS_WRITE_REAL") is used when available; otherwise it
-// falls back to trying numeric parsing.
-func valuesApproxEqual(expected, actual, envVar string) bool {
+// integerOf returns v, any Go integer type, as an int64.
+func integerOf(v any) (int64, bool) {
+	switch x := v.(type) {
+	case int8:
+		return int64(x), true
+	case int16:
+		return int64(x), true
+	case int32:
+		return int64(x), true
+	case int64:
+		return x, true
+	case uint8:
+		return int64(x), true
+	case uint16:
+		return int64(x), true
+	case uint32:
+		return int64(x), true
+	case uint64:
+		return int64(x), true
+	}
+	return 0, false
+}
+
+// valuesApproxEqual compares two values as ReadValue returns them: equal Go
+// values, or floats of the same type within a relative 1e-6. envVar is unused
+// and kept so call sites read as before.
+func valuesApproxEqual(expected, actual any, envVar string) bool {
+	_ = envVar
 	if expected == actual {
 		return true
 	}
-	// Use env var hint for known float types
-	isFloat := envVar == "ADS_WRITE_REAL" || envVar == "ADS_WRITE_LREAL"
-	if !isFloat {
-		// Fallback: try parsing both as floats
-		_, err1 := strconv.ParseFloat(expected, 64)
-		_, err2 := strconv.ParseFloat(actual, 64)
-		isFloat = err1 == nil && err2 == nil
-	}
-	if !isFloat {
+	var e, a float64
+	switch x := expected.(type) {
+	case float32:
+		y, ok := actual.(float32)
+		if !ok {
+			return false
+		}
+		e, a = float64(x), float64(y)
+	case float64:
+		y, ok := actual.(float64)
+		if !ok {
+			return false
+		}
+		e, a = x, y
+	default:
 		return false
 	}
-	e, _ := strconv.ParseFloat(expected, 64)
-	a, _ := strconv.ParseFloat(actual, 64)
 	if e == 0 {
 		return math.Abs(a) < 1e-6
 	}
@@ -858,7 +888,7 @@ func TestIntegrationWriteAndConfirm(t *testing.T) {
 			}
 
 			// 1. Read current value (save for restore)
-			original, err := conn.ReadFromSymbol(context.Background(), symbolName)
+			original, err := conn.ReadValue(context.Background(), symbolName)
 			if err != nil {
 				t.Fatalf("ReadFromSymbol(%q) failed: %v", symbolName, err)
 			}
@@ -872,13 +902,13 @@ func TestIntegrationWriteAndConfirm(t *testing.T) {
 			}
 
 			// 2. Write test value
-			err = conn.WriteToSymbol(context.Background(), symbolName, writeValue)
+			err = conn.WriteValue(context.Background(), symbolName, writeValue)
 			if err != nil {
 				t.Fatalf("WriteToSymbol(%q, %q) failed: %v", symbolName, writeValue, err)
 			}
 
 			// 3. Read back and assert it changed
-			readBack, err := conn.ReadFromSymbol(context.Background(), symbolName)
+			readBack, err := conn.ReadValue(context.Background(), symbolName)
 			if err != nil {
 				t.Fatalf("ReadFromSymbol(%q) after write failed: %v", symbolName, err)
 			}
@@ -889,11 +919,11 @@ func TestIntegrationWriteAndConfirm(t *testing.T) {
 			}
 
 			// 4. Restore original value and confirm
-			err = conn.WriteToSymbol(context.Background(), symbolName, original)
+			err = conn.WriteValue(context.Background(), symbolName, original)
 			if err != nil {
 				t.Fatalf("failed to restore original value %q to %s: %v", original, symbolName, err)
 			}
-			restored, err := conn.ReadFromSymbol(context.Background(), symbolName)
+			restored, err := conn.ReadValue(context.Background(), symbolName)
 			if err != nil {
 				t.Fatalf("ReadFromSymbol(%q) after restore failed: %v", symbolName, err)
 			}
@@ -909,8 +939,8 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 	// Collect symbols that have env vars set
 	type symbolPair struct {
 		name      string
-		testValue string
-		altValue  string
+		testValue any
+		altValue  any
 	}
 	var pairs []symbolPair
 	for _, tc := range writeTestCases {
@@ -931,9 +961,9 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 	}
 
 	// 1. Read current values (save for restore)
-	originals := make(map[string]string)
+	originals := make(map[string]any)
 	for _, p := range pairs {
-		val, err := conn.ReadFromSymbol(context.Background(), p.name)
+		val, err := conn.ReadValue(context.Background(), p.name)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%q) failed: %v", p.name, err)
 		}
@@ -942,7 +972,7 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 	}
 
 	// 2. Build write values, ensuring each differs from the original
-	writeValues := make(map[string]string)
+	writeValues := make(map[string]any)
 	for _, p := range pairs {
 		v := p.testValue
 		if v == originals[p.name] {
@@ -954,7 +984,7 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 	// 3. Write all via WriteMultipleSymbols.
 	// Every symbol here came from an ADS_WRITE_* env var and was just read
 	// successfully, so a per-item failure is a real defect, not a config gap.
-	codes, err := conn.WriteMultipleSymbols(context.Background(), writeValues)
+	codes, err := conn.WriteValues(context.Background(), writeValues)
 	requireBatchOK(t, "WriteMultipleSymbols", err)
 
 	// 4. Check per-symbol return codes
@@ -967,7 +997,7 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 	// 5. Read back each, assert it changed to the written value
 	for _, p := range pairs {
 		expected := writeValues[p.name]
-		readBack, err := conn.ReadFromSymbol(context.Background(), p.name)
+		readBack, err := conn.ReadValue(context.Background(), p.name)
 		if err != nil {
 			t.Errorf("ReadFromSymbol(%q) after batch write failed: %v", p.name, err)
 			continue
@@ -984,7 +1014,7 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 	// symbols that were not put back. Reported with Errorf rather than Fatalf
 	// deliberately: the read-back loop below then shows the operator the actual
 	// state of each symbol, which is what they need to fix it by hand.
-	restoreCodes, err := conn.WriteMultipleSymbols(context.Background(), originals)
+	restoreCodes, err := conn.WriteValues(context.Background(), originals)
 	reportFailedRestore(t, err)
 	for name, code := range restoreCodes {
 		if code != ReturnCodeNoErrors {
@@ -992,7 +1022,7 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 		}
 	}
 	for _, p := range pairs {
-		restored, err := conn.ReadFromSymbol(context.Background(), p.name)
+		restored, err := conn.ReadValue(context.Background(), p.name)
 		if err != nil {
 			t.Errorf("ReadFromSymbol(%q) after restore failed: %v", p.name, err)
 			continue
@@ -1021,7 +1051,7 @@ func TestIntegrationReadMultipleSymbols(t *testing.T) {
 	// Every name came out of the PLC's own symbol table moments ago, so a
 	// per-item refusal here is the defect this test exists to catch — not a
 	// config gap. Fail, and name the reasons.
-	values, err := conn.ReadMultipleSymbols(context.Background(), names)
+	values, err := conn.ReadValues(context.Background(), names)
 	requireBatchOK(t, "ReadMultipleSymbols", err)
 
 	// With a nil error the contract guarantees a value for every requested
@@ -1036,7 +1066,7 @@ func TestIntegrationReadMultipleSymbols(t *testing.T) {
 
 	// Verify each returned value matches an individual read
 	for name, batchVal := range values {
-		singleVal, err := conn.ReadFromSymbol(context.Background(), name)
+		singleVal, err := conn.ReadValue(context.Background(), name)
 		if err != nil {
 			t.Errorf("ReadFromSymbol(%q) failed: %v", name, err)
 			continue
@@ -1072,7 +1102,7 @@ func TestIntegrationLoadSymbolsSlow(t *testing.T) {
 	if name == "" {
 		t.Skip("no parseable symbols available")
 	}
-	value, err := conn.ReadFromSymbol(context.Background(), name)
+	value, err := conn.ReadValue(context.Background(), name)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol(%q) after slow load failed: %v", name, err)
 	}
@@ -1114,7 +1144,7 @@ func TestIntegrationReadProcessData(t *testing.T) {
 	// Read counter twice with delay to verify live data
 	counterName := os.Getenv("ADS_READ_COUNTER")
 	if counterName != "" {
-		val1, err := conn.ReadFromSymbol(context.Background(), counterName)
+		val1, err := conn.ReadValue(context.Background(), counterName)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%q) failed: %v", counterName, err)
 		}
@@ -1122,16 +1152,16 @@ func TestIntegrationReadProcessData(t *testing.T) {
 
 		time.Sleep(1100 * time.Millisecond) // counter updates every cycle (10ms), but value may be cached
 
-		val2, err := conn.ReadFromSymbol(context.Background(), counterName)
+		val2, err := conn.ReadValue(context.Background(), counterName)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%q) second read failed: %v", counterName, err)
 		}
 		t.Logf("counter read 2: %s = %s", counterName, val2)
 
-		// Parse as integers and verify increment
-		n1, err1 := strconv.ParseUint(val1, 10, 64)
-		n2, err2 := strconv.ParseUint(val2, 10, 64)
-		if err1 == nil && err2 == nil {
+		// Compare as integers and verify increment
+		n1, ok1 := integerOf(val1)
+		n2, ok2 := integerOf(val2)
+		if ok1 && ok2 {
 			if n2 <= n1 {
 				t.Errorf("counter did not increment: %d -> %d", n1, n2)
 			} else {
@@ -1143,21 +1173,23 @@ func TestIntegrationReadProcessData(t *testing.T) {
 	// Read a REAL value
 	realName := os.Getenv("ADS_READ_REAL")
 	if realName != "" {
-		val, err := conn.ReadFromSymbol(context.Background(), realName)
+		val, err := conn.ReadValue(context.Background(), realName)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%q) failed: %v", realName, err)
 		}
 		t.Logf("real: %s = %s", realName, val)
-		// Verify it parses as a float
-		if _, err := strconv.ParseFloat(val, 64); err != nil {
-			t.Errorf("expected float value for %s, got %q", realName, val)
+		// Verify it decodes as a float
+		switch val.(type) {
+		case float32, float64:
+		default:
+			t.Errorf("expected a float for %s, got %#v (%T)", realName, val, val)
 		}
 	}
 
 	// Read a STRING value
 	stringName := os.Getenv("ADS_READ_STRING")
 	if stringName != "" {
-		val, err := conn.ReadFromSymbol(context.Background(), stringName)
+		val, err := conn.ReadValue(context.Background(), stringName)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%q) failed: %v", stringName, err)
 		}
@@ -1218,7 +1250,7 @@ func TestIntegrationReconnect(t *testing.T) {
 	}
 
 	// 1. Read symbol to confirm connection works
-	val1, err := conn.ReadFromSymbol(context.Background(), symbolName)
+	val1, err := conn.ReadValue(context.Background(), symbolName)
 	if err != nil {
 		t.Fatalf("pre-reconnect ReadFromSymbol(%q) failed: %v", symbolName, err)
 	}
@@ -1253,7 +1285,7 @@ func TestIntegrationReconnect(t *testing.T) {
 	t.Log("reconnect completed")
 
 	// 5. Read symbol again — must succeed after reconnect
-	val2, err := conn.ReadFromSymbol(context.Background(), symbolName)
+	val2, err := conn.ReadValue(context.Background(), symbolName)
 	if err != nil {
 		t.Fatalf("post-reconnect ReadFromSymbol(%q) failed: %v", symbolName, err)
 	}
@@ -1352,7 +1384,7 @@ func TestIntegrationReconnectDuringBatchRead(t *testing.T) {
 	// nothing about it is stale — a refused item means the batch read is broken
 	// before the reconnect under test even happens, and comparing against a
 	// half-empty baseline afterwards would prove nothing.
-	values1, err := conn.ReadMultipleSymbols(context.Background(), names)
+	values1, err := conn.ReadValues(context.Background(), names)
 	requireBatchOK(t, "pre-reconnect ReadMultipleSymbols", err)
 	t.Logf("pre-reconnect batch read: %d symbols", len(values1))
 	for name, val := range values1 {
@@ -1387,7 +1419,7 @@ func TestIntegrationReconnectDuringBatchRead(t *testing.T) {
 	// The per-item report matters most here: it tells the operator whether the
 	// items came back as PLC verdicts (handles not refreshed) or as library
 	// skips (re-resolution itself failed), which are different bugs.
-	values2, err := conn.ReadMultipleSymbols(context.Background(), names)
+	values2, err := conn.ReadValues(context.Background(), names)
 	requireBatchOK(t, "post-reconnect ReadMultipleSymbols", err)
 	t.Logf("post-reconnect batch read: %d symbols", len(values2))
 	for name, val := range values2 {
@@ -1418,7 +1450,7 @@ func TestIntegrationReconnectReadDuringDisconnect(t *testing.T) {
 	}
 
 	// 1. Confirm connection works
-	val1, err := conn.ReadFromSymbol(context.Background(), symbolName)
+	val1, err := conn.ReadValue(context.Background(), symbolName)
 	if err != nil {
 		t.Fatalf("pre-disconnect ReadFromSymbol(%q) failed: %v", symbolName, err)
 	}
@@ -1434,7 +1466,7 @@ func TestIntegrationReconnectReadDuringDisconnect(t *testing.T) {
 
 	// 3. Immediately read WITHOUT waiting for reconnect.
 	// sendRequest's retry loop should handle this transparently.
-	val2, err := conn.ReadFromSymbol(context.Background(), symbolName)
+	val2, err := conn.ReadValue(context.Background(), symbolName)
 	if err != nil {
 		t.Fatalf("read during reconnect failed (sendRequest retry should have handled this): %v", err)
 	}
@@ -1679,7 +1711,7 @@ func TestIntegrationSumReadFallbackForced(t *testing.T) {
 	// The point of this test is that the per-symbol fallback path returns the
 	// same values as the sum path, so a refused item makes the comparison
 	// meaningless — fail and name it.
-	values, err := conn.ReadMultipleSymbols(context.Background(), names)
+	values, err := conn.ReadValues(context.Background(), names)
 	requireBatchOK(t, "ReadMultipleSymbols (fallback)", err)
 	if len(values) != len(names) {
 		t.Fatalf("ReadMultipleSymbols (fallback) returned no error but got %d values, want %d", len(values), len(names))
@@ -1692,7 +1724,7 @@ func TestIntegrationSumReadFallbackForced(t *testing.T) {
 			t.Errorf("missing result for %s", name)
 			continue
 		}
-		singleVal, err := conn.ReadFromSymbol(context.Background(), name)
+		singleVal, err := conn.ReadValue(context.Background(), name)
 		if err != nil {
 			t.Errorf("ReadFromSymbol(%s) failed: %v", name, err)
 			continue
@@ -1707,8 +1739,8 @@ func TestIntegrationSumReadFallbackForced(t *testing.T) {
 func TestIntegrationSumWriteFallbackForced(t *testing.T) {
 	type symbolPair struct {
 		name      string
-		testValue string
-		altValue  string
+		testValue any
+		altValue  any
 	}
 	var pairs []symbolPair
 	for _, tc := range writeTestCases {
@@ -1731,10 +1763,10 @@ func TestIntegrationSumWriteFallbackForced(t *testing.T) {
 	conn.client.Load().capabilities.SumWriteStateStore(2) // 2 = checked + unsupported (forces fallback)
 
 	// Save originals
-	originals := make(map[string]string)
-	writeValues := make(map[string]string)
+	originals := make(map[string]any)
+	writeValues := make(map[string]any)
 	for _, p := range pairs {
-		orig, err := conn.ReadFromSymbol(context.Background(), p.name)
+		orig, err := conn.ReadValue(context.Background(), p.name)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%s) failed: %v", p.name, err)
 		}
@@ -1747,7 +1779,7 @@ func TestIntegrationSumWriteFallbackForced(t *testing.T) {
 	}
 
 	// Batch write in fallback mode
-	codes, err := conn.WriteMultipleSymbols(context.Background(), writeValues)
+	codes, err := conn.WriteValues(context.Background(), writeValues)
 	requireBatchOK(t, "WriteMultipleSymbols (fallback)", err)
 	for name, code := range codes {
 		if code != ReturnCodeNoErrors {
@@ -1757,7 +1789,7 @@ func TestIntegrationSumWriteFallbackForced(t *testing.T) {
 
 	// Verify each individually
 	for name, expected := range writeValues {
-		actual, err := conn.ReadFromSymbol(context.Background(), name)
+		actual, err := conn.ReadValue(context.Background(), name)
 		if err != nil {
 			t.Errorf("ReadFromSymbol(%s) failed: %v", name, err)
 			continue
@@ -1770,7 +1802,7 @@ func TestIntegrationSumWriteFallbackForced(t *testing.T) {
 	// Restore. Reported, not discarded: this test forced the fallback write
 	// path, so a half-restore here leaves the PLC holding test values for every
 	// later test in the run.
-	if _, err := conn.WriteMultipleSymbols(context.Background(), originals); err != nil {
+	if _, err := conn.WriteValues(context.Background(), originals); err != nil {
 		reportFailedRestore(t, err)
 	}
 }
@@ -1970,29 +2002,29 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 		t.Fatalf("getSymbol(%s) failed: %v", symbolName, err)
 	}
 
-	original, err := conn.ReadFromSymbol(context.Background(), symbolName)
+	original, err := conn.ReadValue(context.Background(), symbolName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol failed: %v", err)
 	}
 
 	// Step 1: Verify SumWrite works via WriteMultipleSymbols (proven path).
-	writeVal := "42"
-	if original == "42" {
-		writeVal = "100"
+	writeVal := int16(42)
+	if original == int16(42) {
+		writeVal = int16(100)
 	}
-	codes, err := conn.WriteMultipleSymbols(context.Background(), map[string]string{symbolName: writeVal})
+	codes, err := conn.WriteValues(context.Background(), map[string]any{symbolName: writeVal})
 	requireBatchOK(t, "WriteMultipleSymbols (single-symbol control write)", err)
 	if codes[symbolName] != ReturnCodeNoErrors {
 		t.Fatalf("WriteMultipleSymbols returned error: 0x%X", uint32(codes[symbolName]))
 	}
-	readBack, _ := conn.ReadFromSymbol(context.Background(), symbolName)
+	readBack, _ := conn.ReadValue(context.Background(), symbolName)
 	if !valuesApproxEqual(writeVal, readBack, "ADS_WRITE_INT") {
-		t.Fatalf("SumWrite (via WriteMultipleSymbols) not working: wrote %q, read %q", writeVal, readBack)
+		t.Fatalf("SumWrite (via WriteMultipleSymbols) not working: wrote %v, read %v", writeVal, readBack)
 	}
 	t.Logf("SumWrite confirmed working: %s = %s", symbolName, readBack)
 
 	// Restore before mixed test
-	_ = conn.WriteToSymbol(context.Background(), symbolName, original)
+	_ = conn.WriteValue(context.Background(), symbolName, original)
 
 	// Step 2: Now test mixed valid + bogus in one batch.
 	validGroup, validOffset := symbolSumAddress(sym)
@@ -2002,7 +2034,7 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 	conn.cache.lock.Lock()
 	datatypes := conn.cache.datatypes
 	conn.cache.lock.Unlock()
-	mixedData, _ := sym.writeToNode(mixedWriteVal, datatypes)
+	mixedData, _ := sym.encode(mixedWriteVal, datatypes)
 
 	requests := []SumWriteRequest{
 		{Group: validGroup, Offset: validOffset, Data: mixedData}, // valid
@@ -2026,15 +2058,15 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 	// Check if valid write in mixed batch was actually applied.
 	// Some PLCs roll back the entire batch when any entry fails (atomic behavior).
 	// Others apply entries independently. Both are valid PLC implementations.
-	mixedReadBack, _ := conn.ReadFromSymbol(context.Background(), symbolName)
+	mixedReadBack, _ := conn.ReadValue(context.Background(), symbolName)
 	if valuesApproxEqual(mixedWriteVal, mixedReadBack, "ADS_WRITE_INT") {
 		t.Logf("mixed batch: valid write applied independently (non-atomic)")
 	} else {
-		t.Logf("mixed batch: valid write rolled back (atomic batch behavior) — wrote %q, read %q", mixedWriteVal, mixedReadBack)
+		t.Logf("mixed batch: valid write rolled back (atomic batch behavior) — wrote %v, read %v", mixedWriteVal, mixedReadBack)
 	}
 
 	// Restore
-	_ = conn.WriteToSymbol(context.Background(), symbolName, original)
+	_ = conn.WriteValue(context.Background(), symbolName, original)
 }
 
 // ============================================================
@@ -2048,8 +2080,8 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 func TestIntegrationSumWriteVerifyData(t *testing.T) {
 	type symbolPair struct {
 		name      string
-		testValue string
-		altValue  string
+		testValue any
+		altValue  any
 		envVar    string
 	}
 	var pairs []symbolPair
@@ -2070,11 +2102,11 @@ func TestIntegrationSumWriteVerifyData(t *testing.T) {
 	}
 
 	// Save originals
-	originals := make(map[string]string)
-	writeValues := make(map[string]string)
+	originals := make(map[string]any)
+	writeValues := make(map[string]any)
 	envVarMap := make(map[string]string)
 	for _, p := range pairs {
-		orig, err := conn.ReadFromSymbol(context.Background(), p.name)
+		orig, err := conn.ReadValue(context.Background(), p.name)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%s) failed: %v", p.name, err)
 		}
@@ -2090,7 +2122,7 @@ func TestIntegrationSumWriteVerifyData(t *testing.T) {
 	// Batch write. This test's whole subject is that SumWrite put the right
 	// bytes on the right symbols, so an item that never got written leaves
 	// nothing to verify.
-	codes, err := conn.WriteMultipleSymbols(context.Background(), writeValues)
+	codes, err := conn.WriteValues(context.Background(), writeValues)
 	requireBatchOK(t, "WriteMultipleSymbols", err)
 	for name, code := range codes {
 		if code != ReturnCodeNoErrors {
@@ -2100,7 +2132,7 @@ func TestIntegrationSumWriteVerifyData(t *testing.T) {
 
 	// Verify each INDIVIDUALLY (not batch) to confirm SumWrite correctness
 	for name, expected := range writeValues {
-		actual, err := conn.ReadFromSymbol(context.Background(), name)
+		actual, err := conn.ReadValue(context.Background(), name)
 		if err != nil {
 			t.Errorf("ReadFromSymbol(%s) failed: %v", name, err)
 			continue
@@ -2113,7 +2145,7 @@ func TestIntegrationSumWriteVerifyData(t *testing.T) {
 	}
 
 	// Restore. Reported, not discarded — see reportFailedRestore.
-	if _, err := conn.WriteMultipleSymbols(context.Background(), originals); err != nil {
+	if _, err := conn.WriteValues(context.Background(), originals); err != nil {
 		reportFailedRestore(t, err)
 	}
 }
@@ -2121,8 +2153,8 @@ func TestIntegrationSumWriteVerifyData(t *testing.T) {
 func TestIntegrationSumReadKnownValues(t *testing.T) {
 	type symbolPair struct {
 		name      string
-		testValue string
-		altValue  string
+		testValue any
+		altValue  any
 		envVar    string
 	}
 	var pairs []symbolPair
@@ -2143,11 +2175,11 @@ func TestIntegrationSumReadKnownValues(t *testing.T) {
 	}
 
 	// Save originals and write known values individually
-	originals := make(map[string]string)
-	knownValues := make(map[string]string)
+	originals := make(map[string]any)
+	knownValues := make(map[string]any)
 	envVarMap := make(map[string]string)
 	for _, p := range pairs {
-		orig, err := conn.ReadFromSymbol(context.Background(), p.name)
+		orig, err := conn.ReadValue(context.Background(), p.name)
 		if err != nil {
 			t.Fatalf("ReadFromSymbol(%s) failed: %v", p.name, err)
 		}
@@ -2156,7 +2188,7 @@ func TestIntegrationSumReadKnownValues(t *testing.T) {
 		if v == orig {
 			v = p.altValue
 		}
-		err = conn.WriteToSymbol(context.Background(), p.name, v)
+		err = conn.WriteValue(context.Background(), p.name, v)
 		if err != nil {
 			t.Fatalf("WriteToSymbol(%s, %s) failed: %v", p.name, v, err)
 		}
@@ -2171,7 +2203,7 @@ func TestIntegrationSumReadKnownValues(t *testing.T) {
 	}
 	// Each name was written individually and read back just above, so the PLC
 	// cannot honestly refuse it in a batch — that would be the bug.
-	batchValues, err := conn.ReadMultipleSymbols(context.Background(), names)
+	batchValues, err := conn.ReadValues(context.Background(), names)
 	requireBatchOK(t, "ReadMultipleSymbols", err)
 
 	// Verify each matches the known written value
@@ -2190,7 +2222,7 @@ func TestIntegrationSumReadKnownValues(t *testing.T) {
 
 	// Restore
 	for name, orig := range originals {
-		_ = conn.WriteToSymbol(context.Background(), name, orig)
+		_ = conn.WriteValue(context.Background(), name, orig)
 	}
 }
 
@@ -2201,8 +2233,8 @@ func TestIntegrationSumReadKnownValues(t *testing.T) {
 func TestIntegrationWrite64BitTypes(t *testing.T) {
 	testCases := []struct {
 		envVar    string
-		testValue string
-		altValue  string
+		testValue any
+		altValue  any
 	}{
 		{"ADS_WRITE_LINT", "-9223372036854775000", "42"},
 		{"ADS_WRITE_LWORD", "18446744073709551000", "100"},
@@ -2232,7 +2264,7 @@ func TestIntegrationWrite64BitTypes(t *testing.T) {
 				t.Fatalf("LoadSymbols failed: %v", err)
 			}
 
-			original, err := conn.ReadFromSymbol(context.Background(), symbolName)
+			original, err := conn.ReadValue(context.Background(), symbolName)
 			if err != nil {
 				t.Skipf("symbol %s not available: %v", symbolName, err)
 			}
@@ -2243,12 +2275,12 @@ func TestIntegrationWrite64BitTypes(t *testing.T) {
 				writeValue = tc.altValue
 			}
 
-			err = conn.WriteToSymbol(context.Background(), symbolName, writeValue)
+			err = conn.WriteValue(context.Background(), symbolName, writeValue)
 			if err != nil {
 				t.Fatalf("WriteToSymbol(%s, %s) failed: %v", symbolName, writeValue, err)
 			}
 
-			readBack, err := conn.ReadFromSymbol(context.Background(), symbolName)
+			readBack, err := conn.ReadValue(context.Background(), symbolName)
 			if err != nil {
 				t.Fatalf("ReadFromSymbol after write failed: %v", err)
 			}
@@ -2257,7 +2289,7 @@ func TestIntegrationWrite64BitTypes(t *testing.T) {
 			}
 			t.Logf("wrote %s, read back %s", writeValue, readBack)
 
-			_ = conn.WriteToSymbol(context.Background(), symbolName, original)
+			_ = conn.WriteValue(context.Background(), symbolName, original)
 		})
 	}
 }
@@ -2270,31 +2302,22 @@ func TestIntegrationRead64BitCounter(t *testing.T) {
 
 	counterName := getEnvOrDefault("ADS_READ_COUNTER", "GVL_ProcessData.nMasterCycleCounter")
 
-	val1, err := conn.ReadFromSymbol(context.Background(), counterName)
+	val1, err := conn.ReadValue(context.Background(), counterName)
 	if err != nil {
 		t.Skipf("counter %s not available: %v", counterName, err)
 	}
 
 	time.Sleep(1100 * time.Millisecond)
 
-	val2, err := conn.ReadFromSymbol(context.Background(), counterName)
+	val2, err := conn.ReadValue(context.Background(), counterName)
 	if err != nil {
 		t.Fatalf("second read failed: %v", err)
 	}
 
-	n1, err1 := strconv.ParseUint(val1, 10, 64)
-	n2, err2 := strconv.ParseUint(val2, 10, 64)
-	if err1 != nil || err2 != nil {
-		t.Logf("counter values: %q -> %q (not uint64, may be DINT on TC2)", val1, val2)
-		// Try signed parse for TC2 DINT counters
-		s1, _ := strconv.ParseInt(val1, 10, 64)
-		s2, _ := strconv.ParseInt(val2, 10, 64)
-		if s2 <= s1 {
-			t.Errorf("counter did not increment: %d -> %d", s1, s2)
-		} else {
-			t.Logf("counter (signed): %d -> %d (delta=%d)", s1, s2, s2-s1)
-		}
-		return
+	n1, ok1 := integerOf(val1)
+	n2, ok2 := integerOf(val2)
+	if !ok1 || !ok2 {
+		t.Fatalf("counter values %#v -> %#v are not integers", val1, val2)
 	}
 
 	if n2 <= n1 {
@@ -2316,15 +2339,14 @@ func TestIntegrationEnumOnDemandRead(t *testing.T) {
 		enumName = "GVL_ProcessData.eMachineState"
 	}
 
-	value, err := conn.ReadFromSymbol(context.Background(), enumName)
+	value, err := conn.ReadValue(context.Background(), enumName)
 	if err != nil {
 		t.Skipf("enum symbol %s not available: %v", enumName, err)
 	}
 
-	// Value should be numeric (enum ordinal via inferBaseType)
-	_, parseErr := strconv.ParseInt(value, 10, 64)
-	if parseErr != nil {
-		t.Errorf("enum value should be numeric, got %q: %v", value, parseErr)
+	// Value should be an integer (enum ordinal via inferBaseType)
+	if _, ok := integerOf(value); !ok {
+		t.Errorf("enum value should be an integer, got %#v (%T)", value, value)
 	}
 	t.Logf("on-demand enum: %s = %s", enumName, value)
 }
@@ -2365,16 +2387,12 @@ func TestIntegrationDeeplyNestedStruct(t *testing.T) {
 	}
 
 	// Read the struct
-	value, err := conn.ReadFromSymbol(context.Background(), structName)
+	value, err := conn.ReadValue(context.Background(), structName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol(%s) failed: %v", structName, err)
 	}
 
-	if len(value) > 200 {
-		t.Logf("value (truncated): %.200s...", value)
-	} else {
-		t.Logf("value: %s", value)
-	}
+	t.Logf("value: %v", value)
 
 	// Verify all leaf children have values
 	var leafCount, emptyCount int
@@ -2382,7 +2400,7 @@ func TestIntegrationDeeplyNestedStruct(t *testing.T) {
 	checkLeaves = func(s SymbolView, path string) {
 		if len(s.Children()) == 0 {
 			leafCount++
-			if s.Value == "" {
+			if s.Value == nil {
 				emptyCount++
 				t.Errorf("leaf %s has empty value", path)
 			}
@@ -2414,7 +2432,7 @@ func TestIntegrationStructMultipleEnumChildren(t *testing.T) {
 	}
 
 	// Read the struct to populate values
-	_, err := conn.ReadFromSymbol(context.Background(), structName)
+	_, err := conn.ReadValue(context.Background(), structName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol(%s) failed: %v", structName, err)
 	}
@@ -2423,7 +2441,7 @@ func TestIntegrationStructMultipleEnumChildren(t *testing.T) {
 	type enumInfo struct {
 		fullName string
 		dataType string
-		value    string
+		value    any
 	}
 	var enums []enumInfo
 	var findEnums func(s SymbolView)
@@ -2443,13 +2461,12 @@ func TestIntegrationStructMultipleEnumChildren(t *testing.T) {
 
 	t.Logf("found %d enum children in %s", len(enums), structName)
 	for _, e := range enums {
-		if e.value == "" {
-			t.Errorf("enum child %s (%s) has empty value", e.fullName, e.dataType)
+		if e.value == nil {
+			t.Errorf("enum child %s (%s) has no value", e.fullName, e.dataType)
 			continue
 		}
-		_, parseErr := strconv.ParseInt(e.value, 10, 64)
-		if parseErr != nil {
-			t.Errorf("enum child %s value %q not numeric", e.fullName, e.value)
+		if _, ok := integerOf(e.value); !ok {
+			t.Errorf("enum child %s value %#v (%T) is not an integer", e.fullName, e.value, e.value)
 		}
 		t.Logf("  %s (%s) = %s", e.fullName, e.dataType, e.value)
 	}
@@ -2581,13 +2598,13 @@ func TestIntegrationNotificationServerOnChange2(t *testing.T) {
 	}
 
 	// Read original, write a different value to trigger change
-	original, _ := conn.ReadFromSymbol(context.Background(), symbolName)
-	writeVal := "42"
-	if original == "42" {
-		writeVal = "100"
+	original, _ := conn.ReadValue(context.Background(), symbolName)
+	writeVal := int16(42)
+	if original == int16(42) {
+		writeVal = int16(100)
 	}
 
-	err = conn.WriteToSymbol(context.Background(), symbolName, writeVal)
+	err = conn.WriteValue(context.Background(), symbolName, writeVal)
 	if err != nil {
 		t.Fatalf("WriteToSymbol failed: %v", err)
 	}
@@ -2605,7 +2622,7 @@ func TestIntegrationNotificationServerOnChange2(t *testing.T) {
 	}
 
 	// Restore
-	_ = conn.WriteToSymbol(context.Background(), symbolName, original)
+	_ = conn.WriteValue(context.Background(), symbolName, original)
 	_ = conn.DeleteDeviceNotification(context.Background(), handle)
 	if !received {
 		t.Error("expected notification (with or without fallback) after write, got none")
@@ -2709,7 +2726,7 @@ func TestIntegrationLargeBatchRead(t *testing.T) {
 
 	t.Logf("batch reading %d symbols", len(names))
 	start := time.Now()
-	values, err := conn.ReadMultipleSymbols(context.Background(), names)
+	values, err := conn.ReadValues(context.Background(), names)
 	elapsed := time.Since(start)
 	// Every name here had its handle acquired successfully above, so a per-item
 	// failure is a defect and this test fails on it. Reported with Errorf rather
@@ -2729,7 +2746,7 @@ func TestIntegrationLargeBatchRead(t *testing.T) {
 		val, ok := values[name]
 		if !ok {
 			missing = append(missing, name)
-		} else if val == "" {
+		} else if val == nil || val == "" {
 			if symbols[name].DataType == "STRING" {
 				emptyString = append(emptyString, name)
 			} else {
@@ -2969,11 +2986,11 @@ func TestIntegrationReadAllParseableTypes(t *testing.T) {
 	t.Logf("found %d parseable types on PLC", len(byType))
 	for dt, name := range byType {
 		t.Run(dt, func(t *testing.T) {
-			val, err := conn.ReadFromSymbol(context.Background(), name)
+			val, err := conn.ReadValue(context.Background(), name)
 			if err != nil {
 				t.Fatalf("ReadFromSymbol(%s) [type=%s] failed: %v", name, dt, err)
 			}
-			if val == "" && dt != "STRING" {
+			if val == nil {
 				t.Errorf("ReadFromSymbol(%s) [type=%s] returned empty", name, dt)
 			}
 			t.Logf("%s (%s) = %q", name, dt, val)
@@ -3103,7 +3120,7 @@ func TestIntegrationWSTRING(t *testing.T) {
 	t.Logf("found WSTRING symbol: %s", wstringName)
 
 	// Read current value
-	val, err := conn.ReadFromSymbol(context.Background(), wstringName)
+	val, err := conn.ReadValue(context.Background(), wstringName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol(%s) failed: %v", wstringName, err)
 	}
@@ -3111,12 +3128,12 @@ func TestIntegrationWSTRING(t *testing.T) {
 
 	// Write a test value and read back
 	testVal := "WTest"
-	if err := conn.WriteToSymbol(context.Background(), wstringName, testVal); err != nil {
+	if err := conn.WriteValue(context.Background(), wstringName, testVal); err != nil {
 		t.Logf("WriteToSymbol(%s) failed (may be read-only): %v", wstringName, err)
 		return
 	}
 
-	readBack, err := conn.ReadFromSymbol(context.Background(), wstringName)
+	readBack, err := conn.ReadValue(context.Background(), wstringName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol after write failed: %v", err)
 	}
@@ -3126,7 +3143,7 @@ func TestIntegrationWSTRING(t *testing.T) {
 
 	// Restore original value
 	if val != "" {
-		_ = conn.WriteToSymbol(context.Background(), wstringName, val)
+		_ = conn.WriteValue(context.Background(), wstringName, val)
 	}
 }
 
@@ -3156,13 +3173,13 @@ func TestIntegrationBitSymbol(t *testing.T) {
 
 	t.Logf("found BitValue symbol: %s (flags=0x%04X)", bitName, uint32(symbols[bitName].Flags))
 
-	// Read should return "true" or "false"
-	val, err := conn.ReadFromSymbol(context.Background(), bitName)
+	// Read should return a bool
+	val, err := conn.ReadValue(context.Background(), bitName)
 	if err != nil {
 		t.Fatalf("ReadFromSymbol(%s) failed: %v", bitName, err)
 	}
-	if val != "true" && val != "false" {
-		t.Errorf("expected 'true' or 'false', got %q", val)
+	if _, ok := val.(bool); !ok {
+		t.Errorf("expected a bool, got %#v (%T)", val, val)
 	}
 	t.Logf("value: %s", val)
 }
@@ -3477,12 +3494,12 @@ func TestIntegrationMemberBaseType(t *testing.T) {
 		checkBaseType(t, root, structName, false)
 		walk(root, structName)
 
-		// The whole struct reads as nested JSON; the table is what makes that work.
-		value, err := conn.ReadFromSymbol(ctx, structName)
+		// The whole struct reads as a nested map; the table is what makes that work.
+		value, err := conn.ReadValue(ctx, structName)
 		if err != nil {
 			t.Errorf("ReadFromSymbol(%s) failed: %v", structName, err)
 		}
-		t.Logf("%s: %d leaves, %d nodes, struct read %d bytes of JSON", structName, leaves, len(members), len(value))
+		t.Logf("%s: %d leaves, %d nodes, struct read as %T", structName, leaves, len(members), value)
 		if leaves == 0 {
 			t.Skip("struct has no leaves to check")
 		}
@@ -3503,7 +3520,7 @@ func TestIntegrationMemberBaseType(t *testing.T) {
 		} else {
 			checkBaseType(t, root, structName, false)
 		}
-		if _, err := conn.ReadFromSymbol(ctx, structName); err != nil {
+		if _, err := conn.ReadValue(ctx, structName); err != nil {
 			t.Logf("whole-struct read without the table failed as documented: %v", err)
 		}
 

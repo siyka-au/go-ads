@@ -4,261 +4,86 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"strconv"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf16"
+
+	"cloud.google.com/go/civil"
 )
+
+// decodeOK decodes data as a fresh symbol and fails the test on error.
+func decodeOK(t *testing.T, sym *symbol, data []byte, datatypes map[string]SymbolUploadDataType) any {
+	t.Helper()
+	v, err := sym.decode(data, 0, datatypes)
+	if err != nil {
+		t.Fatalf("decode %s: %v", sym.DataType, err)
+	}
+	return v
+}
 
 // F-16: int(symbol.Length) wraps on 32-bit Go. Validate symbol.Length against
 // data buffer size before arithmetic to prevent negative slice / huge alloc.
 // Validates: R-PARSE-006.
-func TestParse_RejectsOversizedSymbolLength(t *testing.T) {
-	data := make([]byte, 16)
-	sym := &symbol{
-		Name:     "x",
-		DataType: "INT",
-		Length:   0xFFFFFFFF, // wildly oversized
-	}
-	_, err := sym.parse(data, 0, nil)
-	if err == nil {
-		t.Fatalf("expected error for oversized symbol.Length, got nil")
-	}
-	if !strings.Contains(err.Error(), "Length") {
-		t.Errorf("expected error mentioning Length, got: %v", err)
-	}
-}
-
-// Happy path: an INT symbol with Length=2 parses normally.
-// Validates: R-PARSE-007.
-func TestParse_HappyPath_INT(t *testing.T) {
-	data := []byte{0x01, 0x00} // little-endian 1
-	sym := &symbol{
-		Name:     "x",
-		DataType: "INT",
-		Length:   2,
-	}
-	got, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "1" {
-		t.Errorf("got %q, want %q", got, "1")
+func TestDecode_RejectsOversizedSymbolLength(t *testing.T) {
+	sym := &symbol{Name: "x", DataType: "INT", Length: 0xFFFFFFFF}
+	_, err := sym.decode(make([]byte, 16), 0, nil)
+	if err == nil || !strings.Contains(err.Error(), "Length") {
+		t.Fatalf("expected an error mentioning Length, got %v", err)
 	}
 }
 
 // A change decoded straight after the previous sample must be stored and
-// returned. updateValue used to skip values arriving within MinUpdateInterval
+// returned. The store used to skip values arriving within MinUpdateInterval
 // of the last one, so a notification carried the value it was replacing.
-func TestParse_BackToBackChangesAreNotDropped(t *testing.T) {
+func TestDecode_BackToBackChangesAreNotDropped(t *testing.T) {
 	sym := &symbol{
 		Name:              "x",
 		DataType:          "UDINT",
 		Length:            4,
-		MinUpdateInterval: time.Hour, // far longer than the gap between parses
+		MinUpdateInterval: time.Hour, // far longer than the gap between decodes
 	}
 	for _, want := range []uint32{1, 100002, 7} {
-		data := binary.LittleEndian.AppendUint32(nil, want)
-		got, err := sym.parse(data, 0, nil)
-		if err != nil {
-			t.Fatalf("parse %d: %v", want, err)
+		got := decodeOK(t, sym, leu32(want), nil)
+		if got != want {
+			t.Errorf("decode %d returned %#v", want, got)
 		}
-		if got != strconv.FormatUint(uint64(want), 10) {
-			t.Errorf("parse %d returned %q", want, got)
+		if sym.Value != want {
+			t.Errorf("decode %d: cached Value %#v", want, sym.Value)
 		}
-		if sym.Value != got {
-			t.Errorf("parse %d: cached Value %q, returned %q", want, sym.Value, got)
-		}
-	}
-}
-
-// F-17: STRING write with symbol.Length=0 must error rather than silently
-// produce a 0-byte payload to the PLC.
-// Validates: NO-SPEC strict.
-func TestWriteToNode_STRING_RejectsZeroLength(t *testing.T) {
-	sym := &symbol{
-		Name:     "s",
-		DataType: "STRING",
-		Length:   0,
-	}
-	_, err := sym.writeToNode("hello", nil)
-	if err == nil {
-		t.Fatalf("expected error for STRING with Length=0, got nil")
-	}
-}
-
-// F-17: WSTRING write with symbol.Length<2 must error (need 2 bytes minimum
-// for the null terminator).
-// Validates: NO-SPEC strict.
-func TestWriteToNode_WSTRING_RejectsTooShort(t *testing.T) {
-	cases := []uint32{0, 1}
-	for _, length := range cases {
-		sym := &symbol{
-			Name:     "ws",
-			DataType: "WSTRING",
-			Length:   length,
-		}
-		_, err := sym.writeToNode("hi", nil)
-		if err == nil {
-			t.Errorf("expected error for WSTRING with Length=%d, got nil", length)
-		}
-	}
-}
-
-// F-18: write path must symmetrize with read — if read can fall back to
-// inferBaseType for unknown types, write must accept the same input and
-// round-trip it. Inference is limited to 1- and 2-byte widths (REAL/LREAL
-// share 4 and 8 byte widths with DINT/LINT and cannot be disambiguated
-// without a datatype table — see inferBaseType doc).
-// Validates: NO-SPEC.
-func TestWriteToNode_FallsBackToInferredType(t *testing.T) {
-	// Unknown 2-byte type — write should fall back to INT.
-	sym := &symbol{
-		Name:     "x",
-		DataType: "MyEnum16", // unknown user type, 2-byte enum
-		Length:   2,
-	}
-	got, err := sym.writeToNode("42", nil)
-	if err != nil {
-		t.Fatalf("expected inference fallback to succeed for 2-byte type, got error: %v", err)
-	}
-	if len(got) != 2 {
-		t.Errorf("expected 2 bytes, got %d", len(got))
-	}
-	// Little-endian 42 = 2A 00
-	if got[0] != 42 || got[1] != 0 {
-		t.Errorf("expected [2A 00], got %v", got)
-	}
-}
-
-// 4- and 8-byte writes must NOT silently infer DINT/LINT — would corrupt
-// REAL/LREAL aliases. Caller must call LoadSymbols or use a known type.
-// Validates: NO-SPEC (regression guard for REAL/LREAL ambiguity fix).
-func TestWriteToNode_Refuses4And8ByteInferenceWithoutDatatypes(t *testing.T) {
-	for _, size := range []uint32{4, 8} {
-		sym := &symbol{
-			Name:     "x",
-			DataType: "MyUnknownType",
-			Length:   size,
-		}
-		_, err := sym.writeToNode("42", nil)
-		if err == nil {
-			t.Errorf("size=%d: expected error refusing inference (REAL/LREAL ambiguity), got nil", size)
-		}
-	}
-}
-
-// F-18: write must still error for sizes that don't match a known integer
-// width (no inference possible).
-// Validates: NO-SPEC.
-func TestWriteToNode_RejectsUnknownTypeWithUninferableSize(t *testing.T) {
-	sym := &symbol{
-		Name:     "x",
-		DataType: "MyWeirdType",
-		Length:   3, // not 1/2/4/8
-	}
-	_, err := sym.writeToNode("42", nil)
-	if err == nil {
-		t.Fatalf("expected error for size=3 unknown type, got nil")
-	}
-}
-
-// Happy path: STRING with Length=10 truncates "hello world" to fit.
-// Validates: R-PARSE-003.
-func TestWriteToNode_STRING_HappyPath(t *testing.T) {
-	sym := &symbol{
-		Name:     "s",
-		DataType: "STRING",
-		Length:   10,
-	}
-	got, err := sym.writeToNode("hello world", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != 10 {
-		t.Errorf("expected 10 bytes, got %d", len(got))
-	}
-	// First 9 bytes should be "hello wor" (Length-1 to reserve the null terminator).
-	if string(got[:9]) != "hello wor" {
-		t.Errorf("got %q, want %q", string(got[:9]), "hello wor")
-	}
-	if got[9] != 0 {
-		t.Errorf("expected null terminator at byte 9, got 0x%X", got[9])
 	}
 }
 
 // ============================================================
-// symbol.parse — basic types
+// Type resolution: alias, ADST_ code, size inference
 // ============================================================
 
-// Validates: R-PARSE-007.
-func TestSymbolParseBasicTypes(t *testing.T) {
-	tests := []struct {
-		name     string
-		dataType string
-		length   uint32
-		data     []byte
-		want     string
-	}{
-		// BOOL
-		{"BOOL/true", "BOOL", 1, []byte{1}, "true"},
-		{"BOOL/false", "BOOL", 1, []byte{0}, "false"},
-		// Integer types
-		{"INT/-42", "INT", 2, le16(-42), "-42"},
-		{"UINT/1234", "UINT", 2, leu16(1234), "1234"},
-		{"SINT/-100", "SINT", 1, []byte{156}, "-100"}, // 156 = uint8(int8(-100))
-		{"BYTE/255", "BYTE", 1, []byte{255}, "255"},
-		{"DINT/-12345", "DINT", 4, le32(-12345), "-12345"},
-		{"LINT/-9999999999", "LINT", 8, le64(-9999999999), "-9999999999"},
-		{"ULINT/max", "ULINT", 8, leu64(18446744073709551615), "18446744073709551615"},
-		// Float
-		{"REAL/10", "REAL", 4, leF32(10.0), "10"},
-		// String
-		{"STRING/Hello", "STRING", 20, append([]byte("Hello\x00"), make([]byte, 14)...), "Hello"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length}
-			got, err := sym.parse(tt.data, 0, nil)
-			requireNoError(t, err)
-			assertEqual(t, got, tt.want)
-		})
-	}
-}
-
-// Validates: R-PARSE-007.
-func TestSymbolParseLREAL(t *testing.T) {
-	sym := &symbol{DataType: "LREAL", Length: 8}
-	val, err := sym.parse(leF64(3.141592653589793), 0, nil)
-	requireNoError(t, err)
-	f, _ := strconv.ParseFloat(val, 64)
-	assertFloatApprox(t, f, 3.141592653589793, toleranceFloat64)
-}
-
 // Validates: NO-SPEC.
-func TestSymbolParseUnknownType(t *testing.T) {
-	// Use size 3 which doesn't match any standard integer size,
-	// so inferBaseType won't resolve it
-	sym := &symbol{DataType: "UNKNOWN_TYPE", Length: 3}
-	_, err := sym.parse([]byte{0, 0, 0}, 0, nil)
-	if err == nil {
-		t.Error("expected error for unknown data type")
+func TestDecodeUnknownType(t *testing.T) {
+	// Size 3 matches no standard width, so inferBaseType cannot resolve it.
+	for _, dt := range []map[string]SymbolUploadDataType{nil, {}} {
+		if _, err := (&symbol{DataType: "UNKNOWN_TYPE", Length: 3}).decode([]byte{0, 0, 0}, 0, dt); err == nil {
+			t.Error("expected error for unknown data type")
+		}
+		if _, err := (&symbol{DataType: "UNKNOWN_TYPE", Length: 3}).encode(int8(1), dt); err == nil {
+			t.Error("expected error writing an unknown data type")
+		}
 	}
 }
 
 // An array carries its element's ADST_ code and the whole array's Length. With
-// no datatype table it has no Children, so parse falls through to BaseType
+// no datatype table it has no Children, so decode falls through to BaseType
 // resolution -- which used to read 40 bytes as one DINT and report "DINT Size
 // Wrong", naming a type the caller never asked for.
-func TestSymbolParseArrayWithoutDatatypeTable(t *testing.T) {
+func TestDecodeArrayWithoutDatatypeTable(t *testing.T) {
 	sym := &symbol{
 		Name:     "anCounters",
 		DataType: "ARRAY [0..9] OF DINT",
 		BaseType: ADSTInt32, // element type, not the aggregate
 		Length:   40,        // 10 * 4
 	}
-	_, err := sym.parse(make([]byte, 40), 0, nil)
+	_, err := sym.decode(make([]byte, 40), 0, nil)
 	if err == nil {
 		t.Fatal("expected an error for an array with no datatype table")
 	}
@@ -273,257 +98,109 @@ func TestSymbolParseArrayWithoutDatatypeTable(t *testing.T) {
 }
 
 // The width guard must not catch a plain scalar resolved through BaseType: a
-// type-aliased DINT has Length 4 and parses as before.
-func TestSymbolParseAliasScalarStillResolves(t *testing.T) {
-	sym := &symbol{
-		Name:     "aliased",
-		DataType: "E_SomeAlias",
-		BaseType: ADSTInt32,
-		Length:   4,
-	}
-	got, err := sym.parse([]byte{0x07, 0x00, 0x00, 0x00}, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "7" {
-		t.Errorf("got %q, want %q", got, "7")
+// type-aliased DINT has Length 4 and decodes as a DINT.
+func TestDecodeAliasScalarStillResolves(t *testing.T) {
+	sym := &symbol{Name: "aliased", DataType: "E_SomeAlias", BaseType: ADSTInt32, Length: 4}
+	if got := decodeOK(t, sym, le32(7), nil); got != int32(7) {
+		t.Errorf("got %#v, want int32(7)", got)
 	}
 }
 
-// ============================================================
-// writeToNode round-trip tests
-// ============================================================
+// Validates: NO-SPEC.
+func TestAliasResolutionThroughDatatypeTable(t *testing.T) {
+	datatypes := map[string]SymbolUploadDataType{"MyAlias": {DataType: "INT"}}
+	sym := &symbol{DataType: "MyAlias", Length: 2}
+	if got := decodeOK(t, sym, le16(42), datatypes); got != int16(42) {
+		t.Errorf("decode: got %#v, want int16(42)", got)
+	}
+	b, err := sym.encode(int16(123), datatypes)
+	if err != nil || !reflect.DeepEqual(b, le16(123)) {
+		t.Errorf("encode: % x, %v", b, err)
+	}
+}
 
-// Validates: R-PARSE-007 (write/read symmetry).
-func TestWriteToNodeRoundTrip(t *testing.T) {
+// Validates: R-SYM-004.
+func TestDecodeWithBaseType(t *testing.T) {
 	tests := []struct {
 		name     string
-		dataType string
+		baseType ADSDataType
 		length   uint32
-		value    string
+		data     []byte
+		want     any
 	}{
-		// BOOL
-		{"BOOL/true", "BOOL", 1, "true"},
-		{"BOOL/false", "BOOL", 1, "false"},
-		// 8-bit
-		{"BYTE/0", "BYTE", 1, "0"},
-		{"BYTE/255", "BYTE", 1, "255"},
-		{"USINT/42", "USINT", 1, "42"},
-		{"SINT/min", "SINT", 1, "-128"},
-		{"SINT/max", "SINT", 1, "127"},
-		// 16-bit
-		{"UINT/0", "UINT", 2, "0"},
-		{"UINT/max", "UINT", 2, "65535"},
-		{"WORD/1234", "WORD", 2, "1234"},
-		{"UINT16/5678", "UINT16", 2, "5678"},
-		{"INT/min", "INT", 2, "-32768"},
-		{"INT/max", "INT", 2, "32767"},
-		{"INT16/-42", "INT16", 2, "-42"},
-		// 32-bit
-		{"UDINT/0", "UDINT", 4, "0"},
-		{"UDINT/max", "UDINT", 4, "4294967295"},
-		{"DWORD/12345678", "DWORD", 4, "12345678"},
-		{"DINT/min", "DINT", 4, "-2147483648"},
-		{"DINT/max", "DINT", 4, "2147483647"},
-		// 64-bit
-		{"LINT/0", "LINT", 8, "0"},
-		{"LINT/min", "LINT", 8, "-9223372036854775808"},
-		{"LINT/max", "LINT", 8, "9223372036854775807"},
-		{"ULINT/0", "ULINT", 8, "0"},
-		{"ULINT/max", "ULINT", 8, "18446744073709551615"},
-		{"LWORD/42", "LWORD", 8, "42"},
-		// STRING
-		{"STRING/Hello", "STRING", 20, "Hello"},
-		// TIME
-		{"TIME/12:34:56", "TIME", 4, "12:34:56"},
-		{"TIME/midnight", "TIME", 4, "00:00:00"},
-		{"TIME/with_ms", "TIME", 4, "12:34:56.789"},
-		// TOD
-		{"TOD/15:30:00", "TOD", 4, "15:30:00"},
-		{"TOD/midnight", "TOD", 4, "00:00:00"},
-		{"TOD/with_ms", "TOD", 4, "23:59:59.999"},
-		{"TIME/over_24h", "TIME", 4, "25:01:01.001"},
-		{"LTIME/ns", "LTIME", 8, "1000:00:00.000000001"},
-		{"LTOD/ns", "LTOD", 8, "23:59:59.999999999"},
-		{"LDATE/pre_epoch", "LDATE", 8, "1900-06-15"},
-		{"LDT/ns", "LDT", 8, "2262-04-11 23:47:16.854775807"},
-		// DATE
-		{"DATE/2024-01-15", "DATE", 4, "2024-01-15"},
-		{"DATE/2000-06-15", "DATE", 4, "2000-06-15"},
-		// DT
-		{"DT/2024-01-15", "DT", 4, "2024-01-15 12:30:00"},
-		{"DT/epoch", "DT", 4, "1970-01-01 00:00:00"},
+		// Unknown DataType with an ADST_ code decodes as that primitive.
+		{"REAL", ADSTReal32, 4, leF32(3.14), float32(3.14)},
+		// An unsigned code must decode unsigned, not signed.
+		{"UDINT", ADSTUint32, 4, leu32(3000000000), uint32(3000000000)},
+		// No ADST_ code: a 2-byte symbol falls through to inference as INT.
+		{"inferred INT", ADSTVoid, 2, le16(1337), int16(1337)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			testWriteRoundTrip(t, tt.dataType, tt.length, tt.value)
+			sym := &symbol{Name: "a", FullName: "GVL.a", DataType: "SomeAlias", Length: tt.length, BaseType: tt.baseType}
+			if got := decodeOK(t, sym, tt.data, nil); got != tt.want {
+				t.Errorf("got %#v (%T), want %#v (%T)", got, got, tt.want, tt.want)
+			}
 		})
 	}
 }
 
-// Validates: R-PARSE-007.
-func TestWriteToNodeRoundTripFloat(t *testing.T) {
-	t.Run("REAL/3.14", func(t *testing.T) {
-		sym := &symbol{DataType: "REAL", Length: 4}
-		data, err := sym.writeToNode("3.14", nil)
-		requireNoError(t, err)
-		bits := binary.LittleEndian.Uint32(data)
-		f := math.Float32frombits(bits)
-		assertFloatApprox(t, float64(f), 3.14, toleranceFloat32)
-	})
-
-	t.Run("LREAL/pi", func(t *testing.T) {
-		sym := &symbol{DataType: "LREAL", Length: 8}
-		data, err := sym.writeToNode("3.141592653589793", nil)
-		requireNoError(t, err)
-		bits := binary.LittleEndian.Uint64(data)
-		f := math.Float64frombits(bits)
-		assertFloatApprox(t, f, 3.141592653589793, toleranceFloat64)
-	})
-}
-
-// Validates: R-PARSE-001.
-func TestWriteToNodeStruct(t *testing.T) {
-	child1 := &symbol{
-		Name:     "field1",
-		FullName: "test.field1",
-		DataType: "INT",
-		Length:   2,
-		Offset:   0,
-	}
-	child2 := &symbol{
-		Name:     "field2",
-		FullName: "test.field2",
-		DataType: "DINT",
-		Length:   4,
-		Offset:   4, // 2 bytes padding after field1
-	}
-	parent := &symbol{
-		Name:     "test",
-		FullName: "test",
-		DataType: "ST_Test",
-		Length:   8,
-		Children: map[string]*symbol{
-			"field1": child1,
-			"field2": child2,
-		},
-	}
-
-	data, err := parent.writeToNode(`{"field1":"42","field2":"100"}`, nil)
-	if err != nil {
-		t.Fatalf("struct writeToNode error: %v", err)
-	}
-
-	if len(data) != 8 {
-		t.Fatalf("expected 8 bytes, got %d", len(data))
-	}
-
-	// field1 at offset 0: INT 42
-	v1 := int16(binary.LittleEndian.Uint16(data[0:2]))
-	if v1 != 42 {
-		t.Errorf("field1: got %d, want 42", v1)
-	}
-
-	// bytes 2-3 should be zero (padding)
-	if data[2] != 0 || data[3] != 0 {
-		t.Errorf("padding bytes should be zero: got %v", data[2:4])
-	}
-
-	// field2 at offset 4: DINT 100
-	v2 := int32(binary.LittleEndian.Uint32(data[4:8]))
-	if v2 != 100 {
-		t.Errorf("field2: got %d, want 100", v2)
-	}
-}
-
-// Validates: R-PARSE-001.
-func TestWriteToNodeStructPartialFields(t *testing.T) {
-	child1 := &symbol{Name: "x", FullName: "s.x", DataType: "BYTE", Length: 1, Offset: 0}
-	child2 := &symbol{Name: "y", FullName: "s.y", DataType: "BYTE", Length: 1, Offset: 1}
-	parent := &symbol{
-		Name: "s", FullName: "s", DataType: "ST_S", Length: 2,
-		Children: map[string]*symbol{"x": child1, "y": child2},
-	}
-
-	// Only write "x", "y" should remain zero
-	data, err := parent.writeToNode(`{"x":"7"}`, nil)
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if data[0] != 7 {
-		t.Errorf("x: got %d, want 7", data[0])
-	}
-	if data[1] != 0 {
-		t.Errorf("y: got %d, want 0 (unset)", data[1])
-	}
-}
-
+// F-18: the write path resolves types exactly as the read path does, including
+// the 1-/2-byte inference fallback for a user type with no datatype table.
 // Validates: NO-SPEC.
-func TestWriteToNodeAliasResolution(t *testing.T) {
-	datatypes := map[string]SymbolUploadDataType{
-		"MyInt": {DataType: "INT"},
-	}
-	sym := &symbol{DataType: "MyInt", Length: 2}
-	data, err := sym.writeToNode("123", datatypes)
+func TestEncodeFallsBackToInferredType(t *testing.T) {
+	sym := &symbol{Name: "x", DataType: "MyEnum16", Length: 2}
+	got, err := sym.encode(42, nil)
 	if err != nil {
-		t.Fatalf("alias writeToNode error: %v", err)
+		t.Fatalf("expected inference fallback to succeed for a 2-byte type: %v", err)
 	}
-	v := int16(binary.LittleEndian.Uint16(data))
-	if v != 123 {
-		t.Errorf("got %d, want 123", v)
-	}
-}
-
-// Post-F-18: write falls back to inferBaseType for unknown types when size
-// matches a known integer width (1/2/4/8). To keep error-path coverage on
-// unknown types, use a non-inferable size (3) so the fallback also rejects.
-// Validates: NO-SPEC.
-func TestWriteToNodeAliasWithoutDatatypes(t *testing.T) {
-	sym := &symbol{DataType: "MyCustomType", Length: 3}
-	_, err := sym.writeToNode("42", nil)
-	if err == nil {
-		t.Error("expected error for alias without datatypes (uninferable size)")
+	if !reflect.DeepEqual(got, []byte{42, 0}) {
+		t.Errorf("got % x, want 2a 00", got)
 	}
 }
 
-// Validates: NO-SPEC.
-func TestWriteToNodeUnknownType(t *testing.T) {
-	sym := &symbol{DataType: "UNKNOWN_XYZ", Length: 3}
-	_, err := sym.writeToNode("42", map[string]SymbolUploadDataType{})
-	if err == nil {
-		t.Error("expected error for unknown type (uninferable size)")
+// 4- and 8-byte writes must NOT silently infer DINT/LINT — would corrupt
+// REAL/LREAL aliases. Caller must call LoadSymbols or use a known type.
+// Validates: NO-SPEC (regression guard for REAL/LREAL ambiguity fix).
+func TestEncodeRefuses4And8ByteInferenceWithoutDatatypes(t *testing.T) {
+	for _, size := range []uint32{4, 8} {
+		sym := &symbol{Name: "x", DataType: "MyUnknownType", Length: size}
+		if _, err := sym.encode(42, nil); err == nil {
+			t.Errorf("size=%d: expected error refusing inference (REAL/LREAL ambiguity), got nil", size)
+		}
 	}
 }
 
-// --- parse error paths ---
+// ============================================================
+// Decode error paths
+// ============================================================
 
 // Validates: R-PARSE-006.
-func TestSymbolParseDataTooShort(t *testing.T) {
+func TestDecodeDataTooShort(t *testing.T) {
 	tests := []struct {
-		name     string
 		dataType string
 		length   uint32
 		data     []byte
 	}{
-		{"BOOL_empty", "BOOL", 1, []byte{}},
-		{"INT_1byte", "INT", 2, []byte{0}},
-		{"UINT_1byte", "UINT", 2, []byte{0}},
-		{"DINT_2bytes", "DINT", 4, []byte{0, 0}},
-		{"UDINT_2bytes", "UDINT", 4, []byte{0, 0}},
-		{"REAL_2bytes", "REAL", 4, []byte{0, 0}},
-		{"LREAL_4bytes", "LREAL", 8, []byte{0, 0, 0, 0}},
-		{"LINT_4bytes", "LINT", 8, []byte{0, 0, 0, 0}},
-		{"ULINT_4bytes", "ULINT", 8, []byte{0, 0, 0, 0}},
-		{"TIME_2bytes", "TIME", 4, []byte{0, 0}},
-		{"TOD_2bytes", "TOD", 4, []byte{0, 0}},
-		{"DATE_2bytes", "DATE", 4, []byte{0, 0}},
-		{"DT_2bytes", "DT", 4, []byte{0, 0}},
+		{"BOOL", 1, []byte{}},
+		{"INT", 2, []byte{0}},
+		{"UINT", 2, []byte{0}},
+		{"DINT", 4, []byte{0, 0}},
+		{"UDINT", 4, []byte{0, 0}},
+		{"REAL", 4, []byte{0, 0}},
+		{"LREAL", 8, []byte{0, 0, 0, 0}},
+		{"LINT", 8, []byte{0, 0, 0, 0}},
+		{"ULINT", 8, []byte{0, 0, 0, 0}},
+		{"TIME", 4, []byte{0, 0}},
+		{"TOD", 4, []byte{0, 0}},
+		{"DATE", 4, []byte{0, 0}},
+		{"DT", 4, []byte{0, 0}},
+		{"LTIME", 8, []byte{0, 0, 0, 0}},
+		{"LDT", 8, []byte{0, 0, 0, 0}},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length}
-			_, err := sym.parse(tt.data, 0, nil)
-			if err == nil {
+		t.Run(tt.dataType, func(t *testing.T) {
+			if _, err := (&symbol{DataType: tt.dataType, Length: tt.length}).decode(tt.data, 0, nil); err == nil {
 				t.Errorf("expected error for %s with %d bytes", tt.dataType, len(tt.data))
 			}
 		})
@@ -531,368 +208,337 @@ func TestSymbolParseDataTooShort(t *testing.T) {
 }
 
 // Validates: R-SYM-003 (partial).
-func TestSymbolParseSizeWrong(t *testing.T) {
-	// BOOL with 2 bytes should fail (size mismatch)
-	sym := &symbol{DataType: "BOOL", Length: 2}
-	_, err := sym.parse([]byte{1, 0}, 0, nil)
-	if err == nil {
+func TestDecodeSizeWrong(t *testing.T) {
+	// BOOL declared 2 bytes wide cannot decode.
+	if _, err := (&symbol{DataType: "BOOL", Length: 2}).decode([]byte{1, 0}, 0, nil); err == nil {
 		t.Error("expected error for BOOL with wrong size")
 	}
 }
 
-// Validates: NO-SPEC.
-func TestSymbolParseAliasResolution(t *testing.T) {
-	datatypes := map[string]SymbolUploadDataType{
-		"MyAlias": {DataType: "INT"},
-	}
-	sym := &symbol{DataType: "MyAlias", Length: 2}
-	data := make([]byte, 2)
-	binary.LittleEndian.PutUint16(data, uint16(42))
-	val, err := sym.parse(data, 0, datatypes)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "42" {
-		t.Errorf("got %q, want %q", val, "42")
-	}
-}
+// ============================================================
+// Round trips through encode and decode
+// ============================================================
 
-// NOTE: per-type parse tests (DINT, LINT, ULINT, LREAL, BYTE, SINT) are consolidated
-// into TestSymbolParseBasicTypes and TestSymbolParseLREAL above.
-
-// --- writeToNode error paths ---
-
-// Validates: NO-SPEC.
-func TestWriteToNodeInvalidValues(t *testing.T) {
+// Validates: R-PARSE-007 (write/read symmetry).
+func TestValueRoundTrip(t *testing.T) {
 	tests := []struct {
 		name     string
 		dataType string
 		length   uint32
-		value    string
+		value    any
 	}{
-		{"BOOL_invalid", "BOOL", 1, "notabool"},
-		{"BYTE_negative", "BYTE", 1, "-1"},
-		{"BYTE_overflow", "BYTE", 1, "256"},
-		{"INT_overflow", "INT", 2, "40000"},
-		{"UINT_negative", "UINT", 2, "-1"},
-		{"DINT_overflow", "DINT", 4, "3000000000"},
-		{"REAL_notfloat", "REAL", 4, "notafloat"},
-		{"LREAL_notfloat", "LREAL", 8, "xyz"},
-		{"LINT_notint", "LINT", 8, "abc"},
-		{"ULINT_negative", "ULINT", 8, "-1"},
-		{"TIME_bad_format", "TIME", 4, "not-a-time"},
-		{"TOD_bad_format", "TOD", 4, "not-a-tod"},
-		{"DATE_bad_format", "DATE", 4, "not-a-date"},
-		{"DT_bad_format", "DT", 4, "not-a-datetime"},
+		{"BOOL/true", "BOOL", 1, true},
+		{"BOOL/false", "BOOL", 1, false},
+		{"BYTE/0", "BYTE", 1, uint8(0)},
+		{"BYTE/255", "BYTE", 1, uint8(255)},
+		{"USINT/42", "USINT", 1, uint8(42)},
+		{"SINT/min", "SINT", 1, int8(math.MinInt8)},
+		{"SINT/max", "SINT", 1, int8(math.MaxInt8)},
+		{"UINT/max", "UINT", 2, uint16(math.MaxUint16)},
+		{"WORD/1234", "WORD", 2, uint16(1234)},
+		{"UINT16/5678", "UINT16", 2, uint16(5678)},
+		{"INT/min", "INT", 2, int16(math.MinInt16)},
+		{"INT16/-42", "INT16", 2, int16(-42)},
+		{"UDINT/max", "UDINT", 4, uint32(math.MaxUint32)},
+		{"DWORD/12345678", "DWORD", 4, uint32(12345678)},
+		{"DINT/min", "DINT", 4, int32(math.MinInt32)},
+		{"LINT/min", "LINT", 8, int64(math.MinInt64)},
+		{"LINT/max", "LINT", 8, int64(math.MaxInt64)},
+		{"ULINT/max", "ULINT", 8, uint64(math.MaxUint64)},
+		{"LWORD/42", "LWORD", 8, uint64(42)},
+		{"REAL/3.14", "REAL", 4, float32(3.14)},
+		{"LREAL/pi", "LREAL", 8, math.Pi},
+		{"LREAL/subnormal", "LREAL", 8, math.Float64frombits(1)},
+		{"REAL/+Inf", "REAL", 4, float32(math.Inf(1))},
+		{"LREAL/-Inf", "LREAL", 8, math.Inf(-1)},
+		{"STRING/Hello", "STRING", 20, "Hello"},
+		{"STRING/special", "STRING", 20, "a/b\\c\t\n"},
+		{"STRING/exact", "STRING", 6, "Hello"}, // STRING(5): 5 chars + terminator
+		{"STRING/empty", "STRING", 10, ""},
+		{"TIME/zero", "TIME", 4, time.Duration(0)},
+		{"TIME/with_ms", "TIME", 4, time.Hour + 2*time.Minute + 3*time.Second + 456*time.Millisecond},
+		{"TIME/over_24h", "TIME", 4, 25*time.Hour + time.Minute + time.Second + time.Millisecond},
+		{"LTIME/ns", "LTIME", 8, 1000*time.Hour + time.Nanosecond},
+		{"TOD/midnight", "TOD", 4, civil.Time{}},
+		{"TIME_OF_DAY/14:30", "TIME_OF_DAY", 4, civil.Time{Hour: 14, Minute: 30}},
+		{"TOD/last_ms", "TOD", 4, civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_000_000}},
+		{"LTOD/last_ns", "LTOD", 8, civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_999_999}},
+		{"DATE/leap_year", "DATE", 4, civil.Date{Year: 2024, Month: 2, Day: 29}},
+		{"DATE/epoch", "DATE", 4, civil.Date{Year: 1970, Month: 1, Day: 1}},
+		{"LDATE/pre_epoch", "LDATE", 8, civil.Date{Year: 1900, Month: 6, Day: 15}},
+		{"DT/epoch", "DT", 4, civil.DateTime{Date: civil.Date{Year: 1970, Month: 1, Day: 1}}},
+		{"DT/Y2K38", "DT", 4, civil.DateTime{Date: civil.Date{Year: 2038, Month: 1, Day: 19}, Time: civil.Time{Hour: 3, Minute: 14, Second: 7}}},
+		{"DATE_AND_TIME/full", "DATE_AND_TIME", 4, civil.DateTime{Date: civil.Date{Year: 2024, Month: 6, Day: 15}, Time: civil.Time{Hour: 23, Minute: 59, Second: 59}}},
+		{"LDT/max", "LDT", 8, civil.DateTime{Date: civil.Date{Year: 2262, Month: 4, Day: 11}, Time: civil.Time{Hour: 23, Minute: 47, Second: 16, Nanosecond: 854_775_807}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length}
-			_, err := sym.writeToNode(tt.value, nil)
-			if err == nil {
-				t.Errorf("expected error for %s with value %q", tt.dataType, tt.value)
+			testValueRoundTrip(t, tt.dataType, tt.length, tt.value)
+		})
+	}
+}
+
+// NaN compares unequal to itself, so it gets its own round trip.
+// Validates: R-PARSE-007.
+func TestValueRoundTripNaN(t *testing.T) {
+	for _, tt := range []struct {
+		dataType string
+		length   uint32
+		value    any
+	}{
+		{"REAL", 4, float32(math.NaN())},
+		{"LREAL", 8, math.NaN()},
+	} {
+		data, err := (&symbol{DataType: tt.dataType, Length: tt.length}).encode(tt.value, nil)
+		requireNoError(t, err)
+		got := decodeOK(t, &symbol{DataType: tt.dataType, Length: tt.length}, data, nil)
+		switch v := got.(type) {
+		case float32:
+			if !math.IsNaN(float64(v)) {
+				t.Errorf("REAL: got %v, want NaN", v)
+			}
+		case float64:
+			if !math.IsNaN(v) {
+				t.Errorf("LREAL: got %v, want NaN", v)
+			}
+		default:
+			t.Errorf("%s decoded to %T", tt.dataType, got)
+		}
+	}
+}
+
+// -0 keeps its sign bit through the round trip.
+func TestValueRoundTripNegativeZero(t *testing.T) {
+	data, err := (&symbol{DataType: "LREAL", Length: 8}).encode(math.Copysign(0, -1), nil)
+	requireNoError(t, err)
+	got := decodeOK(t, &symbol{DataType: "LREAL", Length: 8}, data, nil).(float64)
+	if got != 0 || !math.Signbit(got) {
+		t.Errorf("got %v (signbit %v), want -0", got, math.Signbit(got))
+	}
+}
+
+// ============================================================
+// Encode error paths
+// ============================================================
+
+// Validates: NO-SPEC.
+func TestEncodeInvalidValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataType string
+		length   uint32
+		value    any
+	}{
+		{"BOOL/string", "BOOL", 1, "notabool"},
+		{"BYTE/negative", "BYTE", 1, -1},
+		{"BYTE/overflow", "BYTE", 1, 256},
+		{"INT/overflow", "INT", 2, 40000},
+		{"UINT/negative", "UINT", 2, -1},
+		{"DINT/overflow", "DINT", 4, int64(3000000000)},
+		{"REAL/string", "REAL", 4, "notafloat"},
+		{"LREAL/float32", "LREAL", 8, float32(1)},
+		{"LINT/string", "LINT", 8, "abc"},
+		{"ULINT/negative", "ULINT", 8, -1},
+		{"TIME/string", "TIME", 4, "not-a-time"},
+		{"TOD/duration", "TOD", 4, time.Second},
+		{"DATE/time", "DATE", 4, time.Now()},
+		{"DT/date", "DT", 4, civil.Date{Year: 2000, Month: 1, Day: 1}},
+		// A zero-length STRING has no room for its terminator (F-17).
+		{"STRING/zero_length", "STRING", 0, "hello"},
+		// A WSTRING needs 2 bytes for its terminator (F-17).
+		{"WSTRING/length_0", "WSTRING", 0, "hi"},
+		{"WSTRING/length_1", "WSTRING", 1, "hi"},
+		// Too long for the declared size is refused, not truncated.
+		{"STRING/overflow", "STRING", 4, "Hello"},
+		{"WSTRING/overflow", "WSTRING", 6, "ABCDE"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := (&symbol{DataType: tt.dataType, Length: tt.length}).encode(tt.value, nil); err == nil {
+				t.Errorf("expected error for %s with %#v", tt.dataType, tt.value)
 			}
 		})
 	}
 }
 
-// Validates: NO-SPEC.
-func TestWriteToNodeStructInvalidJSON(t *testing.T) {
-	parent := &symbol{
-		Name: "s", FullName: "s", DataType: "ST_S", Length: 2,
-		Children: map[string]*symbol{
-			"x": {Name: "x", FullName: "s.x", DataType: "BYTE", Length: 1, Offset: 0},
-		},
-	}
-	_, err := parent.writeToNode("not json", nil)
-	if err == nil {
-		t.Error("expected error for invalid JSON in struct write")
-	}
-}
-
-// ==========================================================================
-// STRING edge cases
-// ==========================================================================
+// ============================================================
+// STRING and WSTRING
+// ============================================================
 
 // Validates: R-PARSE-005.
-func TestSymbolParseSTRING_NoNullTerminator(t *testing.T) {
-	// STRING buffer full with no null byte — should return entire buffer
-	sym := &symbol{DataType: "STRING", Length: 5}
-	data := []byte("Hello") // no null
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestDecodeSTRING(t *testing.T) {
+	tests := []struct {
+		name   string
+		length uint32
+		data   []byte
+		want   string
+	}{
+		// Buffer full with no terminator: the whole buffer.
+		{"no_terminator", 5, []byte("Hello"), "Hello"},
+		{"empty", 10, make([]byte, 10), ""},
+		// Text after the terminator is not part of the value.
+		{"trailing_garbage", 10, []byte("Hi\x00GARBAGE"), "Hi"},
+		{"padded", 20, append([]byte("Hello\x00"), make([]byte, 14)...), "Hello"},
 	}
-	if val != "Hello" {
-		t.Errorf("got %q, want %q", val, "Hello")
-	}
-}
-
-// Validates: R-PARSE-005.
-func TestSymbolParseSTRING_Empty(t *testing.T) {
-	// Null byte at start — empty string
-	sym := &symbol{DataType: "STRING", Length: 10}
-	data := make([]byte, 10) // all zeros
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "" {
-		t.Errorf("got %q, want empty string", val)
-	}
-}
-
-// Validates: R-PARSE-005.
-func TestSymbolParseSTRING_TrailingGarbage(t *testing.T) {
-	// Null byte in middle, garbage after — should stop at null
-	sym := &symbol{DataType: "STRING", Length: 10}
-	data := []byte("Hi\x00GARBAGE")
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "Hi" {
-		t.Errorf("got %q, want %q", val, "Hi")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := decodeOK(t, &symbol{DataType: "STRING", Length: tt.length}, tt.data, nil); got != tt.want {
+				t.Errorf("got %#v, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
 // Validates: R-PARSE-003.
-func TestWriteToNodeSTRING_PadsWithZeros(t *testing.T) {
-	sym := &symbol{DataType: "STRING", Length: 10}
-	data, err := sym.writeToNode("Hi", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(data) != 10 {
-		t.Fatalf("expected 10 bytes, got %d", len(data))
-	}
-	if data[0] != 'H' || data[1] != 'i' {
-		t.Errorf("first 2 bytes: got %v, want Hi", data[:2])
-	}
-	// Remaining bytes should be zero (null-padded)
-	for i := 2; i < 10; i++ {
-		if data[i] != 0 {
-			t.Errorf("byte[%d] = %d, want 0", i, data[i])
-		}
+func TestEncodeSTRING_PadsWithZeros(t *testing.T) {
+	data, err := (&symbol{DataType: "STRING", Length: 10}).encode("Hi", nil)
+	requireNoError(t, err)
+	if want := append([]byte("Hi"), make([]byte, 8)...); !reflect.DeepEqual(data, want) {
+		t.Errorf("got % x, want % x", data, want)
 	}
 }
 
-// Validates: R-PARSE-003.
-func TestWriteToNodeSTRING_ExactLength(t *testing.T) {
-	// STRING(5) → Length=6 (5 chars + null). Writing exactly 5 chars should fit.
-	sym := &symbol{DataType: "STRING", Length: 6}
-	data, err := sym.writeToNode("Hello", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// Validates: R-PARSE-007 (WSTRING).
+func TestDecodeWSTRING(t *testing.T) {
+	pad := func(b []byte, n int) []byte { return append(b, make([]byte, n-len(b))...) }
+	garbage := pad(encodeUTF16LE("Hi"), 20)
+	garbage[6], garbage[7] = 0xFF, 0xFF // after the terminator at bytes 4-5
+	tests := []struct {
+		name   string
+		length uint32
+		data   []byte
+		want   string
+	}{
+		{"ascii", 20, pad(encodeUTF16LE("Hello"), 20), "Hello"},
+		{"unicode", 20, pad(encodeUTF16LE("日本語"), 20), "日本語"},
+		{"after_terminator", 20, garbage, "Hi"},
+		{"no_terminator", 10, encodeUTF16LE("ABCDE"), "ABCDE"},
+		{"empty", 10, make([]byte, 10), ""},
+		{"surrogate_pair", 10, pad(encodeUTF16LE("😀"), 10), "😀"},
 	}
-	if string(data[:5]) != "Hello" {
-		t.Errorf("got %q, want %q", string(data[:5]), "Hello")
-	}
-	if data[5] != 0 {
-		t.Errorf("last byte should be null terminator, got %d", data[5])
-	}
-}
-
-// Validates: R-PARSE-003.
-func TestWriteToNodeSTRING_Overflow(t *testing.T) {
-	// STRING(3) → Length=4 (3 chars + null). "Hello" truncated to 3 chars + null.
-	sym := &symbol{DataType: "STRING", Length: 4}
-	data, err := sym.writeToNode("Hello", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(data) != 4 {
-		t.Fatalf("expected 4 bytes, got %d", len(data))
-	}
-	if string(data[:3]) != "Hel" {
-		t.Errorf("got %q, want %q", string(data[:3]), "Hel")
-	}
-	if data[3] != 0 {
-		t.Errorf("last byte should be null terminator, got %d", data[3])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := decodeOK(t, &symbol{DataType: "WSTRING", Length: tt.length}, tt.data, nil); got != tt.want {
+				t.Errorf("got %#v, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-// Validates: R-PARSE-005.
-func TestSymbolParseSTRING_SpecialChars(t *testing.T) {
-	sym := &symbol{DataType: "STRING", Length: 20}
-	data := make([]byte, 20)
-	copy(data, "a/b\\c\t\n\x00")
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// Validates: R-PARSE-004.
+func TestEncodeWSTRING(t *testing.T) {
+	for _, text := range []string{"Hello", "日本語", "😀", "a", ""} {
+		t.Run(text, func(t *testing.T) {
+			data, err := (&symbol{DataType: "WSTRING", Length: 40}).encode(text, nil)
+			requireNoError(t, err)
+			want := append(encodeUTF16LE(text), make([]byte, 40-2*len(utf16.Encode([]rune(text))))...)
+			if !reflect.DeepEqual(data, want) {
+				t.Errorf("got % x, want % x", data, want)
+			}
+			testValueRoundTrip(t, "WSTRING", 40, text)
+		})
 	}
-	if val != "a/b\\c\t\n" {
-		t.Errorf("got %q, want %q", val, "a/b\\c\t\n")
+}
+
+// A WSTRING whose surrogate pair would be split by the declared size is
+// refused as too long; no unpaired surrogate can reach the PLC.
+// Validates: R-PARSE-004.
+func TestEncodeWSTRINGSurrogatePairDoesNotFit(t *testing.T) {
+	value := "A\U0001D400" // 'A' plus a surrogate pair: 3 UTF-16 units
+	if n := len(utf16.Encode([]rune(value))); n != 3 {
+		t.Fatalf("expected 3 UTF-16 code units, got %d", n)
 	}
+	// Length 6 holds 2 units and the terminator: the pair would be split.
+	if _, err := (&symbol{DataType: "WSTRING", Length: 6}).encode(value, nil); err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	testValueRoundTrip(t, "WSTRING", 8, value)
 }
 
 // ============================================================
-// REAL/LREAL special values (NaN, Inf, -Inf, -0, subnormal)
+// Bit symbols
 // ============================================================
+
+// Bit symbols in TwinCAT have DataType="BOOL" — the BitValue flag affects
+// addressing (offset encodes bit position) but NOT decoding. Handle-based
+// reads return data matching the declared DataType, and the flag must not
+// interfere with other types (TC2 sets it on UDINT, LREAL, etc.).
 
 // Validates: R-PARSE-007.
-func TestSymbolParseFloatSpecial(t *testing.T) {
+func TestBitValueFlagDoesNotAffectDecoding(t *testing.T) {
 	tests := []struct {
-		name     string
 		dataType string
 		length   uint32
 		data     []byte
-		want     string // exact match; empty means custom check
-		check    func(t *testing.T, val string)
+		want     any
 	}{
-		{"REAL/NaN", "REAL", 4, leF32(float32(math.NaN())), "NaN", nil},
-		{"REAL/+Inf", "REAL", 4, leF32(float32(math.Inf(1))), "+Inf", nil},
-		{"REAL/-Inf", "REAL", 4, leF32(float32(math.Inf(-1))), "-Inf", nil},
-		{"REAL/-0", "REAL", 4, leF32(float32(math.Copysign(0, -1))), "", func(t *testing.T, val string) {
-			if val != "0" && val != "-0" {
-				t.Errorf("got %q, want %q or %q", val, "0", "-0")
-			}
-		}},
-		{"LREAL/NaN", "LREAL", 8, leF64(math.NaN()), "NaN", nil},
-		{"LREAL/+Inf", "LREAL", 8, leF64(math.Inf(1)), "+Inf", nil},
-		{"LREAL/-Inf", "LREAL", 8, leF64(math.Inf(-1)), "-Inf", nil},
-		{"LREAL/subnormal", "LREAL", 8, leu64(1), "", func(t *testing.T, val string) {
-			f, err := strconv.ParseFloat(val, 64)
-			requireNoError(t, err)
-			if f != math.Float64frombits(1) {
-				t.Errorf("got %v, want %v", f, math.Float64frombits(1))
-			}
-		}},
+		{"BOOL", 1, []byte{0x01}, true},
+		{"BOOL", 1, []byte{0x00}, false},
+		{"UDINT", 4, leu32(12345), uint32(12345)},
+		{"LREAL", 8, leF64(3.14), 3.14},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length}
-			val, err := sym.parse(tt.data, 0, nil)
-			requireNoError(t, err)
-			if tt.check != nil {
-				tt.check(t, val)
-			} else {
-				assertEqual(t, val, tt.want)
+		t.Run(fmt.Sprintf("%s/%v", tt.dataType, tt.want), func(t *testing.T) {
+			sym := &symbol{DataType: tt.dataType, Length: tt.length, Flags: SymbolFlagBitValue}
+			if got := decodeOK(t, sym, tt.data, nil); got != tt.want {
+				t.Errorf("got %#v, want %#v", got, tt.want)
 			}
 		})
 	}
 }
 
 // Validates: R-PARSE-007.
-func TestWriteToNodeFloatSpecial(t *testing.T) {
-	t.Run("REAL/NaN", func(t *testing.T) {
-		sym := &symbol{DataType: "REAL", Length: 4}
-		data, err := sym.writeToNode("NaN", nil)
-		requireNoError(t, err)
-		f := math.Float32frombits(binary.LittleEndian.Uint32(data))
-		if !math.IsNaN(float64(f)) {
-			t.Errorf("expected NaN, got %v", f)
+func TestEncodeBitSymbol(t *testing.T) {
+	for v, want := range map[bool]byte{true: 0x01, false: 0x00} {
+		data, err := (&symbol{DataType: "BOOL", Length: 1, Flags: SymbolFlagBitValue}).encode(v, nil)
+		if err != nil || len(data) != 1 || data[0] != want {
+			t.Errorf("%v: got % x, %v; want %02x", v, data, err, want)
 		}
-	})
+	}
+}
 
-	t.Run("REAL/+Inf", func(t *testing.T) {
-		sym := &symbol{DataType: "REAL", Length: 4}
-		data, err := sym.writeToNode("+Inf", nil)
-		requireNoError(t, err)
-		f := math.Float32frombits(binary.LittleEndian.Uint32(data))
-		if !math.IsInf(float64(f), 1) {
-			t.Errorf("expected +Inf, got %v", f)
+// Validates: NO-SPEC.
+func TestReadBit_AllPositions(t *testing.T) {
+	// 0xA5 = 10100101
+	data := []byte{0xA5}
+	expected := []bool{true, false, true, false, false, true, false, true}
+	for i, want := range expected {
+		if got := ReadBit(data, i); got != want {
+			t.Errorf("bit %d: got %v, want %v", i, got, want)
 		}
-	})
+	}
+	if ReadBit(data, 8) || ReadBit(data, -1) {
+		t.Error("out-of-range bits must read false")
+	}
+}
 
-	t.Run("LREAL/NaN", func(t *testing.T) {
-		sym := &symbol{DataType: "LREAL", Length: 8}
-		data, err := sym.writeToNode("NaN", nil)
-		requireNoError(t, err)
-		f := math.Float64frombits(binary.LittleEndian.Uint64(data))
-		if !math.IsNaN(f) {
-			t.Errorf("expected NaN, got %v", f)
-		}
-	})
+// Validates: NO-SPEC.
+func TestWriteBit(t *testing.T) {
+	data := []byte{0x00}
+	WriteBit(data, 3, true)
+	if data[0] != 0x08 {
+		t.Errorf("set: got 0x%02X, want 0x08", data[0])
+	}
+	data = []byte{0xFF}
+	WriteBit(data, 3, false)
+	if data[0] != 0xF7 {
+		t.Errorf("clear: got 0x%02X, want 0xF7", data[0])
+	}
+	// Setting a set bit and clearing a clear one change nothing.
+	data = []byte{0xA5}
+	WriteBit(data, 2, true)
+	WriteBit(data, 1, false)
+	if data[0] != 0xA5 {
+		t.Errorf("got 0x%02X, want 0xA5 (unchanged)", data[0])
+	}
 }
 
 // ============================================================
-// DATE/TIME boundary values and aliases
+// Structs
 // ============================================================
-
-// Validates: R-PARSE-007.
-func TestSymbolParseTemporalTypes(t *testing.T) {
-	tests := []struct {
-		name     string
-		dataType string
-		length   uint32
-		data     []byte
-		want     string
-	}{
-		// TIME
-		{"TIME/midnight", "TIME", 4, leu32(0), "00:00:00"},
-		{"TIME/max_ms", "TIME", 4, leu32(23*3600000 + 59*60000 + 59*1000 + 999), "23:59:59.999"},
-		{"TIME/1h_exact", "TIME", 4, leu32(3600000), "01:00:00"},
-		// TOD
-		{"TOD/midnight", "TOD", 4, leu32(0), "00:00:00"},
-		{"TOD/end_of_day", "TOD", 4, leu32(23*3600000 + 59*60000 + 59*1000 + 999), "23:59:59.999"},
-		{"TIME/over_24h", "TIME", 4, leu32(90061001), "25:01:01.001"},
-		// DATE
-		{"DATE/epoch", "DATE", 4, leu32(0), "1970-01-01"},
-		{"DATE/leap_year", "DATE", 4, leu32(1709164800), "2024-02-29"},
-		{"DATE/max_uint32", "DATE", 4, leu32(math.MaxUint32), "2106-02-07"},
-		// DT
-		{"DT/Y2K38", "DT", 4, leu32(2147483647), "2038-01-19 03:14:07"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length}
-			got, err := sym.parse(tt.data, 0, nil)
-			requireNoError(t, err)
-			assertEqual(t, got, tt.want)
-		})
-	}
-}
-
-// Validates: R-PARSE-007.
-func TestWriteToNodeTemporalRoundTrip(t *testing.T) {
-	tests := []struct {
-		name     string
-		dataType string
-		length   uint32
-		value    string
-	}{
-		{"DT/epoch", "DT", 4, "1970-01-01 00:00:00"},
-		{"DATE/leap_year", "DATE", 4, "2024-02-29"},
-		{"TIME/with_ms", "TIME", 4, "01:02:03.456"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testWriteRoundTrip(t, tt.dataType, tt.length, tt.value)
-		})
-	}
-}
-
-// Validates: R-PARSE-007.
-func TestWriteToNodeTemporalAliases(t *testing.T) {
-	tests := []struct {
-		name     string
-		dataType string
-		length   uint32
-		value    string
-	}{
-		{"TIME_OF_DAY/14:30:00", "TIME_OF_DAY", 4, "14:30:00"},
-		{"DATE_AND_TIME/full", "DATE_AND_TIME", 4, "2024-06-15 23:59:59"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length}
-			data, err := sym.writeToNode(tt.value, nil)
-			requireNoError(t, err)
-			sym2 := &symbol{DataType: tt.dataType, Length: tt.length}
-			val, err := sym2.parse(data, 0, nil)
-			requireNoError(t, err)
-			assertEqual(t, val, tt.value)
-		})
-	}
-}
-
-// ==========================================================================
-// Deeply nested struct parsing
-// ==========================================================================
 
 // Validates: R-PARSE-001.
-func TestParseNestedStructThreeLevels(t *testing.T) {
+func TestDecodeNestedStructThreeLevels(t *testing.T) {
 	// ST_Inner { value: INT }
 	// ST_Middle { inner: ST_Inner, count: BYTE }
 	// ST_Outer { middle: ST_Middle, flag: BOOL }
@@ -923,550 +569,82 @@ func TestParseNestedStructThreeLevels(t *testing.T) {
 	data := make([]byte, 5)
 	binary.LittleEndian.PutUint16(data[0:2], 1234)
 	data[2] = 42
-	data[3] = 0 // padding
 	data[4] = 1
 
-	_, err := outer.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("parse error: %v", err)
+	got := decodeOK(t, outer, data, nil)
+	want := map[string]any{
+		"middle": map[string]any{
+			"inner": map[string]any{"value": int16(1234)},
+			"count": uint8(42),
+		},
+		"flag": true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+	// Each member also holds its own value in the cache.
+	if innerChild.Value != int16(1234) || countChild.Value != uint8(42) || flagChild.Value != true {
+		t.Errorf("members cached %#v, %#v, %#v", innerChild.Value, countChild.Value, flagChild.Value)
 	}
 
-	if innerChild.Value != "1234" {
-		t.Errorf("inner.value = %q, want %q", innerChild.Value, "1234")
-	}
-	if countChild.Value != "42" {
-		t.Errorf("count = %q, want %q", countChild.Value, "42")
-	}
-	if flagChild.Value != "true" {
-		t.Errorf("flag = %q, want %q", flagChild.Value, "true")
+	// And the nested value encodes back to the same bytes.
+	back, err := outer.encode(want, nil)
+	requireNoError(t, err)
+	if !reflect.DeepEqual(back, data) {
+		t.Errorf("encode: got % x, want % x", back, data)
 	}
 }
 
-// ==========================================================================
-// Struct write with nested children
-// ==========================================================================
-
+// Padding between members is written as zeros.
 // Validates: R-PARSE-001.
-func TestWriteToNodeNestedStruct(t *testing.T) {
-	innerChild := &symbol{Name: "val", FullName: "s.inner.val", DataType: "INT", Length: 2, Offset: 0}
-	inner := &symbol{
-		Name: "inner", FullName: "s.inner", DataType: "ST_Inner", Length: 2, Offset: 0,
-		Children: map[string]*symbol{"val": innerChild},
-	}
-	outerField := &symbol{Name: "flag", FullName: "s.flag", DataType: "BOOL", Length: 1, Offset: 2}
+func TestEncodeStructWithPadding(t *testing.T) {
 	parent := &symbol{
-		Name: "s", FullName: "s", DataType: "ST_S", Length: 4,
-		Children: map[string]*symbol{"inner": inner, "flag": outerField},
+		Name: "test", FullName: "test", DataType: "ST_Test", Length: 8,
+		Children: map[string]*symbol{
+			"field1": {Name: "field1", FullName: "test.field1", DataType: "INT", Length: 2, Offset: 0},
+			"field2": {Name: "field2", FullName: "test.field2", DataType: "DINT", Length: 4, Offset: 4},
+		},
 	}
-
-	data, err := parent.writeToNode(`{"inner":{"val":"99"},"flag":"true"}`, nil)
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if len(data) != 4 {
-		t.Fatalf("expected 4 bytes, got %d", len(data))
-	}
-	v := int16(binary.LittleEndian.Uint16(data[0:2]))
-	if v != 99 {
-		t.Errorf("inner.val = %d, want 99", v)
-	}
-	if data[2] != 1 {
-		t.Errorf("flag = %d, want 1", data[2])
+	data, err := parent.encode(map[string]any{"field1": int16(42), "field2": int32(100)}, nil)
+	requireNoError(t, err)
+	if want := []byte{42, 0, 0, 0, 100, 0, 0, 0}; !reflect.DeepEqual(data, want) {
+		t.Errorf("got % x, want % x", data, want)
 	}
 }
 
-// ==========================================================================
-// WSTRING (UTF-16LE) parse/write tests
-// ==========================================================================
-
-// Validates: R-PARSE-007 (WSTRING).
-func TestParseWSTRING_ASCII(t *testing.T) {
-	text := "Hello"
-	raw := encodeUTF16LE(text)
-	// Add null terminator
-	raw = append(raw, 0, 0)
-	// Pad to 20 bytes
-	padded := make([]byte, 20)
-	copy(padded, raw)
-	sym := &symbol{DataType: "WSTRING", Length: 20}
-	val, err := sym.parse(padded, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// A struct write must name every member: the string path used to zero the
+// ones a JSON object left out, silently changing PLC state.
+// Validates: R-PARSE-001.
+func TestEncodeStructRequiresEveryMember(t *testing.T) {
+	parent := &symbol{
+		Name: "s", FullName: "s", DataType: "ST_S", Length: 2,
+		Children: map[string]*symbol{
+			"x": {Name: "x", FullName: "s.x", DataType: "BYTE", Length: 1, Offset: 0},
+			"y": {Name: "y", FullName: "s.y", DataType: "BYTE", Length: 1, Offset: 1},
+		},
 	}
-	if val != text {
-		t.Errorf("got %q, want %q", val, text)
-	}
-}
-
-// Validates: R-PARSE-007 (WSTRING).
-func TestParseWSTRING_Unicode(t *testing.T) {
-	text := "日本語"
-	raw := encodeUTF16LE(text)
-	raw = append(raw, 0, 0)
-	padded := make([]byte, 20)
-	copy(padded, raw)
-	sym := &symbol{DataType: "WSTRING", Length: 20}
-	val, err := sym.parse(padded, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != text {
-		t.Errorf("got %q, want %q", val, text)
-	}
-}
-
-// Validates: R-PARSE-007 (WSTRING).
-func TestParseWSTRING_NullTerminated(t *testing.T) {
-	// "Hi" followed by null terminator then garbage
-	raw := encodeUTF16LE("Hi")
-	data := make([]byte, 20)
-	copy(data, raw)
-	// Null terminator at byte 4-5
-	data[4] = 0
-	data[5] = 0
-	// Garbage after
-	data[6] = 0xFF
-	data[7] = 0xFF
-	sym := &symbol{DataType: "WSTRING", Length: 20}
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "Hi" {
-		t.Errorf("got %q, want %q", val, "Hi")
-	}
-}
-
-// Validates: R-PARSE-007 (WSTRING).
-func TestParseWSTRING_NoNullTerminator(t *testing.T) {
-	// Fill entire buffer with UTF-16 chars, no null
-	text := "ABCDE"
-	raw := encodeUTF16LE(text)
-	sym := &symbol{DataType: "WSTRING", Length: uint32(len(raw))}
-	val, err := sym.parse(raw, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != text {
-		t.Errorf("got %q, want %q", val, text)
-	}
-}
-
-// Validates: R-PARSE-007 (WSTRING).
-func TestParseWSTRING_Empty(t *testing.T) {
-	// Just null terminator
-	data := make([]byte, 10)
-	sym := &symbol{DataType: "WSTRING", Length: 10}
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "" {
-		t.Errorf("got %q, want empty string", val)
-	}
-}
-
-// Validates: R-PARSE-007 (WSTRING).
-func TestParseWSTRING_SurrogatePair(t *testing.T) {
-	// U+1F600 (😀) requires surrogate pair in UTF-16
-	text := "😀"
-	raw := encodeUTF16LE(text)
-	if len(raw) != 4 {
-		t.Fatalf("expected 4 bytes for surrogate pair, got %d", len(raw))
-	}
-	raw = append(raw, 0, 0) // null terminator
-	padded := make([]byte, 10)
-	copy(padded, raw)
-	sym := &symbol{DataType: "WSTRING", Length: 10}
-	val, err := sym.parse(padded, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != text {
-		t.Errorf("got %q, want %q", val, text)
-	}
-}
-
-// Validates: R-PARSE-004 / R-PARSE-007.
-func TestWriteWSTRING_ASCII(t *testing.T) {
-	sym := &symbol{DataType: "WSTRING", Length: 20}
-	data, err := sym.writeToNode("Hello", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(data) != 20 {
-		t.Fatalf("expected 20 bytes, got %d", len(data))
-	}
-	// Verify UTF-16LE encoding
-	expected := encodeUTF16LE("Hello")
-	for i, b := range expected {
-		if data[i] != b {
-			t.Errorf("byte[%d] = 0x%02X, want 0x%02X", i, data[i], b)
-		}
-	}
-	// Verify null terminator (bytes after "Hello" should be 0)
-	for i := len(expected); i < 20; i++ {
-		if data[i] != 0 {
-			t.Errorf("byte[%d] = 0x%02X, want 0x00 (padding)", i, data[i])
+	for name, v := range map[string]any{
+		"missing member": map[string]any{"x": uint8(7)},
+		"not a map":      "not json",
+		"member type":    map[string]any{"x": uint8(7), "y": "7"},
+	} {
+		if _, err := parent.encode(v, nil); err == nil {
+			t.Errorf("%s: expected an error", name)
 		}
 	}
 }
 
-// Validates: R-PARSE-004.
-func TestWriteWSTRING_Unicode(t *testing.T) {
-	sym := &symbol{DataType: "WSTRING", Length: 20}
-	text := "日本語"
-	data, err := sym.writeToNode(text, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	expected := encodeUTF16LE(text)
-	for i, b := range expected {
-		if data[i] != b {
-			t.Errorf("byte[%d] = 0x%02X, want 0x%02X", i, data[i], b)
-		}
-	}
-}
-
-// Validates: R-PARSE-004.
-func TestWriteWSTRING_Truncation(t *testing.T) {
-	// Length 6 = room for 2 chars + null terminator (each 2 bytes)
-	sym := &symbol{DataType: "WSTRING", Length: 6}
-	data, err := sym.writeToNode("ABCDE", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(data) != 6 {
-		t.Fatalf("expected 6 bytes, got %d", len(data))
-	}
-	// Should only contain "AB" (2 chars * 2 bytes = 4) + 2 bytes null
-	expected := encodeUTF16LE("AB")
-	for i, b := range expected {
-		if data[i] != b {
-			t.Errorf("byte[%d] = 0x%02X, want 0x%02X", i, data[i], b)
-		}
-	}
-	// Last 2 bytes should be null terminator
-	if data[4] != 0 || data[5] != 0 {
-		t.Errorf("expected null terminator at bytes 4-5, got 0x%02X 0x%02X", data[4], data[5])
-	}
-}
-
-// Validates: R-PARSE-004.
-func TestWriteWSTRING_RoundTrip(t *testing.T) {
-	texts := []string{"Hello", "日本語", "😀", "a", ""}
-	for _, text := range texts {
-		t.Run(text, func(t *testing.T) {
-			sym := &symbol{DataType: "WSTRING", Length: 40}
-			data, err := sym.writeToNode(text, nil)
-			if err != nil {
-				t.Fatalf("write error: %v", err)
-			}
-			val, err := sym.parse(data, 0, nil)
-			if err != nil {
-				t.Fatalf("parse error: %v", err)
-			}
-			if val != text {
-				t.Errorf("round-trip: got %q, want %q", val, text)
-			}
-		})
-	}
-}
-
-// ==========================================================================
-// Bit-level operations tests
-// ==========================================================================
-
-// Bit symbols in TwinCAT have DataType="BOOL" — the BitValue flag affects
-// addressing (offset encodes bit position) but NOT parsing. Handle-based
-// reads return data matching the declared DataType. Tests verify that
-// BitValue flag does NOT interfere with normal type parsing.
-
-// Validates: R-PARSE-007.
-func TestParseBitSymbol_True(t *testing.T) {
-	// Real bit symbol: DataType=BOOL, BitValue flag set
-	sym := &symbol{DataType: "BOOL", Length: 1, Flags: SymbolFlagBitValue}
-	data := []byte{0x01}
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "true" {
-		t.Errorf("got %q, want %q", val, "true")
-	}
-}
-
-// Validates: R-PARSE-007.
-func TestParseBitSymbol_False(t *testing.T) {
-	sym := &symbol{DataType: "BOOL", Length: 1, Flags: SymbolFlagBitValue}
-	data := []byte{0x00}
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "false" {
-		t.Errorf("got %q, want %q", val, "false")
-	}
-}
-
-// Validates: R-PARSE-007.
-func TestWriteBitSymbol_True(t *testing.T) {
-	sym := &symbol{DataType: "BOOL", Length: 1, Flags: SymbolFlagBitValue}
-	data, err := sym.writeToNode("true", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(data) != 1 || data[0] != 0x01 {
-		t.Errorf("got %v, want [0x01]", data)
-	}
-}
-
-// Validates: R-PARSE-007.
-func TestWriteBitSymbol_False(t *testing.T) {
-	sym := &symbol{DataType: "BOOL", Length: 1, Flags: SymbolFlagBitValue}
-	data, err := sym.writeToNode("false", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(data) != 1 || data[0] != 0x00 {
-		t.Errorf("got %v, want [0x00]", data)
-	}
-}
-
-// BitValue flag must NOT override parsing of non-BOOL types.
-// TC2 can set flag 0x0002 on UDINT, LREAL, etc.
-// Validates: R-PARSE-007.
-func TestBitValueFlag_DoesNotOverrideUDINT(t *testing.T) {
-	sym := &symbol{DataType: "UDINT", Length: 4, Flags: SymbolFlagBitValue}
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, 12345)
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "12345" {
-		t.Errorf("got %q, want %q", val, "12345")
-	}
-}
-
-// Validates: R-PARSE-007.
-func TestBitValueFlag_DoesNotOverrideLREAL(t *testing.T) {
-	sym := &symbol{DataType: "LREAL", Length: 8, Flags: SymbolFlagBitValue}
-	data := make([]byte, 8)
-	binary.LittleEndian.PutUint64(data, math.Float64bits(3.14))
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if val != "3.14" {
-		t.Errorf("got %q, want %q", val, "3.14")
-	}
-}
-
-// Validates: NO-SPEC.
-func TestReadBit_Extract(t *testing.T) {
-	// 0xA5 = 10100101
-	data := []byte{0xA5}
-	if !ReadBit(data, 0) {
-		t.Error("bit 0 should be 1")
-	}
-	if ReadBit(data, 1) {
-		t.Error("bit 1 should be 0")
-	}
-	if !ReadBit(data, 2) {
-		t.Error("bit 2 should be 1")
-	}
-}
-
-// Validates: NO-SPEC.
-func TestReadBit_AllPositions(t *testing.T) {
-	// 0xA5 = 10100101
-	data := []byte{0xA5}
-	expected := []bool{true, false, true, false, false, true, false, true}
-	for i, want := range expected {
-		t.Run(fmt.Sprintf("bit%d", i), func(t *testing.T) {
-			got := ReadBit(data, i)
-			if got != want {
-				t.Errorf("bit %d: got %v, want %v", i, got, want)
-			}
-		})
-	}
-}
-
-// Validates: NO-SPEC.
-func TestWriteBit_Set(t *testing.T) {
-	data := []byte{0x00}
-	WriteBit(data, 3, true)
-	if data[0] != 0x08 {
-		t.Errorf("got 0x%02X, want 0x08", data[0])
-	}
-}
-
-// Validates: NO-SPEC.
-func TestWriteBit_Clear(t *testing.T) {
-	data := []byte{0xFF}
-	WriteBit(data, 3, false)
-	if data[0] != 0xF7 {
-		t.Errorf("got 0x%02X, want 0xF7", data[0])
-	}
-}
-
-// Validates: NO-SPEC.
-func TestWriteBit_PreservesOthers(t *testing.T) {
-	// 0xA5 = 10100101, set bit 2 (already set) → no change
-	data := []byte{0xA5}
-	WriteBit(data, 2, true)
-	if data[0] != 0xA5 {
-		t.Errorf("got 0x%02X, want 0xA5 (unchanged)", data[0])
-	}
-	// Clear bit 1 (already clear) → no change
-	WriteBit(data, 1, false)
-	if data[0] != 0xA5 {
-		t.Errorf("got 0x%02X, want 0xA5 (unchanged)", data[0])
-	}
-}
-
-// --- ADST_ BaseType parse paths ---
-
-// Validates: R-SYM-004.
-func TestParseWithBaseType_REAL(t *testing.T) {
-	// symbol with unknown DataType but BaseType=ADST_REAL32 should parse as float
-	sym := &symbol{
-		Name:     "MyAlias",
-		FullName: "GVL.MyAlias",
-		DataType: "MyRealAlias", // not in parseableTypes
-		Length:   4,
-		BaseType: ADSTReal32,
-	}
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, math.Float32bits(3.14))
-
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	f, _ := strconv.ParseFloat(val, 64)
-	if math.Abs(f-3.14) > 0.01 {
-		t.Errorf("expected ~3.14, got %s", val)
-	}
-}
-
-// Validates: R-SYM-004.
-func TestParseWithBaseType_UDINT(t *testing.T) {
-	// symbol with BaseType=ADST_UINT32 should parse as unsigned, not signed
-	sym := &symbol{
-		Name:     "MyEnum",
-		FullName: "GVL.MyEnum",
-		DataType: "E_MyEnum",
-		Length:   4,
-		BaseType: ADSTUint32,
-	}
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, 3000000000) // > INT32_MAX
-
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if val != "3000000000" {
-		t.Errorf("expected 3000000000, got %s", val)
-	}
-}
-
-// Validates: R-SYM-004.
-func TestParseWithBaseType_FallbackToInfer(t *testing.T) {
-	// BaseType=0 (ADST_VOID) → falls through to inferBaseType
-	sym := &symbol{
-		Name:     "UnknownAlias",
-		FullName: "GVL.UnknownAlias",
-		DataType: "SomeAlias",
-		Length:   2,
-		BaseType: ADSTVoid, // no ADST_ info
-	}
-	data := []byte{0x39, 0x05} // 1337 as INT16
-
-	val, err := sym.parse(data, 0, nil)
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if val != "1337" {
-		t.Errorf("expected 1337, got %s", val)
-	}
-}
-
-// TestWSTRINGSurrogatePairTruncation verifies that truncation of a WSTRING
-// write that lands on a UTF-16 high surrogate drops the unpaired surrogate
-// instead of writing a malformed sequence to the PLC.
-// Validates: R-PARSE-004.
-func TestWSTRINGSurrogatePairTruncation(t *testing.T) {
-	// String with one BMP char followed by a non-BMP char (encodes as 2
-	// UTF-16 code units forming a surrogate pair).
-	// "A" = 1 code unit, "𝐀" (MATHEMATICAL BOLD CAPITAL A, U+1D400) = 2
-	// code units (surrogate pair).
-	value := "A\U0001D400"
-	encoded := utf16.Encode([]rune(value))
-	if len(encoded) != 3 {
-		t.Fatalf("expected 3 UTF-16 code units, got %d", len(encoded))
-	}
-	if encoded[0] != 0x0041 {
-		t.Errorf("expected 'A' = 0x0041, got 0x%04X", encoded[0])
-	}
-	if encoded[1] < 0xD800 || encoded[1] > 0xDBFF {
-		t.Errorf("expected high surrogate in 0xD800-0xDBFF, got 0x%04X", encoded[1])
-	}
-	if encoded[2] < 0xDC00 || encoded[2] > 0xDFFF {
-		t.Errorf("expected low surrogate in 0xDC00-0xDFFF, got 0x%04X", encoded[2])
-	}
-
-	// symbol with Length such that maxChars = (Length-2)/2 lands the
-	// truncation between the high+low surrogates. Length=6 => maxChars=2,
-	// truncate keeps encoded[0:2] = ['A', high-surrogate]. The surrogate
-	// fix should drop the high surrogate to avoid emitting an unpaired
-	// surrogate to the PLC.
-	sym := &symbol{
-		Name:     "ws",
-		FullName: "ws",
-		DataType: "WSTRING",
-		Length:   6, // 2 chars + 2-byte null = 4+2
-	}
-	data, err := sym.writeToNode(value, nil)
-	if err != nil {
-		t.Fatalf("writeToNode error: %v", err)
-	}
-	if len(data) != 6 {
-		t.Fatalf("expected 6 bytes (3 code units), got %d", len(data))
-	}
-	// First 2 bytes: 'A' little-endian = 0x41 0x00
-	if data[0] != 0x41 || data[1] != 0x00 {
-		t.Errorf("expected 'A' at bytes 0-1, got 0x%02X 0x%02X", data[0], data[1])
-	}
-	// Bytes 2-3 should be ZEROS (the would-be high surrogate dropped),
-	// followed by 2-byte null terminator at bytes 4-5.
-	if data[2] != 0x00 || data[3] != 0x00 {
-		t.Errorf("expected high surrogate dropped (zero bytes 2-3 - either truncated or null), got 0x%02X 0x%02X", data[2], data[3])
-	}
-}
-
-// F-xx: child.Offset + child.Length overflows uint32 — must error, not panic.
+// F-xx: a member whose Offset + Length passes the end must error, not panic --
+// including when the sum overflows uint32.
 // Validates: R-WRITE-OVERFLOW-001.
-func TestWriteToNode_ChildOffsetOverflow(t *testing.T) {
-	// Offset = MaxUint32-1, Length = 4: sum overflows to 2, bypassing bounds check.
-	child := &symbol{
-		Name:     "Field",
-		FullName: "Parent.Field",
-		DataType: "DINT",
-		Offset:   math.MaxUint32 - 1,
-		Length:   4,
-	}
+func TestEncodeChildOffsetOverflow(t *testing.T) {
 	parent := &symbol{
-		Name:     "Parent",
-		FullName: "Parent",
-		DataType: "SomeStruct",
-		Length:   10,
-		Children: map[string]*symbol{"Field": child},
+		Name: "Parent", FullName: "Parent", DataType: "SomeStruct", Length: 10,
+		Children: map[string]*symbol{
+			"Field": {Name: "Field", FullName: "Parent.Field", DataType: "DINT", Offset: math.MaxUint32 - 1, Length: 4},
+		},
 	}
-	_, err := parent.writeToNode(`{"Field": "42"}`, nil)
-	if err == nil {
+	if _, err := parent.encode(map[string]any{"Field": int32(42)}, nil); err == nil {
 		t.Fatal("expected error for child Offset+Length overflow, got nil")
 	}
 }

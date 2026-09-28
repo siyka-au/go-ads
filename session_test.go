@@ -29,7 +29,7 @@ func TestZeroOldSymbolHandles(t *testing.T) {
 		"a": {
 			Name:           "a",
 			Handle:         0x1234,
-			Value:          "42",
+			Value:          int16(42),
 			Valid:          true,
 			ValueParsed:    true,
 			LastUpdateTime: t0,
@@ -54,8 +54,8 @@ func TestZeroOldSymbolHandles(t *testing.T) {
 		if p.Handle != 0 {
 			t.Errorf("%s.Handle = 0x%X, want 0", p.Name, p.Handle)
 		}
-		if p.Value != "" {
-			t.Errorf("%s.Value = %q, want empty string", p.Name, p.Value)
+		if p.Value != nil {
+			t.Errorf("%s.Value = %#v, want nil", p.Name, p.Value)
 		}
 		if p.Valid {
 			t.Errorf("%s.Valid = true, want false", p.Name)
@@ -80,9 +80,9 @@ func TestZeroOldSymbolHandles_NilSafe(t *testing.T) {
 	zeroOldSymbolHandles(nil)
 	zeroOldSymbolHandles(map[string]*symbol{})
 
-	sym := &symbol{Handle: 7, Value: "1", Valid: true, ValueParsed: true, LastUpdateTime: time.Now()}
+	sym := &symbol{Handle: 7, Value: int16(1), Valid: true, ValueParsed: true, LastUpdateTime: time.Now()}
 	zeroOldSymbolHandles(map[string]*symbol{"gone": nil, "MAIN.x": sym})
-	if sym.Handle != 0 || sym.Value != "" || sym.Valid || sym.ValueParsed || !sym.LastUpdateTime.IsZero() {
+	if sym.Handle != 0 || sym.Value != nil || sym.Valid || sym.ValueParsed || !sym.LastUpdateTime.IsZero() {
 		t.Errorf("stale symbol not fully zeroed: %+v", sym)
 	}
 }
@@ -705,9 +705,9 @@ func TestSession_ReadFromSymbol_LengthMismatchTriggersDetection(t *testing.T) {
 		DataType: "LREAL",
 	}
 
-	_, err := sess.ReadFromSymbol(context.Background(), symName)
+	_, err := sess.ReadValue(context.Background(), symName)
 	if err == nil {
-		t.Fatal("expected error from ReadFromSymbol on length mismatch, got nil")
+		t.Fatal("expected error from ReadValue on length mismatch, got nil")
 	}
 	var rc ReturnCode
 	if !errors.As(err, &rc) {
@@ -1139,14 +1139,14 @@ func TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle(t *testing.T) {
 
 	sym := &symbol{
 		Name: "MAIN.a", FullName: "MAIN.a", DataType: "INT",
-		Length: 2, Handle: staleHandle, Value: "1", Valid: true,
+		Length: 2, Handle: staleHandle, Value: int16(1), Valid: true,
 	}
 	sess.cache.lock.Lock()
 	sess.cache.symbols[symbolKey("MAIN.a")] = sym
 	sess.cache.lock.Unlock()
 
 	ctx := context.Background()
-	if _, err := sess.ReadFromSymbol(ctx, "MAIN.a"); err == nil {
+	if _, err := sess.ReadValue(ctx, "MAIN.a"); err == nil {
 		t.Fatal("read against the stale handle succeeded; the stub was supposed to refuse it with 0x710")
 	}
 	if got := staleReads.Load(); got != 1 {
@@ -1171,12 +1171,12 @@ func TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle(t *testing.T) {
 	}
 
 	// And the recovery has to be real: the next read re-resolves and succeeds.
-	got, err := sess.ReadFromSymbol(ctx, "MAIN.a")
+	got, err := sess.ReadValue(ctx, "MAIN.a")
 	if err != nil {
 		t.Fatalf("read after invalidation: %v", err)
 	}
-	if got != "7" {
-		t.Errorf("value after re-resolve = %q, want %q", got, "7")
+	if got != int16(7) {
+		t.Errorf("value after re-resolve = %#v, want int16(7)", got)
 	}
 	if n := handleLookups.Load(); n != 1 {
 		t.Errorf("GetHandleByName calls = %d, want 1 (the handle must be re-resolved exactly once)", n)

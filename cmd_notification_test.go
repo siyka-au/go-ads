@@ -142,8 +142,8 @@ func TestDeviceNotification_SingleSample(t *testing.T) {
 		if update.Variable != "MAIN.testVar" {
 			t.Errorf("variable = %q, want %q", update.Variable, "MAIN.testVar")
 		}
-		if update.Value != "1234" {
-			t.Errorf("value = %q, want %q", update.Value, "1234")
+		if update.Value != int16(1234) {
+			t.Errorf("value = %#v, want int16(1234)", update.Value)
 		}
 		// Verify timestamp is approximately correct (within a second)
 		expectedTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -356,8 +356,8 @@ func TestDeviceNotification_BoolType(t *testing.T) {
 
 	select {
 	case u := <-ch:
-		if u.Value != "true" {
-			t.Errorf("BOOL value = %q, want %q", u.Value, "true")
+		if u.Value != true {
+			t.Errorf("BOOL value = %#v, want true", u.Value)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out")

@@ -4,17 +4,12 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"cloud.google.com/go/civil"
 )
 
 // symbolCache owns the connection-level symbol metadata: the symbol map, the
@@ -140,8 +135,7 @@ type symbol struct {
 	Flags             SymbolFlag
 	ContextMask       uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
 
-	Value       string
-	Data        any // Value decoded to its Go type; see value.go
+	Value       any // decoded to its Go type; see value.go
 	Valid       bool
 	ValueParsed bool // true after first successful parse
 
@@ -262,9 +256,9 @@ type SymbolView struct {
 	BaseType    ADSDataType // protocol ADST_ code; see adsTypeToString
 	Flags       SymbolFlag
 	ContextMask uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
-	Parsed      bool  // true if Value has been parsed at least once at snapshot time
+	Parsed      bool  // true if Value has been decoded at least once at snapshot time
 	IsRoot      bool  // true if this symbol has no parent (top-level program/global var)
-	Value       string
+	Value       any   // the cached value as its Go type (see value.go); a copy
 
 	conn *Session
 }
@@ -365,37 +359,6 @@ func (sess *Session) warnUnresolvedBaseType(symbolName string) {
 		"size", length,
 		"detail", "4- and 8-byte widths are ambiguous (DINT/REAL, LINT/LREAL share them), so they cannot be inferred from size",
 		"hint", "call LoadSymbols (or LoadDataTypes) to load the datatype table; without it this symbol's value is delivered as an unconverted string")
-}
-
-// GetJSON serializes the cached value: nested JSON walked from the children
-// subtree for composites, a single literal for primitives. Returns "" for a
-// detached view or a symbol no longer in the cache. Takes cache.lock briefly;
-// safe from any goroutine.
-func (v SymbolView) GetJSON() string {
-	if v.conn == nil {
-		return ""
-	}
-	v.conn.cache.lock.Lock()
-	sym := v.conn.cache.symbols[symbolKey(v.FullName)]
-	if sym == nil {
-		v.conn.cache.lock.Unlock()
-		return ""
-	}
-	// parseTree walks Children + reads Value; both require cache.lock.
-	// json.Marshal is the expensive part and operates on the produced
-	// interface tree, which has no further cache dependencies — run it
-	// outside the lock so notification handling + cache-backed APIs are
-	// not blocked on large struct/array marshaling.
-	data := sym.parseTree()
-	name := sym.Name
-	v.conn.cache.lock.Unlock()
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		v.log().Warn("GetJSON marshal error", "symbol", name, "error", err)
-		return ""
-	}
-	return string(jsonData)
 }
 
 // Children returns SymbolViews for struct/array members captured at view
@@ -500,7 +463,7 @@ func (s *symbol) view(conn *Session) SymbolView {
 		ContextMask: s.ContextMask,
 		Parsed:      s.Valid,
 		IsRoot:      s.Parent == nil,
-		Value:       s.Value,
+		Value:       copyData(s.Value),
 		conn:        conn,
 	}
 }
@@ -839,24 +802,6 @@ func makeArrayChildren(levels []datatypeArrayInfo, dt string, size uint32, lg *s
 	return
 }
 
-// getJSON returns the symbol's current value serialized as JSON.
-// Internal API — public access via SymbolView.GetJSON.
-func (s *symbol) getJSON() string {
-	data := s.parseTree()
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		s.log().Warn("getJSON marshal error", "symbol", s.Name, "error", err)
-		return ""
-	}
-	return string(jsonData)
-}
-
-var stringsList = map[string]struct{}{
-	"STRING": {}, "WSTRING": {},
-	"TIME": {}, "TOD": {}, "TIME_OF_DAY": {}, "DATE": {}, "DT": {}, "DATE_AND_TIME": {},
-	"LTIME": {}, "LTOD": {}, "LTIME_OF_DAY": {}, "LDATE": {}, "LDT": {}, "LDATE_AND_TIME": {},
-}
-
 // isArrayElement reports whether a child is an array element ("[3]") rather
 // than a struct member.
 func isArrayElement(s *symbol) bool { return len(s.Name) > 0 && s.Name[0] == '[' }
@@ -872,18 +817,18 @@ func sortedElements(children map[string]*symbol) []*symbol {
 	return out
 }
 
-// dataTree assembles a composite's typed value from its children's Data:
+// valueTree assembles a composite's value from its children's values:
 // []any for an array, map[string]any for a struct. Caller holds cache.lock.
-func (s *symbol) dataTree() any {
+func (s *symbol) valueTree() any {
 	if len(s.Children) == 0 {
-		return s.Data
+		return s.Value
 	}
 	for _, c := range s.Children {
 		if isArrayElement(c) {
 			elems := sortedElements(s.Children)
 			out := make([]any, len(elems))
 			for i, e := range elems {
-				out[i] = e.dataTree()
+				out[i] = e.valueTree()
 			}
 			return out
 		}
@@ -891,119 +836,7 @@ func (s *symbol) dataTree() any {
 	}
 	out := make(map[string]any, len(s.Children))
 	for name, c := range s.Children {
-		out[name] = c.dataTree()
+		out[name] = c.valueTree()
 	}
 	return out
-}
-
-// signedIntTypes / unsignedIntTypes / floatTypes are the IEC 61131-3 base
-// type names that symbol_codec.parse writes into s.Value as decimal
-// strings. parseTree dispatches on these so 64-bit integers (LINT/ULINT)
-// retain full precision in the resulting JSON instead of being rounded
-// through float64's 53-bit mantissa.
-var (
-	signedIntTypes = map[string]struct{}{
-		"SINT": {}, "INT": {}, "DINT": {}, "LINT": {},
-	}
-	unsignedIntTypes = map[string]struct{}{
-		"USINT": {}, "UINT": {}, "UDINT": {}, "ULINT": {},
-		"BYTE": {}, "WORD": {}, "DWORD": {}, "LWORD": {},
-	}
-	floatTypes = map[string]struct{}{
-		"REAL": {}, "LREAL": {},
-	}
-)
-
-// parseTree returns a JSON-marshallable interface for the symbol subtree.
-// Internal API — public access via SymbolView.GetJSON.
-func (s *symbol) parseTree() (rData interface{}) {
-	if len(s.Children) == 0 {
-		switch {
-		case s.DataType == "BOOL":
-			v, err := strconv.ParseBool(s.Value)
-			if err != nil {
-				s.log().Warn("parseTree: invalid BOOL value, defaulting to false",
-					"symbol", s.Name, "value", s.Value, "error", err)
-			}
-			rData = v
-		case isInSet(s.DataType, stringsList):
-			rData = s.Value
-		case isInSet(s.DataType, signedIntTypes):
-			v, err := strconv.ParseInt(s.Value, 10, 64)
-			if err != nil {
-				s.log().Warn("parseTree: invalid signed integer value, defaulting to 0",
-					"symbol", s.Name, "dataType", s.DataType, "value", s.Value, "error", err)
-			}
-			rData = v
-		case isInSet(s.DataType, unsignedIntTypes):
-			v, err := strconv.ParseUint(s.Value, 10, 64)
-			if err != nil {
-				s.log().Warn("parseTree: invalid unsigned integer value, defaulting to 0",
-					"symbol", s.Name, "dataType", s.DataType, "value", s.Value, "error", err)
-			}
-			rData = v
-		case isInSet(s.DataType, floatTypes):
-			v, err := strconv.ParseFloat(s.Value, 64)
-			if err != nil {
-				s.log().Warn("parseTree: invalid float value, defaulting to 0",
-					"symbol", s.Name, "dataType", s.DataType, "value", s.Value, "error", err)
-			}
-			rData = v
-		case s.Data != nil:
-			// User-defined scalar (enum, alias) already decoded to its base type.
-			rData = jsonScalar(s.Data)
-		default:
-			// Unknown / user-defined scalar (enum alias, TIME-derived,
-			// pointer, REFERENCE TO, etc.). Fall back to float64 to
-			// preserve prior behaviour for values that historically
-			// parsed cleanly under ParseFloat.
-			v, err := strconv.ParseFloat(s.Value, 64)
-			if err != nil {
-				s.log().Warn("parseTree: invalid numeric value, defaulting to 0",
-					"symbol", s.Name, "dataType", s.DataType, "value", s.Value, "error", err)
-			}
-			rData = v
-		}
-	} else {
-		for _, child := range s.Children {
-			if isArrayElement(child) {
-				elems := sortedElements(s.Children)
-				list := make([]any, len(elems))
-				for i, e := range elems {
-					list[i] = e.parseTree()
-				}
-				return list
-			}
-			break
-		}
-		localMap := make(map[string]interface{})
-		for _, child := range s.Children {
-			localMap[child.Name] = child.parseTree()
-		}
-		rData = localMap
-	}
-	return
-}
-
-// jsonScalar maps a typed value onto what encoding/json should emit: dates,
-// times and non-finite floats as their string form, everything else as is.
-func jsonScalar(v any) any {
-	switch x := v.(type) {
-	case time.Duration, civil.Time, civil.Date, civil.DateTime:
-		return formatScalar(v)
-	case float32:
-		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
-			return formatScalar(v)
-		}
-	case float64:
-		if math.IsNaN(x) || math.IsInf(x, 0) {
-			return formatScalar(v)
-		}
-	}
-	return v
-}
-
-func isInSet(s string, set map[string]struct{}) bool {
-	_, ok := set[s]
-	return ok
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -361,24 +362,23 @@ func encodeUTF16LE(s string) []byte {
 	return buf
 }
 
-// --- symbol writeToNode round-trip helper ---
+// --- symbol encode/decode round-trip helper ---
 
-// testWriteRoundTrip writes a value via writeToNode then reads it back via parse and compares.
-func testWriteRoundTrip(t *testing.T, dataType string, length uint32, value string) {
+// testValueRoundTrip encodes value for a fresh symbol of dataType, decodes the
+// bytes with another, and requires the identical Go value back.
+func testValueRoundTrip(t *testing.T, dataType string, length uint32, value any) {
 	t.Helper()
 	sym := &symbol{DataType: dataType, Length: length}
-	data, err := sym.writeToNode(value, nil)
+	data, err := sym.encode(value, nil)
 	if err != nil {
-		t.Fatalf("writeToNode(%q, %q) error: %v", dataType, value, err)
+		t.Fatalf("encode(%s, %#v): %v", dataType, value, err)
 	}
-
-	sym2 := &symbol{DataType: dataType, Length: length}
-	parsed, err := sym2.parse(data, 0, nil)
+	got, err := (&symbol{DataType: dataType, Length: length}).decode(data, 0, nil)
 	if err != nil {
-		t.Fatalf("parse(%q) error: %v", dataType, err)
+		t.Fatalf("decode(%s): %v", dataType, err)
 	}
-	if parsed != value {
-		t.Errorf("round-trip %q: wrote %q, got back %q", dataType, value, parsed)
+	if !reflect.DeepEqual(got, value) {
+		t.Errorf("round trip %s: wrote %#v (%T), got back %#v (%T)", dataType, value, value, got, got)
 	}
 }
 

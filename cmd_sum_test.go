@@ -289,14 +289,14 @@ func seedSymbol(sess *Session, name string, handle uint32) {
 	sess.cache.symbols[symbolKey(name)] = sym
 }
 
-// TestSession_ReadMultipleSymbols_StaleDetection validates R-CACHE-009
+// TestSession_ReadValues_StaleDetection validates R-CACHE-009
 // detection in the sum-batch decode path: a per-item ReturnCode in the
 // stale-cache set (e.g. 0x711 SymbolVersionInvalid) must trigger
 // handleStaleDetection through the configured strategy callback even when
 // the batched roundtrip itself succeeded.
 //
 // Validates: R-CACHE-009 (sum-batch per-item detection wiring).
-func TestSession_ReadMultipleSymbols_StaleDetection(t *testing.T) {
+func TestSession_ReadValues_StaleDetection(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -326,7 +326,7 @@ func TestSession_ReadMultipleSymbols_StaleDetection(t *testing.T) {
 
 	// The stale item now comes back as a per-item failure in a *BatchError
 	// (DECISIONS.md Decision 1); detection must still fire regardless.
-	values, err := sess.ReadMultipleSymbols(context.Background(), []string{"MAIN.a", "MAIN.b"})
+	values, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.b"})
 	batchErr := batchErrorFor(t, err)
 	if len(batchErr.Items) != 1 || batchErr.Items[0].Symbol != "MAIN.a" {
 		t.Errorf("got failed items %v, want just MAIN.a", batchErr.Items)
@@ -345,14 +345,14 @@ func TestSession_ReadMultipleSymbols_StaleDetection(t *testing.T) {
 	}
 }
 
-// TestSession_ReadMultipleSymbols_FiresCallbackOncePerBatch validates that
+// TestSession_ReadValues_FiresCallbackOncePerBatch validates that
 // when N>1 items in a single batched response carry stale codes, the
 // strategy callback fires exactly ONCE (R-SES-011 "once per detection").
 // Verified via a buffered channel of size 1 and a drain check after a
 // short settle window.
 //
 // Validates: R-CACHE-009 + R-SES-011 (no callback amplification on batched ops).
-func TestSession_ReadMultipleSymbols_FiresCallbackOncePerBatch(t *testing.T) {
+func TestSession_ReadValues_FiresCallbackOncePerBatch(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -384,7 +384,7 @@ func TestSession_ReadMultipleSymbols_FiresCallbackOncePerBatch(t *testing.T) {
 	// all-failed batch (DECISIONS.md Decision 1) — asserted here rather than
 	// ignored, so this test still notices if the read path stops reporting it.
 	// The subject of the test is unchanged: detection fires exactly once.
-	_, err := sess.ReadMultipleSymbols(context.Background(), []string{"MAIN.a", "MAIN.b", "MAIN.c"})
+	_, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.b", "MAIN.c"})
 	batchErr := batchErrorFor(t, err)
 	if len(batchErr.Items) != 3 || batchErr.Succeeded != 0 {
 		t.Errorf("got Succeeded=%d failed items %v, want 0 succeeded and all three failed",
@@ -407,13 +407,13 @@ func TestSession_ReadMultipleSymbols_FiresCallbackOncePerBatch(t *testing.T) {
 	}
 }
 
-// TestSession_WriteMultipleSymbols_StaleDetection validates R-CACHE-009
+// TestSession_WriteValues_StaleDetection validates R-CACHE-009
 // detection in the SumWrite batch decode: a stale per-item code triggers
 // the strategy callback. SumWrite response is [N × error(4)] with no data
 // section, so this also exercises the bare-error-array decode path.
 //
 // Validates: R-CACHE-009 (SumWrite batch wiring).
-func TestSession_WriteMultipleSymbols_StaleDetection(t *testing.T) {
+func TestSession_WriteValues_StaleDetection(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -440,9 +440,9 @@ func TestSession_WriteMultipleSymbols_StaleDetection(t *testing.T) {
 
 	// The rejected item is now named in a *BatchError (DECISIONS.md Decision 1);
 	// detection must still fire.
-	codes, err := sess.WriteMultipleSymbols(context.Background(), map[string]string{
-		"MAIN.a": "true",
-		"MAIN.b": "false",
+	codes, err := sess.WriteValues(context.Background(), map[string]any{
+		"MAIN.a": true,
+		"MAIN.b": false,
 	})
 	// Which name lands in slot 0 depends on Go's map iteration order, so assert
 	// the shape rather than the identity: one rejected, one accepted.
@@ -674,13 +674,13 @@ func itemFor(t *testing.T, batchErr *BatchError, symbol string) BatchItemError {
 	return BatchItemError{}
 }
 
-// TestReadMultipleSymbols_AllItemsFailedIsNotSuccess pins the measured TC3
+// TestReadValues_AllItemsFailedIsNotSuccess pins the measured TC3
 // failure: after a runtime restart every cached handle is refused, so every
 // item comes back 0x710. Before the batch error contract this returned an
 // empty map with err == nil — total data loss reported as success.
 //
 // Validates: DECISIONS.md Decision 1 (per-item status, PLC-verdict state).
-func TestReadMultipleSymbols_AllItemsFailedIsNotSuccess(t *testing.T) {
+func TestReadValues_AllItemsFailedIsNotSuccess(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -702,7 +702,7 @@ func TestReadMultipleSymbols_AllItemsFailedIsNotSuccess(t *testing.T) {
 	})
 
 	names := []string{"MAIN.a", "MAIN.b", "MAIN.c"}
-	values, err := sess.ReadMultipleSymbols(context.Background(), names)
+	values, err := sess.ReadValues(context.Background(), names)
 	batchErr := batchErrorFor(t, err)
 
 	if len(values) != 0 {
@@ -725,12 +725,12 @@ func TestReadMultipleSymbols_AllItemsFailedIsNotSuccess(t *testing.T) {
 	}
 }
 
-// TestReadMultipleSymbols_OneAbsentSymbolKeepsTheRest pins the constraint that
+// TestReadValues_OneAbsentSymbolKeepsTheRest pins the constraint that
 // one misspelled tag must not stop the other values flowing: the successful
 // items stay in the map and only the failed one is named.
 //
 // Validates: DECISIONS.md Decision 1 (partial success stays usable).
-func TestReadMultipleSymbols_OneAbsentSymbolKeepsTheRest(t *testing.T) {
+func TestReadValues_OneAbsentSymbolKeepsTheRest(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -748,10 +748,10 @@ func TestReadMultipleSymbols_OneAbsentSymbolKeepsTheRest(t *testing.T) {
 	})
 
 	names := []string{"MAIN.a", "MAIN.absent", "MAIN.c"}
-	values, err := sess.ReadMultipleSymbols(context.Background(), names)
+	values, err := sess.ReadValues(context.Background(), names)
 	batchErr := batchErrorFor(t, err)
 
-	if len(values) != 2 || values["MAIN.a"] == "" || values["MAIN.c"] == "" {
+	if len(values) != 2 || values["MAIN.a"] == nil || values["MAIN.c"] == nil {
 		t.Errorf("got values = %v, want the two readable symbols present", values)
 	}
 	if len(batchErr.Items) != 1 {
@@ -769,12 +769,12 @@ func TestReadMultipleSymbols_OneAbsentSymbolKeepsTheRest(t *testing.T) {
 	}
 }
 
-// TestReadMultipleSymbols_UnresolvedSymbolIsReported covers the drop site where
+// TestReadValues_UnresolvedSymbolIsReported covers the drop site where
 // getSymbol fails, so the item never reaches the wire. Previously the name was
 // dropped from the result map with no error whenever any other item decoded.
 //
 // Validates: DECISIONS.md Decision 1 (Skipped state, resolve-time drop).
-func TestReadMultipleSymbols_UnresolvedSymbolIsReported(t *testing.T) {
+func TestReadValues_UnresolvedSymbolIsReported(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -787,10 +787,10 @@ func TestReadMultipleSymbols_UnresolvedSymbolIsReported(t *testing.T) {
 		return craftSumReadResponse([]ReturnCode{ReturnCodeNoErrors}, []uint32{1}, []byte{0x01})
 	})
 
-	values, err := sess.ReadMultipleSymbols(context.Background(), []string{"MAIN.a", "MAIN.typo"})
+	values, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.typo"})
 	batchErr := batchErrorFor(t, err)
 
-	if len(values) != 1 || values["MAIN.a"] == "" {
+	if len(values) != 1 || values["MAIN.a"] == nil {
 		t.Errorf("got values = %v, want MAIN.a present", values)
 	}
 	item := itemFor(t, batchErr, "MAIN.typo")
@@ -803,7 +803,7 @@ func TestReadMultipleSymbols_UnresolvedSymbolIsReported(t *testing.T) {
 
 	// Nothing resolvable at all takes an earlier return, and it must produce the
 	// same shape — the contract cannot depend on how many items survived.
-	values, err = sess.ReadMultipleSymbols(context.Background(), []string{"MAIN.typo", "MAIN.other"})
+	values, err = sess.ReadValues(context.Background(), []string{"MAIN.typo", "MAIN.other"})
 	batchErr = batchErrorFor(t, err)
 	if len(values) != 0 {
 		t.Errorf("got values = %v, want none", values)
@@ -813,14 +813,14 @@ func TestReadMultipleSymbols_UnresolvedSymbolIsReported(t *testing.T) {
 	}
 }
 
-// TestReadMultipleSymbols_VanishedAndUnparsableAreReported covers the two
+// TestReadValues_VanishedAndUnparsableAreReported covers the two
 // post-roundtrip drop sites: the cache entry disappearing mid-roundtrip
 // (live == nil) and the payload failing to decode against the cached type,
 // which is what an undetected INT→LREAL online change looks like. Both used to
 // leave the name missing from the map with err == nil, permanently.
 //
 // Validates: DECISIONS.md Decision 1 (Skipped state, decode-time drops).
-func TestReadMultipleSymbols_VanishedAndUnparsableAreReported(t *testing.T) {
+func TestReadValues_VanishedAndUnparsableAreReported(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -846,10 +846,10 @@ func TestReadMultipleSymbols_VanishedAndUnparsableAreReported(t *testing.T) {
 	})
 
 	names := []string{"MAIN.a", "MAIN.gone", "MAIN.widened"}
-	values, err := sess.ReadMultipleSymbols(context.Background(), names)
+	values, err := sess.ReadValues(context.Background(), names)
 	batchErr := batchErrorFor(t, err)
 
-	if len(values) != 1 || values["MAIN.a"] == "" {
+	if len(values) != 1 || values["MAIN.a"] == nil {
 		t.Errorf("got values = %v, want only MAIN.a", values)
 	}
 	if got := itemFor(t, batchErr, "MAIN.gone"); !errors.Is(got.Skipped, ErrBatchSymbolVanished) {
@@ -860,13 +860,13 @@ func TestReadMultipleSymbols_VanishedAndUnparsableAreReported(t *testing.T) {
 	}
 }
 
-// TestReadMultipleSymbols_TransportFailureIsABareError pins the other half of
+// TestReadValues_TransportFailureIsABareError pins the other half of
 // the contract: a router-level rejection is not a per-item verdict, so it must
 // NOT arrive as a *BatchError. A caller that unwraps one and reads the map
 // would be trusting values that were never fetched.
 //
 // Validates: DECISIONS.md Decision 1 (bare error reserved for transport).
-func TestReadMultipleSymbols_TransportFailureIsABareError(t *testing.T) {
+func TestReadValues_TransportFailureIsABareError(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -878,7 +878,7 @@ func TestReadMultipleSymbols_TransportFailureIsABareError(t *testing.T) {
 	// SumRead itself: the router rejects it the way a PLC in CONFIG does.
 	srv.amsErrorAfter(CommandIDReadWrite, 1, ReturnCodeGlobalTargetPortNotFound)
 
-	values, err := sess.ReadMultipleSymbols(context.Background(), []string{"MAIN.a", "MAIN.b"})
+	values, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.b"})
 	if err == nil {
 		t.Fatal("got err = nil for a router-rejected batch")
 	}
@@ -894,31 +894,31 @@ func TestReadMultipleSymbols_TransportFailureIsABareError(t *testing.T) {
 	}
 }
 
-// TestReadMultipleSymbols_EmptyRequestIsNotAnError guards the boundary the
+// TestReadValues_EmptyRequestIsNotAnError guards the boundary the
 // contract keeps unchanged: asking for nothing is not a failure.
 //
 // Validates: DECISIONS.md Decision 1 (empty request stays nil, nil).
-func TestReadMultipleSymbols_EmptyRequestIsNotAnError(t *testing.T) {
+func TestReadValues_EmptyRequestIsNotAnError(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 
 	for _, names := range [][]string{nil, {}} {
-		values, err := sess.ReadMultipleSymbols(context.Background(), names)
+		values, err := sess.ReadValues(context.Background(), names)
 		if err != nil || values != nil {
-			t.Errorf("ReadMultipleSymbols(%v) = %v, %v; want nil, nil", names, values, err)
+			t.Errorf("ReadValues(%v) = %v, %v; want nil, nil", names, values, err)
 		}
 	}
 }
 
-// TestWriteMultipleSymbols_DroppedItemIsNotSuccess pins the write half. A
+// TestWriteValues_DroppedItemIsNotSuccess pins the write half. A
 // dropped item is absent from the returned map, and ReturnCodeNoErrors is 0, so
 // the idiomatic per-symbol check reads a write that never happened as a write
 // that succeeded. Only the error can distinguish them.
 //
 // Validates: DECISIONS.md Decision 1 (write-path dropped item).
-func TestWriteMultipleSymbols_DroppedItemIsNotSuccess(t *testing.T) {
+func TestWriteValues_DroppedItemIsNotSuccess(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -935,10 +935,10 @@ func TestWriteMultipleSymbols_DroppedItemIsNotSuccess(t *testing.T) {
 		return buf
 	})
 
-	codes, err := sess.WriteMultipleSymbols(context.Background(), map[string]string{
-		"MAIN.a":    "true",
+	codes, err := sess.WriteValues(context.Background(), map[string]any{
+		"MAIN.a":    true,
 		"MAIN.bad":  "not-a-bool",
-		"MAIN.typo": "true",
+		"MAIN.typo": true,
 	})
 	batchErr := batchErrorFor(t, err)
 
@@ -960,11 +960,11 @@ func TestWriteMultipleSymbols_DroppedItemIsNotSuccess(t *testing.T) {
 	}
 }
 
-// TestWriteMultipleSymbols_PerItemRejectionIsAnError covers the write path's
+// TestWriteValues_PerItemRejectionIsAnError covers the write path's
 // device-verdict state: the batch reached the PLC and one item was rejected.
 //
 // Validates: DECISIONS.md Decision 1 (write-path PLC verdict).
-func TestWriteMultipleSymbols_PerItemRejectionIsAnError(t *testing.T) {
+func TestWriteValues_PerItemRejectionIsAnError(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
@@ -977,7 +977,7 @@ func TestWriteMultipleSymbols_PerItemRejectionIsAnError(t *testing.T) {
 		return buf
 	})
 
-	codes, err := sess.WriteMultipleSymbols(context.Background(), map[string]string{"MAIN.a": "true"})
+	codes, err := sess.WriteValues(context.Background(), map[string]any{"MAIN.a": true})
 	batchErr := batchErrorFor(t, err)
 
 	if codes["MAIN.a"] != ReturnCodeDeviceSymbolNoFound {
@@ -1014,20 +1014,20 @@ func TestBatchSymbols_FullSuccessIsNotAnError(t *testing.T) {
 		return make([]byte, 8) // two items, both ReturnCodeNoErrors
 	})
 
-	values, err := sess.ReadMultipleSymbols(context.Background(), []string{"MAIN.a", "MAIN.b"})
+	values, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.b"})
 	if err != nil {
-		t.Errorf("ReadMultipleSymbols on a healthy batch: got err = %v, want nil", err)
+		t.Errorf("ReadValues on a healthy batch: got err = %v, want nil", err)
 	}
 	if len(values) != 2 {
 		t.Errorf("got values = %v, want both symbols", values)
 	}
 
-	codes, err := sess.WriteMultipleSymbols(context.Background(), map[string]string{
-		"MAIN.a": "true",
-		"MAIN.b": "false",
+	codes, err := sess.WriteValues(context.Background(), map[string]any{
+		"MAIN.a": true,
+		"MAIN.b": false,
 	})
 	if err != nil {
-		t.Errorf("WriteMultipleSymbols on a healthy batch: got err = %v, want nil", err)
+		t.Errorf("WriteValues on a healthy batch: got err = %v, want nil", err)
 	}
 	if len(codes) != 2 {
 		t.Errorf("got codes = %v, want both symbols", codes)

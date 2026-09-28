@@ -354,7 +354,7 @@ func assertHealthyAfterRecovery(t *testing.T, sess *Session, ch <-chan *Update, 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if name := os.Getenv("ADS_READ_COUNTER"); name != "" {
-		if _, err := sess.ReadFromSymbol(ctx, name); err != nil {
+		if _, err := sess.ReadValue(ctx, name); err != nil {
 			t.Errorf("ReadFromSymbol after recovery: %v", err)
 		}
 	}

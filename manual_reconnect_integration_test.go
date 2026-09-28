@@ -379,7 +379,7 @@ func TestManualRestartRecovery(t *testing.T) {
 	// not prove the request path was restored.
 	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if _, err := sess.ReadFromSymbol(readCtx, symbol); err != nil {
+	if _, err := sess.ReadValue(readCtx, symbol); err != nil {
 		t.Errorf("ReadFromSymbol after recovery: %v", err)
 	}
 	timeline("read path healthy — recovery complete")

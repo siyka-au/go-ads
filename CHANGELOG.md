@@ -6,6 +6,50 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) a
 [go-semantic-release](https://github.com/go-semantic-release/semantic-release) for
 automated versioning and changelog generation.
 
+## v3.0.0 (unreleased): values are Go types
+
+A **major** release. The string layer is gone: values are read and written as Go
+types, and turning them into text, JSON or anything else is the caller's job.
+
+### API
+
+| v2 | v3 |
+|---|---|
+| `ReadFromSymbol(ctx, name) (string, error)` | `ReadValue(ctx, name) (any, error)` |
+| `ReadMultipleSymbols(ctx, names) (map[string]string, error)` | `ReadValues(ctx, names) (map[string]any, error)` |
+| `WriteToSymbol(ctx, name, value string)` | `WriteValue(ctx, name, value any)` |
+| `WriteMultipleSymbols(ctx, map[string]string)` | `WriteValues(ctx, map[string]any)` |
+| `Update.Value string` | `Update.Value any` |
+| `SymbolView.Value string` | `SymbolView.Value any` |
+| `SymbolView.GetJSON()` | removed |
+
+The Go type of each PLC type is tabled in the README under *Values*: sized
+integers, `float32`/`float64`, `time.Duration` for TIME/LTIME, and
+`cloud.google.com/go/civil` types for TOD, DATE and DT; structs are
+`map[string]any` and arrays `[]any`, nested per dimension.
+
+### Behaviour
+
+- **LTIME, LTOD, LDATE and LDT are supported.** They were read as bare integers
+  and could not be written.
+- **A struct write must name every member.** The JSON path zeroed any member an
+  object left out; that is now an error, as is an unknown member.
+- **Over-long strings are refused rather than truncated**, and so are values the
+  PLC type cannot hold (out-of-range integers, sub-millisecond TIME/TOD,
+  fractional-second DT, dates outside the type's span).
+
+### Fixes
+
+- **A change arriving soon after the previous sample was lost.** A value decoded
+  within `MinUpdateInterval` (50 ms) of the last one was not stored, so the
+  notification carried the value it replaced — most visibly a change made right
+  after subscribing, which was never delivered.
+- **Multi-dimensional arrays did not decode.** Each outer row was read as a single
+  element and failed with "INT Size Wrong".
+- **Local mode ignored the target NetID** and always addressed 127.0.0.1.1.1, so a
+  usermode runtime on the same host was unreachable.
+- TIME no longer wraps at 24 h and TOD keeps its seconds and milliseconds — both
+  were artefacts of the string format.
 ## v2.3.2: correct base types for struct members, and an outage that logs as one
 
 A **patch** release. No API changes; two behaviours differ.

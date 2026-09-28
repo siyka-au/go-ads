@@ -399,21 +399,20 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 		sess.handleStaleDetection(ReturnCodeDeviceSymbolNoFound)
 		return
 	}
-	value, err := live.parse(content, 0, sess.cache.datatypes)
+	value, err := live.decode(content, 0, sess.cache.datatypes)
 	if err != nil {
 		sess.cache.lock.Unlock()
 		sess.logger.Error("error during parse of notification",
 			"handle", handle, "symbol", fullName, "dataType", live.DataType, "error", err)
 		return
 	}
-	data := copyData(live.Data)
+	value = copyData(value)
 	sess.cache.lock.Unlock()
 
 	sess.logger.Log(context.Background(), LevelTrace, "update received", "update", value)
 	updateStruct := &Update{
 		Variable:  fullName,
 		Value:     value,
-		Data:      data,
 		TimeStamp: notificationTime,
 	}
 	// One-shot Stale flag (R-NOT-017): consume on first delivered sample.

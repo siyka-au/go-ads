@@ -156,8 +156,8 @@ func TestCacheLock_GuardsMutations(t *testing.T) {
 	}
 	// Proof the dispatch family reached the parse section, not just the
 	// unknown-handle early return.
-	if value != "42" || !valid {
-		t.Errorf("dispatched symbol Value = %q, Valid = %v; want \"42\", true — dispatch never parsed a sample", value, valid)
+	if value != int16(42) || !valid {
+		t.Errorf("dispatched symbol Value = %#v, Valid = %v; want int16(42), true — dispatch never parsed a sample", value, valid)
 	}
 }
 

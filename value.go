@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -15,7 +14,7 @@ import (
 
 // Typed values
 //
-// ReadValue, ReadValues and Update.Data return a PLC value as the Go type
+// ReadValue, ReadValues and Update.Value return a PLC value as the Go type
 // below. Structs decode to map[string]any keyed by member name, arrays to []any
 // in index order (nested for each extra dimension), and enums and aliases to
 // their underlying type.
@@ -149,132 +148,6 @@ func civilTimeOf(d time.Duration) civil.Time {
 		Second:     int(d % time.Minute / time.Second),
 		Nanosecond: int(d % time.Second),
 	}
-}
-
-// formatScalar renders a decoded scalar as the string API returns it. Dates and
-// times keep every digit the PLC stored: TIME as h:mm:ss with hours unbounded,
-// TOD as hh:mm:ss, both with trailing zeros of the fraction trimmed.
-func formatScalar(v any) string {
-	switch v := v.(type) {
-	case bool:
-		return strconv.FormatBool(v)
-	case int8:
-		return strconv.FormatInt(int64(v), 10)
-	case int16:
-		return strconv.FormatInt(int64(v), 10)
-	case int32:
-		return strconv.FormatInt(int64(v), 10)
-	case int64:
-		return strconv.FormatInt(v, 10)
-	case uint8:
-		return strconv.FormatUint(uint64(v), 10)
-	case uint16:
-		return strconv.FormatUint(uint64(v), 10)
-	case uint32:
-		return strconv.FormatUint(uint64(v), 10)
-	case uint64:
-		return strconv.FormatUint(v, 10)
-	case float32:
-		return strconv.FormatFloat(float64(v), 'f', -1, 32)
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64)
-	case string:
-		return v
-	case time.Duration:
-		return formatClock(v)
-	case civil.Time:
-		return formatClock(time.Duration(v.Hour)*time.Hour + time.Duration(v.Minute)*time.Minute +
-			time.Duration(v.Second)*time.Second + time.Duration(v.Nanosecond))
-	case civil.Date:
-		return v.String()
-	case civil.DateTime:
-		return v.Date.String() + " " + formatClock(time.Duration(v.Time.Hour)*time.Hour+
-			time.Duration(v.Time.Minute)*time.Minute+time.Duration(v.Time.Second)*time.Second+
-			time.Duration(v.Time.Nanosecond))
-	}
-	return fmt.Sprint(v)
-}
-
-// formatClock renders d as hh:mm:ss[.fffffffff], hours unbounded and the
-// fraction's trailing zeros trimmed.
-func formatClock(d time.Duration) string {
-	neg := d < 0
-	if neg {
-		d = -d
-	}
-	h, rem := d/time.Hour, d%time.Hour
-	m, rem := rem/time.Minute, rem%time.Minute
-	s, ns := rem/time.Second, rem%time.Second
-	out := fmt.Sprintf("%02d:%02d:%02d", h, m, s)
-	if ns != 0 {
-		out += strings.TrimRight(fmt.Sprintf(".%09d", ns), "0")
-	}
-	if neg {
-		out = "-" + out
-	}
-	return out
-}
-
-// parseClock parses the string form formatClock produces, [-]h:mm[:ss[.f]]
-// with hours unbounded, or a Go duration such as "25h1m1.001s".
-func parseClock(s string) (time.Duration, error) {
-	if !strings.Contains(s, ":") {
-		return time.ParseDuration(s)
-	}
-	neg := strings.HasPrefix(s, "-")
-	parts := strings.Split(strings.TrimPrefix(s, "-"), ":")
-	if len(parts) < 2 || len(parts) > 3 {
-		return 0, fmt.Errorf("expected h:mm or h:mm:ss[.fffffffff], got %q", s)
-	}
-	h, err := strconv.ParseUint(parts[0], 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("hours in %q: %w", s, err)
-	}
-	m, err := strconv.ParseUint(parts[1], 10, 8)
-	if err != nil || m > 59 {
-		return 0, fmt.Errorf("minutes in %q must be 0-59", s)
-	}
-	d := time.Duration(h)*time.Hour + time.Duration(m)*time.Minute
-	if len(parts) == 3 {
-		sec, frac, _ := strings.Cut(parts[2], ".")
-		sv, err := strconv.ParseUint(sec, 10, 8)
-		if err != nil || sv > 59 {
-			return 0, fmt.Errorf("seconds in %q must be 0-59", s)
-		}
-		d += time.Duration(sv) * time.Second
-		if frac != "" {
-			if len(frac) > 9 {
-				return 0, fmt.Errorf("fraction in %q is finer than a nanosecond", s)
-			}
-			ns, err := strconv.ParseUint(frac+strings.Repeat("0", 9-len(frac)), 10, 32)
-			if err != nil {
-				return 0, fmt.Errorf("fraction in %q: %w", s, err)
-			}
-			d += time.Duration(ns)
-		}
-	}
-	if neg {
-		d = -d
-	}
-	return d, nil
-}
-
-// parseTimeOfDay parses a clock string that must fall within one day.
-func parseTimeOfDay(s string) (time.Duration, error) {
-	d, err := parseClock(s)
-	if err != nil {
-		return 0, err
-	}
-	if d < 0 || d >= 24*time.Hour {
-		return 0, fmt.Errorf("time of day %q is not within a day", s)
-	}
-	return d, nil
-}
-
-// parseDateTime parses "2006-01-02 15:04:05[.fffffffff]", with a space or a
-// "T" between date and time, as UTC.
-func parseDateTime(s string) (time.Time, error) {
-	return time.Parse("2006-01-02 15:04:05.999999999", strings.Replace(s, "T", " ", 1))
 }
 
 // encodeScalar encodes v as dataType. length is the symbol's declared size,

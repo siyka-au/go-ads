@@ -70,7 +70,7 @@ Post-Phase-5 layout: `Session` is a managed façade that composes sub-types; `Cl
 | `cmd_simple.go` | Single Read/Write/WriteRead/ReadState/ReadDeviceInfo on Client |
 | `cmd_sum.go` | SumRead/SumWrite/SumAddDeviceNotification/SumDeleteDeviceNotification |
 | `cmd_notification.go` | AddDeviceNotification + listener dispatch |
-| `symbol_access.go` | Session.ReadFromSymbol/WriteToSymbol/ReadMultipleSymbols/WriteMultipleSymbols (handles caches + online-change detection) |
+| `symbol_access.go` | Session.ReadValue/WriteValue/ReadValues/WriteValues (handles caches + online-change detection) |
 | `symbol_discovery.go` | LoadSymbols / LoadSymbolsSlow / LoadSymbolList / LoadDataTypes / RefreshSymbols |
 | `symbol_codec.go` | Symbol.parse / serialize (typed value codec) |
 | `symbols.go` | `Symbol` struct + `symbolCache` primitives |
@@ -245,7 +245,7 @@ Falls back to a single-request download if the PLC doesn't support offset-based 
 
 ### On-demand resolution
 
-When discovery mode is None, `GetSymbol(name)` and the `ReadFromSymbol`/`WriteToSymbol` path resolve symbols lazily via `GetSymbolInfoByName` + `GetHandleByName` and add them to `cache.onDemandSymbols`. On reconnect, only on-demand symbols are re-resolved (graceful skip on missing — see [Reconnection](#reconnection)).
+When discovery mode is None, `GetSymbol(name)` and the `ReadValue`/`WriteValue` path resolve symbols lazily via `GetSymbolInfoByName` + `GetHandleByName` and add them to `cache.onDemandSymbols`. On reconnect, only on-demand symbols are re-resolved (graceful skip on missing — see [Reconnection](#reconnection)).
 
 ### Symbol handles
 
@@ -291,7 +291,7 @@ Six return codes trigger the dispatcher:
 ### Dispatch points
 
 `Session.handleStaleDetection(rc)` fires from:
-- `ReadFromSymbol` / `WriteToSymbol` (and the `ReadMultipleSymbols` / `WriteMultipleSymbols` Sum paths)
+- `ReadValue` / `WriteValue` (and the `ReadValues` / `WriteValues` Sum paths)
 - `AddSymbolNotifications`
 - The notification listener, on receipt of a 0-byte terminal sample (PLC sends this when a subscribed handle is invalidated)
 - `Symbol.parse`, on Length-vs-payload mismatch
@@ -467,7 +467,7 @@ automatically when `ADS_HOST_IP` is set.
 
 `Session.lifecycle.epoch` (atomic.Uint64) increments on each successful reconnect AND on each AutoReload. Symbol handles acquired before an epoch bump may be invalid (PLC reassigns handles after program reload).
 
-`ReadFromSymbol`, `ReadMultipleSymbols`, `WriteToSymbol`, and `WriteMultipleSymbols` capture the epoch before performing I/O. If the op fails and the epoch has changed, they retry once with fresh handles. Bounded recursion: each retry captures a new epoch and only retries again if *another* bump happened during the retry.
+`ReadValue`, `ReadValues`, `WriteValue`, and `WriteValues` capture the epoch before performing I/O. If the op fails and the epoch has changed, they retry once with fresh handles. Bounded recursion: each retry captures a new epoch and only retries again if *another* bump happened during the retry.
 
 ### Strict reconnect mode
 
@@ -603,10 +603,10 @@ TCP endpoint; the router multiplexes a single PLC connection.
 
 | Method | Description |
 |--------|-------------|
-| `ReadFromSymbol(ctx, name)` | Resolve symbol + read + parse to string |
-| `WriteToSymbol(ctx, name, value)` | Resolve + parse string + write |
-| `ReadMultipleSymbols(ctx, names)` | Batch read via SumRead with fallback |
-| `WriteMultipleSymbols(ctx, values)` | Batch write via SumWrite with fallback |
+| `ReadValue(ctx, name)` | Resolve symbol + read + decode to a Go value |
+| `WriteValue(ctx, name, value)` | Resolve + encode Go value + write |
+| `ReadValues(ctx, names)` | Batch read via SumRead with fallback |
+| `WriteValues(ctx, values)` | Batch write via SumWrite with fallback |
 
 ### Notifications (4)
 
@@ -723,7 +723,7 @@ Process I/O / discovery: `ReadProcessInput`, `ReadProcessOutput`, `WriteProcessO
        │
        ▼
 4. Use the Session:
-   ReadFromSymbol / WriteToSymbol   on-demand resolution + epoch retry
+   ReadValue / WriteValue           on-demand resolution + epoch retry
    AddSymbolNotifications           batched subscribe via 0xF085 (or fallback)
    BrowseSymbols(path)              requires step 3
        │

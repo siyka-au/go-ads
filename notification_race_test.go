@@ -115,8 +115,8 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 
 	select {
 	case u := <-ch:
-		if u.Value != "4242" {
-			t.Errorf("Update.Value = %q, want %q", u.Value, "4242")
+		if u.Value != int16(4242) {
+			t.Errorf("Update.Value = %#v, want int16(4242)", u.Value)
 		}
 		if u.Variable != "MAIN.sMachineName" {
 			t.Errorf("Update.Variable = %q, want %q", u.Variable, "MAIN.sMachineName")
@@ -199,7 +199,7 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 		}
 	}
 
-	got := make(map[string]string, symbolCount)
+	got := make(map[string]any, symbolCount)
 	deadline := time.After(3 * time.Second)
 	for len(got) < symbolCount {
 		select {
@@ -1220,8 +1220,8 @@ func TestBufferEarlySample_SelfHealsWhenCommitLandedFirst(t *testing.T) {
 
 	select {
 	case u := <-ch:
-		if u.Value != "1234" {
-			t.Errorf("Update.Value = %q, want %q", u.Value, "1234")
+		if u.Value != int16(1234) {
+			t.Errorf("Update.Value = %#v, want int16(1234)", u.Value)
 		}
 		if u.Variable != "MAIN.sStaticName" {
 			t.Errorf("Update.Variable = %q, want %q", u.Variable, "MAIN.sStaticName")

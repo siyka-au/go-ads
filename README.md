@@ -56,8 +56,11 @@ func main() {
 	defer sess.Close()
 
 	// Symbols are resolved on-demand — no full discovery needed.
-	value, _ := sess.ReadFromSymbol(ctx, "MAIN.myVar")
+	value, _ := sess.ReadValue(ctx, "MAIN.myVar") // an int16 for an INT
 	fmt.Println("Value:", value)
+
+	// Writes take the same Go types.
+	_ = sess.WriteValue(ctx, "MAIN.myVar", int16(42))
 
 	// Optional: load full symbol table for listing / struct access.
 	sess.LoadSymbols(ctx)
@@ -65,6 +68,42 @@ func main() {
 	fmt.Printf("Total symbols: %d\n", len(symbols))
 }
 ```
+
+## Values
+
+`ReadValue`, `ReadValues`, `Update.Value` and `SymbolView.Value` give a PLC value
+as a Go type, and `WriteValue`/`WriteValues` take the same types back. The library
+does no text or JSON encoding: how a value is rendered — a date as RFC 3339, Unix
+nanoseconds or a FILETIME, say — is the caller's choice.
+
+| IEC 61131-3 | Go |
+|---|---|
+| `BOOL` | `bool` |
+| `SINT`, `INT`, `DINT`, `LINT` | `int8`, `int16`, `int32`, `int64` |
+| `USINT`/`BYTE`, `UINT`/`WORD`, `UDINT`/`DWORD`, `ULINT`/`LWORD` | `uint8`, `uint16`, `uint32`, `uint64` |
+| `REAL`, `LREAL` | `float32`, `float64` |
+| `STRING`, `WSTRING` | `string` |
+| `TIME`, `LTIME` | `time.Duration` |
+| `TOD`, `LTOD` | `civil.Time` |
+| `DATE`, `LDATE` | `civil.Date` |
+| `DT`, `LDT` | `civil.DateTime` |
+| struct | `map[string]any`, keyed by member name |
+| array | `[]any` in index order, nested per dimension |
+
+Enums and aliases take their underlying type. The civil types are from
+`cloud.google.com/go/civil`.
+
+- **Dates are UTC.** `DATE`, `DT` and their long forms count from 1970-01-01, and
+  TwinCAT's convention is UTC; use civil's `In` for a `time.Time` in another zone.
+  `DATE` stores seconds and `LDATE` nanoseconds; TwinCAT keeps both at midnight,
+  and a time of day that a raw write left in one is dropped.
+- **Writes are checked before anything is sent.** Integer types accept any Go
+  integer within range. Values the PLC type cannot hold are refused: sub-millisecond
+  `TIME`/`TOD`, fractional-second `DT`, dates outside the type's span, strings with
+  no room left for the terminator.
+- **A struct write sets every member.** The map must name each member and nothing
+  else; an array write takes exactly its element count. Structs and arrays need the
+  datatype table (`LoadSymbols`).
 
 ## Target discovery — connecting without an AmsNetId
 
@@ -245,7 +284,7 @@ sess.Connect(ctx)
 defer sess.Close()
 
 // Cache-aware read (resolves on-demand, then caches for the connection's lifetime).
-value, _ := sess.ReadFromSymbol(ctx, "MAIN.myVar")
+value, _ := sess.ReadValue(ctx, "MAIN.myVar")
 
 // Persistent subscription (resubscribes automatically after a reconnect).
 ch := make(chan *ads.Update, 64)

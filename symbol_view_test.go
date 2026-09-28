@@ -30,7 +30,7 @@ func newViewTestSession() *Session {
 }
 
 // captureSymbol seeds the cache with a symbol and returns a SymbolView.
-func captureSymbol(sess *Session, name, value string, parsed bool) (SymbolView, *symbol) {
+func captureSymbol(sess *Session, name string, value any, parsed bool) (SymbolView, *symbol) {
 	sym := &symbol{
 		FullName:    name,
 		Name:        name,
@@ -55,19 +55,19 @@ func captureSymbol(sess *Session, name, value string, parsed bool) (SymbolView, 
 // Validates: R-VIEW-001 (SymbolView is a snapshot).
 func TestSymbolView_SnapshotConsistency(t *testing.T) {
 	sess := newViewTestSession()
-	view, sym := captureSymbol(sess, "MAIN.x", "42", true)
+	view, sym := captureSymbol(sess, "MAIN.x", int16(42), true)
 
-	// Mutate symbol fields under cache.lock as parse() would.
+	// Mutate symbol fields under cache.lock as decode() would.
 	sess.cache.lock.Lock()
-	sym.Value = "999"
+	sym.Value = int16(999)
 	sym.Valid = false
 	sym.ValueParsed = false
 	sym.Handle = 0xDEAD
 	sess.cache.lock.Unlock()
 
 	// View must show pre-mutation values (it's a snapshot).
-	if view.Value != "42" {
-		t.Errorf("view.Value = %q, want %q (snapshot)", view.Value, "42")
+	if view.Value != int16(42) {
+		t.Errorf("view.Value = %#v, want int16(42) (snapshot)", view.Value)
 	}
 	if !view.Parsed {
 		t.Errorf("view.Parsed = false, want true (snapshot)")
@@ -87,7 +87,7 @@ func TestSymbolView_IsValid(t *testing.T) {
 	}
 
 	sess := newViewTestSession()
-	view, _ := captureSymbol(sess, "MAIN.y", "1", true)
+	view, _ := captureSymbol(sess, "MAIN.y", int16(1), true)
 	if !view.IsValid() {
 		t.Error("captured SymbolView.IsValid() = false, want true")
 	}
@@ -217,7 +217,7 @@ func TestListSymbols_ErrorBeforeLoadSymbols(t *testing.T) {
 // Validates: R-VIEW-007 (read-after-Close is allowed, snapshot semantics).
 func TestSymbolView_FieldReadAfterClose(t *testing.T) {
 	sess := newViewTestSession()
-	view, _ := captureSymbol(sess, "MAIN.z", "7", true)
+	view, _ := captureSymbol(sess, "MAIN.z", int16(7), true)
 
 	// Drive FSM to Closed without invoking real Close() (which would
 	// nil-deref c.client). The contract under test is read-after-Closed,
@@ -233,8 +233,8 @@ func TestSymbolView_FieldReadAfterClose(t *testing.T) {
 	if view.FullName != "MAIN.z" {
 		t.Errorf("post-Close view.FullName = %q", view.FullName)
 	}
-	if view.Value != "7" {
-		t.Errorf("post-Close view.Value = %q, want %q", view.Value, "7")
+	if view.Value != int16(7) {
+		t.Errorf("post-Close view.Value = %#v, want int16(7)", view.Value)
 	}
 	if !view.Parsed {
 		t.Errorf("post-Close view.Parsed = false, want true")

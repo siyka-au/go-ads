@@ -99,7 +99,7 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 	// constant, so every subscribed symbol must report inside this window
 	// regardless of whether its value moves.
 	const collectFor = 15 * time.Second
-	seen := make(map[string]string, len(subscribed))
+	seen := make(map[string]any, len(subscribed))
 	deadline := time.After(collectFor)
 collect:
 	for len(seen) < len(subscribed) {

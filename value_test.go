@@ -113,16 +113,16 @@ func TestDecodeScalarErrors(t *testing.T) {
 	}
 }
 
-// parse must leave the typed value in Data for aliases and enums too, resolved
+// decode must leave the typed value in Value for aliases and enums too, resolved
 // through the datatype table to the base type.
-func TestParseStoresTypedData(t *testing.T) {
+func TestDecodeStoresTypedValue(t *testing.T) {
 	datatypes := map[string]SymbolUploadDataType{"E_Mode": {Name: "E_Mode", DataType: "INT"}}
 	sym := &symbol{DataType: "E_Mode", Length: 2}
-	if _, err := sym.parse(u16(3), 0, datatypes); err != nil {
+	if _, err := sym.decode(u16(3), 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
-	if sym.Data != int16(3) {
-		t.Errorf("Data = %#v, want int16(3)", sym.Data)
+	if sym.Value != int16(3) {
+		t.Errorf("Value = %#v, want int16(3)", sym.Value)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestDataTreeStruct(t *testing.T) {
 	}
 	sym := addSymbol(symbolUploadSymbol{Name: "MAIN.st", DataType: "ST_X", SymbolEntry: symbolEntry{Size: 12}}, datatypes, nil)
 	data := append(append([]byte{1, 0, 0, 0}, u32(90061001)...), u32(86400)...)
-	if _, err := sym.parse(data, 0, datatypes); err != nil {
+	if _, err := sym.decode(data, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]any{
@@ -147,8 +147,8 @@ func TestDataTreeStruct(t *testing.T) {
 		"tWait": 25*time.Hour + time.Minute + time.Second + time.Millisecond,
 		"dDay":  civil.Date{Year: 1970, Month: 1, Day: 2},
 	}
-	if !reflect.DeepEqual(sym.Data, want) {
-		t.Errorf("Data = %#v, want %#v", sym.Data, want)
+	if !reflect.DeepEqual(sym.Value, want) {
+		t.Errorf("Value = %#v, want %#v", sym.Value, want)
 	}
 }
 
@@ -165,7 +165,7 @@ func TestDataTree2DArray(t *testing.T) {
 	for i := range 9 {
 		data = append(data, u16(uint16(32766+i))...) // crosses 32767 → -32768
 	}
-	if _, err := sym.parse(data, 0, datatypes); err != nil {
+	if _, err := sym.decode(data, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
 	want := []any{
@@ -173,42 +173,8 @@ func TestDataTree2DArray(t *testing.T) {
 		[]any{int16(-32767), int16(-32766), int16(-32765)},
 		[]any{int16(-32764), int16(-32763), int16(-32762)},
 	}
-	if !reflect.DeepEqual(sym.Data, want) {
-		t.Errorf("Data = %#v, want %#v", sym.Data, want)
-	}
-	// The JSON form is an array of arrays, with no quoted index keys.
-	if got, want := sym.getJSON(), "[[32766,32767,-32768],[-32767,-32766,-32765],[-32764,-32763,-32762]]"; got != want {
-		t.Errorf("JSON = %s, want %s", got, want)
-	}
-}
-
-func TestParseClock(t *testing.T) {
-	tests := []struct {
-		in   string
-		want time.Duration
-	}{
-		{"00:00", 0},
-		{"25:01:01.001", 25*time.Hour + time.Minute + time.Second + time.Millisecond},
-		{"1000:00:00.000000001", 1000*time.Hour + 1},
-		{"-00:00:01", -time.Second},
-		{"25h1m1.001s", 25*time.Hour + time.Minute + time.Second + time.Millisecond},
-	}
-	for _, tt := range tests {
-		got, err := parseClock(tt.in)
-		if err != nil || got != tt.want {
-			t.Errorf("parseClock(%q) = %v, %v; want %v", tt.in, got, err, tt.want)
-		}
-		// Canonical h:mm:ss inputs must format back unchanged.
-		if strings.Count(tt.in, ":") == 2 {
-			if back := formatClock(got); back != tt.in {
-				t.Errorf("formatClock(%v) = %q, want %q", got, back, tt.in)
-			}
-		}
-	}
-	for _, bad := range []string{"1:60", "1:00:60", "x:00", "1:00:00.0000000001"} {
-		if _, err := parseClock(bad); err == nil {
-			t.Errorf("parseClock(%q): expected an error", bad)
-		}
+	if !reflect.DeepEqual(sym.Value, want) {
+		t.Errorf("Value = %#v, want %#v", sym.Value, want)
 	}
 }
 
@@ -310,11 +276,11 @@ func TestEncodeStructRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sym.parse(b, 0, datatypes); err != nil {
+	if _, err := sym.decode(b, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(sym.Data, want) {
-		t.Errorf("round trip = %#v, want %#v", sym.Data, want)
+	if !reflect.DeepEqual(sym.Value, want) {
+		t.Errorf("round trip = %#v, want %#v", sym.Value, want)
 	}
 }
 
@@ -346,11 +312,11 @@ func TestEncode2DArrayRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sym.parse(b, 0, datatypes); err != nil {
+	if _, err := sym.decode(b, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(sym.Data, want) {
-		t.Errorf("round trip = %#v, want %#v", sym.Data, want)
+	if !reflect.DeepEqual(sym.Value, want) {
+		t.Errorf("round trip = %#v, want %#v", sym.Value, want)
 	}
 	for name, v := range map[string]any{
 		"short row":   []any{[]any{int32(1)}, []any{int32(1), int32(2), int32(3)}},

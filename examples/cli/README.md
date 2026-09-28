@@ -27,8 +27,8 @@ REPL commands:
 |---|---|
 | `list [prefix]` | List cached symbols, optionally filtered |
 | `browse [path]` | `Session.BrowseSymbols` at path (default root) |
-| `read <symbol>` | `Session.ReadFromSymbol` |
-| `write <symbol> <value>` | `Session.WriteToSymbol` (library auto-parses value) |
+| `read <symbol>` | `Session.ReadValue` |
+| `write <symbol> <value>` | `Session.WriteValue` (the CLI parses the text as the symbol's current Go type) |
 | `info <symbol>` | `Session.GetSymbol` — DataType, Length, Group, Offset, Comment |
 | `sub <symbol>` | `AddSymbolNotification` (background prints updates) |
 | `unsub <handle>` | `DeleteDeviceNotification` |

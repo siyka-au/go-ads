@@ -198,10 +198,10 @@ func (r *repl) notifyLoop(done chan struct{}) {
 	for u := range r.updates {
 		if u.Stale != nil {
 			fmt.Printf("\n[notify] *STALE* symbol=%s value=%s reason=%s ts=%s\n",
-				u.Variable, u.Value, u.Stale.Reason, u.TimeStamp.Format(time.RFC3339Nano))
+				u.Variable, formatValue(u.Value), u.Stale.Reason, u.TimeStamp.Format(time.RFC3339Nano))
 		} else {
 			fmt.Printf("\n[notify] %s = %s (ts=%s)\n",
-				u.Variable, u.Value, u.TimeStamp.Format("15:04:05.000"))
+				u.Variable, formatValue(u.Value), u.TimeStamp.Format("15:04:05.000"))
 		}
 	}
 }
@@ -346,12 +346,12 @@ func (r *repl) cmdRead(args []string) {
 		return
 	}
 	name := args[0]
-	v, err := r.sess.ReadFromSymbol(r.ctx, name)
+	v, err := r.sess.ReadValue(r.ctx, name)
 	if err != nil {
 		fmt.Printf("  error: %v\n", err)
 		return
 	}
-	fmt.Printf("  %s = %s\n", name, v)
+	fmt.Printf("  %s = %s (%T)\n", name, formatValue(v), v)
 }
 
 func (r *repl) cmdWrite(args []string) {
@@ -361,15 +361,26 @@ func (r *repl) cmdWrite(args []string) {
 	}
 	name := args[0]
 	// Re-join the rest so quoted strings with spaces survive (best-effort).
-	value := strings.Join(args[1:], " ")
-	if err := r.sess.WriteToSymbol(r.ctx, name, value); err != nil {
+	text := strings.Join(args[1:], " ")
+	// The current value's Go type says how to read the text.
+	current, err := r.sess.ReadValue(r.ctx, name)
+	if err != nil {
 		fmt.Printf("  error: %v\n", err)
 		return
 	}
-	fmt.Printf("  wrote %s = %s\n", name, value)
+	value, err := parseLike(current, text)
+	if err != nil {
+		fmt.Printf("  error: %q as %T: %v\n", text, current, err)
+		return
+	}
+	if err := r.sess.WriteValue(r.ctx, name, value); err != nil {
+		fmt.Printf("  error: %v\n", err)
+		return
+	}
+	fmt.Printf("  wrote %s = %s\n", name, formatValue(value))
 	// Read-back confirms what the PLC observed (and exercises invalidation).
-	if back, err := r.sess.ReadFromSymbol(r.ctx, name); err == nil {
-		fmt.Printf("  confirmed: %s = %s\n", name, back)
+	if back, err := r.sess.ReadValue(r.ctx, name); err == nil {
+		fmt.Printf("  confirmed: %s = %s\n", name, formatValue(back))
 	}
 }
 

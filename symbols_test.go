@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -187,18 +186,18 @@ func TestParseEnumNestedInStruct(t *testing.T) {
 		binary.LittleEndian.PutUint32(data[0:4], 2)
 		binary.LittleEndian.PutUint16(data[4:6], 1500)
 
-		value, err := motorSym.parse(data, 0, datatypes)
+		value, err := motorSym.decode(data, 0, datatypes)
 		if err != nil {
-			t.Fatalf("parse error: %v", err)
+			t.Fatalf("decode error: %v", err)
 		}
-		t.Logf("parsed value: %s", value)
+		t.Logf("decoded value: %#v", value)
 
 		stateChild := motorSym.Children["state"]
 		if stateChild == nil {
 			t.Fatal("expected child 'state'")
 		}
-		if stateChild.Value != "2" {
-			t.Errorf("state value = %q, want %q", stateChild.Value, "2")
+		if stateChild.Value != int32(2) {
+			t.Errorf("state value = %#v, want int32(2)", stateChild.Value)
 		}
 		// Enum child must NOT have children (enum constants must not be expanded)
 		if len(stateChild.Children) != 0 {
@@ -209,8 +208,8 @@ func TestParseEnumNestedInStruct(t *testing.T) {
 		if speedChild == nil {
 			t.Fatal("expected child 'speed'")
 		}
-		if speedChild.Value != "1500" {
-			t.Errorf("speed value = %q, want %q", speedChild.Value, "1500")
+		if speedChild.Value != int16(1500) {
+			t.Errorf("speed value = %#v, want int16(1500)", speedChild.Value)
 		}
 	})
 
@@ -251,18 +250,18 @@ func TestParseEnumNestedInStruct(t *testing.T) {
 		binary.LittleEndian.PutUint32(data[0:4], 4) // ERROR=4
 		binary.LittleEndian.PutUint16(data[4:6], 750)
 
-		value, err := motorSym.parse(data, 0, datatypes)
+		value, err := motorSym.decode(data, 0, datatypes)
 		if err != nil {
-			t.Fatalf("parse error: %v", err)
+			t.Fatalf("decode error: %v", err)
 		}
-		t.Logf("parsed value: %s", value)
+		t.Logf("decoded value: %#v", value)
 
 		stateChild := motorSym.Children["state"]
 		if stateChild == nil {
 			t.Fatal("expected child 'state'")
 		}
-		if stateChild.Value != "4" {
-			t.Errorf("state value = %q, want %q", stateChild.Value, "4")
+		if stateChild.Value != int32(4) {
+			t.Errorf("state value = %#v, want int32(4)", stateChild.Value)
 		}
 	})
 }
@@ -280,10 +279,10 @@ func TestParseEnumWithoutDatatypes(t *testing.T) {
 		dataType string
 		size     uint32
 		data     []byte
-		want     string
+		want     any
 	}{
-		{"1-byte enum", "E_SmallState", 1, []byte{42}, "42"},
-		{"2-byte enum", "E_WordState", 2, func() []byte { b := make([]byte, 2); binary.LittleEndian.PutUint16(b, 1500); return b }(), "1500"},
+		{"1-byte enum", "E_SmallState", 1, []byte{42}, int8(42)},
+		{"2-byte enum", "E_WordState", 2, func() []byte { b := make([]byte, 2); binary.LittleEndian.PutUint16(b, 1500); return b }(), int16(1500)},
 	}
 	for _, tt := range successCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -294,12 +293,12 @@ func TestParseEnumWithoutDatatypes(t *testing.T) {
 				Length:   tt.size,
 			}
 			// Pass nil datatypes — simulates on-demand mode
-			value, err := sym.parse(tt.data, 0, nil)
+			value, err := sym.decode(tt.data, 0, nil)
 			if err != nil {
-				t.Fatalf("parse error: %v", err)
+				t.Fatalf("decode error: %v", err)
 			}
 			if value != tt.want {
-				t.Errorf("got %q, want %q", value, tt.want)
+				t.Errorf("got %#v, want %#v", value, tt.want)
 			}
 		})
 	}
@@ -323,9 +322,9 @@ func TestParseEnumWithoutDatatypes(t *testing.T) {
 				DataType: tt.dataType,
 				Length:   tt.size,
 			}
-			_, err := sym.parse(make([]byte, tt.size), 0, nil)
+			_, err := sym.decode(make([]byte, tt.size), 0, nil)
 			if err == nil {
-				t.Fatalf("expected parse to refuse %d-byte inference, got nil", tt.size)
+				t.Fatalf("expected decode to refuse %d-byte inference, got nil", tt.size)
 			}
 		})
 	}
@@ -336,7 +335,7 @@ func TestParseEnumWithoutDatatypes(t *testing.T) {
 			Name: "weird", FullName: "MAIN.weird",
 			DataType: "UNKNOWN_TYPE", Length: 3,
 		}
-		_, err := sym.parse([]byte{1, 2, 3}, 0, nil)
+		_, err := sym.decode([]byte{1, 2, 3}, 0, nil)
 		if err == nil {
 			t.Fatal("expected error for 3-byte unknown type")
 		}
@@ -403,18 +402,18 @@ func TestArrayTypedefNotMistakenForEnum(t *testing.T) {
 	binary.LittleEndian.PutUint16(data[4:6], 30)
 	binary.LittleEndian.PutUint16(data[6:8], 3)
 
-	value, err := parent.parse(data, 0, datatypes)
+	value, err := parent.decode(data, 0, datatypes)
 	if err != nil {
-		t.Fatalf("parse error: %v", err)
+		t.Fatalf("decode error: %v", err)
 	}
-	t.Logf("parsed: %s", value)
+	t.Logf("decoded: %#v", value)
 
 	countChild, ok := parent.Children["count"]
 	if !ok {
 		t.Fatal("expected child 'count'")
 	}
-	if countChild.Value != "3" {
-		t.Errorf("count = %q, want %q", countChild.Value, "3")
+	if countChild.Value != int16(3) {
+		t.Errorf("count = %#v, want int16(3)", countChild.Value)
 	}
 }
 
@@ -561,8 +560,8 @@ func TestAddSymbol_2DArrayParses(t *testing.T) {
 	for i := range 9 {
 		binary.LittleEndian.PutUint16(data[i*2:], uint16(i))
 	}
-	if _, err := sym.parse(data, 0, datatypes); err != nil {
-		t.Fatalf("parse: %v", err)
+	if _, err := sym.decode(data, 0, datatypes); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
 	for row := range 3 {
 		r := sym.Children[fmt.Sprintf("[%d]", row)]
@@ -571,8 +570,8 @@ func TestAddSymbol_2DArrayParses(t *testing.T) {
 		}
 		for col := range 3 {
 			e := r.Children[fmt.Sprintf("[%d]", col)]
-			if want := strconv.Itoa(row*3 + col); e.Value != want {
-				t.Errorf("%s = %q, want %s", e.FullName, e.Value, want)
+			if want := int16(row*3 + col); e.Value != want {
+				t.Errorf("%s = %#v, want %#v", e.FullName, e.Value, want)
 			}
 		}
 	}
@@ -656,108 +655,6 @@ func TestInferBaseType(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("inferBaseType(size=%d, baseType=%d) = %q, want %q", tt.size, tt.baseType, got, tt.want)
 		}
-	}
-}
-
-// --- GetJSON ---
-
-// Validates: NO-SPEC (regression guard, awaiting spec backfill).
-// Pins Sym.GetJSON for plain INT scalar (raw numeric literal, no quoting).
-func TestGetJSON(t *testing.T) {
-	sym := &symbol{DataType: "INT", Length: 2, Value: "42"}
-	json := sym.getJSON()
-	if json != "42" {
-		t.Errorf("got %q, want %q", json, "42")
-	}
-}
-
-// Validates: NO-SPEC (regression guard, awaiting spec backfill).
-// Pins BOOL JSON encoding (raw "true"/"false", no quoting).
-func TestGetJSONBool(t *testing.T) {
-	sym := &symbol{DataType: "BOOL", Length: 1, Value: "true"}
-	json := sym.getJSON()
-	if json != "true" {
-		t.Errorf("got %q, want %q", json, "true")
-	}
-}
-
-// Validates: NO-SPEC (regression guard, awaiting spec backfill).
-// Pins STRING JSON quoting (value wrapped in double-quotes).
-func TestGetJSONString(t *testing.T) {
-	sym := &symbol{DataType: "STRING", Length: 20, Value: "hello"}
-	json := sym.getJSON()
-	if json != `"hello"` {
-		t.Errorf("got %q, want %q", json, `"hello"`)
-	}
-}
-
-// Validates: NO-SPEC (regression guard, awaiting spec backfill).
-// Pins struct JSON encoding via nested-children traversal.
-func TestGetJSONStruct(t *testing.T) {
-	child := &symbol{Name: "x", FullName: "s.x", DataType: "INT", Length: 2, Value: "10"}
-	parent := &symbol{
-		Name: "s", FullName: "s", DataType: "ST_S", Length: 2,
-		Children: map[string]*symbol{"x": child},
-	}
-	json := parent.getJSON()
-	if !strings.Contains(json, "10") {
-		t.Errorf("expected JSON to contain value 10, got %q", json)
-	}
-}
-
-// Validates: NO-SPEC (regression guard, awaiting spec backfill).
-// Pins empty STRING value → JSON empty-quoted string `""`.
-func TestGetJSON_EmptyValue(t *testing.T) {
-	sym := &symbol{DataType: "STRING", Length: 10, Value: ""}
-	json := sym.getJSON()
-	if json != `""` {
-		t.Errorf("got %q, want %q", json, `""`)
-	}
-}
-
-// LINT (int64) values above 2^53 must round-trip through GetJSON without
-// precision loss. Prior implementation parsed all non-bool/non-string
-// scalars as float64, silently rounding LINT values like 2^60.
-func TestGetJSON_LINTPrecision(t *testing.T) {
-	const big = "1152921504606846976" // 2^60, unrepresentable exactly in float64
-	sym := &symbol{DataType: "LINT", Length: 8, Value: big}
-	got := sym.getJSON()
-	if got != big {
-		t.Errorf("LINT precision lost: got %s, want %s", got, big)
-	}
-}
-
-// ULINT (uint64) values above 2^53 must round-trip through GetJSON
-// without precision loss.
-func TestGetJSON_ULINTPrecision(t *testing.T) {
-	const big = "18446744073709551615" // uint64 max
-	sym := &symbol{DataType: "ULINT", Length: 8, Value: big}
-	got := sym.getJSON()
-	if got != big {
-		t.Errorf("ULINT precision lost: got %s, want %s", got, big)
-	}
-}
-
-// REAL stays float64-encoded (decimal point in output).
-func TestGetJSON_REALAsFloat(t *testing.T) {
-	sym := &symbol{DataType: "REAL", Length: 4, Value: "3.5"}
-	got := sym.getJSON()
-	if got != "3.5" {
-		t.Errorf("REAL: got %s, want 3.5", got)
-	}
-}
-
-// Validates: NO-SPEC.
-func TestGetJSON_WSTRINGAsString(t *testing.T) {
-	sym := &symbol{
-		Name:     "MyWString",
-		FullName: "GVL.MyWString",
-		DataType: "WSTRING",
-		Value:    "Hello World",
-	}
-	got := sym.getJSON()
-	if got != `"Hello World"` {
-		t.Errorf("expected WSTRING as JSON string, got %s", got)
 	}
 }
 
