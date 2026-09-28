@@ -7,44 +7,33 @@ import (
 	"unicode/utf8"
 )
 
-// Every non-NUL byte decodes to one character that encodes back to it.
-func TestCP1252EveryByteRoundTrips(t *testing.T) {
+// Every non-NUL byte decodes to the character with that code point and encodes
+// back to it.
+func TestLatin1EveryByteRoundTrips(t *testing.T) {
 	for b := 1; b <= 0xFF; b++ {
-		s := cp1252Decode([]byte{byte(b)})
-		if utf8.RuneCountInString(s) != 1 {
-			t.Errorf("%#02x decodes to %q, want one character", b, s)
+		s := latin1Decode([]byte{byte(b)})
+		if r, _ := utf8.DecodeRuneInString(s); r != rune(b) || utf8.RuneCountInString(s) != 1 {
+			t.Errorf("%#02x decodes to %q, want U+%04X", b, s, b)
 			continue
 		}
-		back, err := cp1252Encode(s)
+		back, err := latin1Encode(s)
 		if err != nil || !reflect.DeepEqual(back, []byte{byte(b)}) {
 			t.Errorf("%#02x -> %q -> % x, %v", b, s, back, err)
 		}
 	}
 }
 
-func TestCP1252KnownMappings(t *testing.T) {
-	for b, want := range map[byte]rune{
-		0x41: 'A', 0x80: '€', 0x8A: 'Š', 0x93: '“', 0x99: '™', 0x9F: 'Ÿ',
-		0xA0: ' ', 0xA9: '©', 0xC4: 'Ä', 0xDF: 'ß', 0xE9: 'é', 0xFF: 'ÿ',
-		0x81: '\u0081', 0x9D: '\u009D', // undefined in Windows-1252: the C1 control, as Windows maps it
-	} {
-		if got := []rune(cp1252Decode([]byte{b})); len(got) != 1 || got[0] != want {
-			t.Errorf("%#02x decodes to %q, want %q", b, string(got), want)
-		}
-	}
-}
-
-func TestSTRINGEncodesWindows1252(t *testing.T) {
-	got, err := encodeScalar("STRING", "Grüße €", 10)
+func TestSTRINGEncodesLatin1(t *testing.T) {
+	got, err := encodeScalar("STRING", "Grüße ©", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []byte{'G', 'r', 0xFC, 0xDF, 'e', ' ', 0x80, 0, 0, 0}
+	want := []byte{'G', 'r', 0xFC, 0xDF, 'e', ' ', 0xA9, 0, 0, 0}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got % x, want % x", got, want)
 	}
 	back, err := decodeScalar("STRING", got)
-	if err != nil || back != "Grüße €" {
+	if err != nil || back != "Grüße ©" {
 		t.Errorf("decoded back to %q, %v", back, err)
 	}
 }
@@ -63,8 +52,10 @@ func TestSTRINGLengthCountsCharacters(t *testing.T) {
 	}
 }
 
-func TestSTRINGRefusesWhatWindows1252CannotHold(t *testing.T) {
-	for _, s := range []string{"中", "😀", "✓", "Ā", "abcĀ", string([]byte{0xFF, 0xFE})} {
+// Anything above U+00FF is refused -- including €, which Windows-1252 has but
+// TwinCAT's STRING does not.
+func TestSTRINGRefusesWhatLatin1CannotHold(t *testing.T) {
+	for _, s := range []string{"€", "“quoted”", "中", "😀", "✓", "Ā", "abcĀ", string([]byte{0xFF, 0xFE})} {
 		if _, err := encodeScalar("STRING", s, 256); err == nil {
 			t.Errorf("STRING %q: expected an error", s)
 		}

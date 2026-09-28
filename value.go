@@ -96,7 +96,7 @@ func decodeScalar(dataType string, b []byte) (any, error) {
 		if i := bytes.IndexByte(b, 0); i >= 0 {
 			b = b[:i]
 		}
-		return cp1252Decode(b), nil
+		return latin1Decode(b), nil
 	case "WSTRING":
 		n := len(b) &^ 1
 		for i := 0; i+1 < len(b); i += 2 {
@@ -214,7 +214,7 @@ func encodeScalar(dataType string, v any, length uint32) ([]byte, error) {
 		if !utf8.ValidString(s) {
 			return nil, fmt.Errorf("STRING %q is not valid UTF-8", s)
 		}
-		cp, err := cp1252Encode(s)
+		cp, err := latin1Encode(s)
 		if err != nil {
 			return nil, err
 		}
