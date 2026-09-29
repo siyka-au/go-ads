@@ -101,7 +101,7 @@ func (s *symbol) warnInferenceOnce(msg string, args ...any) {
 // the symbol came from one, the package default otherwise.
 func (s *symbol) log() *slog.Logger {
 	if s == nil || s.logger == nil {
-		return getDefaultLogger()
+		return slog.Default()
 	}
 	return s.logger
 }

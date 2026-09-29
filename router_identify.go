@@ -88,7 +88,7 @@ func (id RemoteIdentity) RuntimePort() uint16 {
 // port. Read-only, honouring ctx's deadline if sooner than the default 3s. The
 // answer describes the ROUTER, which is the PLC only when they are one device.
 func IdentifyRemote(ctx context.Context, host string) (RemoteIdentity, error) {
-	return IdentifyRemoteWithLogger(ctx, getDefaultLogger(), host)
+	return IdentifyRemoteWithLogger(ctx, slog.Default(), host)
 }
 
 // IdentifyRemoteWithLogger is IdentifyRemote with an explicit logger.
@@ -110,7 +110,7 @@ func IdentifyRemoteWithLogger(ctx context.Context, logger *slog.Logger, host str
 // ephemeral port instead of needing the protocol's fixed port to be free.
 func identifyRemoteFrom(ctx context.Context, logger *slog.Logger, localIP net.IP, host string, port int) (RemoteIdentity, error) {
 	if logger == nil {
-		logger = getDefaultLogger()
+		logger = slog.Default()
 	}
 	if host == "" {
 		return RemoteIdentity{}, fmt.Errorf("identify: host must be set")

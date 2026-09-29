@@ -5,23 +5,12 @@ import (
 	"slices"
 )
 
-// logOr returns lg, or the package default when a caller has none to give (a
-// test-built fixture, or a parse that runs before a session owns the result).
-// Lets the discovery-path free functions take a logger without every call site
-// having to invent one.
-func logOr(lg *slog.Logger) *slog.Logger {
-	if lg == nil {
-		return getDefaultLogger()
-	}
-	return lg
-}
-
 // connLogger returns a session's logger, or the package default for a nil or
 // detached session. Free functions that receive a *Session use this so their
 // records reach the caller's handler like everything else.
 func connLogger(conn *Session) *slog.Logger {
 	if conn == nil || conn.logger == nil {
-		return getDefaultLogger()
+		return slog.Default()
 	}
 	return conn.logger
 }

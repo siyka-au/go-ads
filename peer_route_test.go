@@ -592,7 +592,7 @@ func TestPeerListener_RetryAfterAFailedBind(t *testing.T) {
 	}
 
 	sess := &Session{
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
 	}
 	sess.peerListenPort = port
@@ -689,7 +689,7 @@ func TestConnect_ReleasesPeerListenerOnFailure(t *testing.T) {
 func TestPeerListener_StopDoesNotHangWhenRacingStart(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		sess := &Session{
-			logger:    getDefaultLogger(),
+			logger:    slog.Default(),
 			lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
 		}
 		sess.peerListenPort = freeLocalPort(t)

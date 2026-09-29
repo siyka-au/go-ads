@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
 // send is the local-mode handshake primitive. NOT safe for concurrent use —
@@ -188,6 +190,6 @@ func (c *Client) encodeTo(target AMSAddress, command CommandID, data []byte, inv
 		return nil, err
 	}
 	c.logger.Log(context.Background(), LevelTrace, "data to transmit", "data", data)
-	c.logger.Log(context.Background(), LevelTrace, "The encoded AMS header:", hexAttr("bytes", buff.Bytes()))
+	c.logger.Log(context.Background(), LevelTrace, "The encoded AMS header:", logging.HexAttr("bytes", buff.Bytes()))
 	return buff.Bytes(), nil
 }

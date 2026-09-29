@@ -23,7 +23,7 @@ import (
 
 // TestTransportFaultLevel covers the switch itself.
 func TestTransportFaultLevel(t *testing.T) {
-	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: getDefaultLogger()}
+	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: slog.Default()}
 	if got := c.transportFaultLevel(); got != slog.LevelError {
 		t.Errorf("level outside a handshake = %v, want Error", got)
 	}
@@ -43,7 +43,7 @@ func TestTransportFaultLevel(t *testing.T) {
 // flag the inner end clears the outer region and the rest of the cold start logs
 // its expected faults at ERROR — the bug this replaces.
 func TestTransportFaultLevel_Nests(t *testing.T) {
-	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: getDefaultLogger()}
+	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: slog.Default()}
 
 	c.beginHandshake() // outer: ensureRoute
 	c.beginHandshake() // inner: one awaitRouteActive attempt
@@ -62,7 +62,7 @@ func TestTransportFaultLevel_Nests(t *testing.T) {
 // then need two begins to demote again, so the next real cold start logs its
 // expected faults at ERROR.
 func TestTransportFaultLevel_ClampsOverRelease(t *testing.T) {
-	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: getDefaultLogger()}
+	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: slog.Default()}
 
 	c.endHandshake() // stray release, e.g. a double-deferred cleanup
 	if got := c.handshaking.Load(); got != 0 {

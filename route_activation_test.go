@@ -2,6 +2,7 @@ package ads
 
 import (
 	"context"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestCurrentLifecycleCtx_TracksReplacement(t *testing.T) {
 			ctx:       sessCtx,
 			shutdown:  cancel,
 		},
-		logger: getDefaultLogger(),
+		logger: slog.Default(),
 	}
 
 	before := sess.currentLifecycleCtx()

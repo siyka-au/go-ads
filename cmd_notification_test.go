@@ -53,7 +53,7 @@ func TestDeliverNotification_ClosedChannelDoesNotPanic(t *testing.T) {
 		}
 	}()
 
-	conn := &Session{logger: getDefaultLogger()}
+	conn := &Session{logger: slog.Default()}
 	ctx := context.Background()
 	update := &Update{Variable: "x", Value: "1", TimeStamp: time.Now()}
 
@@ -64,7 +64,7 @@ func TestDeliverNotification_ClosedChannelDoesNotPanic(t *testing.T) {
 // Validates: R-NOT-006.
 func TestDeliverNotification_DeliversOnOpenChannel(t *testing.T) {
 	ch := make(chan *Update, 1)
-	conn := &Session{logger: getDefaultLogger()}
+	conn := &Session{logger: slog.Default()}
 	ctx := context.Background()
 	update := &Update{Variable: "x", Value: "1", TimeStamp: time.Now()}
 
@@ -92,7 +92,7 @@ func TestDeliverNotification_DropsWhenChannelFull(t *testing.T) {
 		}
 	}()
 
-	conn := &Session{logger: getDefaultLogger()}
+	conn := &Session{logger: slog.Default()}
 	ctx := context.Background()
 	update := &Update{Variable: "x", Value: "1", TimeStamp: time.Now()}
 

@@ -32,7 +32,7 @@ func craftSumReadResponse(errs []ReturnCode, dataLengths []uint32, data []byte) 
 // On 64-bit Go this is defense-in-depth; on 32-bit it is a real bug.
 // Validates: R-SUM-006.
 func TestParseSumReadResponse_LengthOverflow(t *testing.T) {
-	conn := &Session{logger: getDefaultLogger()}
+	conn := &Session{logger: slog.Default()}
 	conn.client.Store(&Client{logger: conn.logger})
 
 	resp := craftSumReadResponse(
@@ -130,7 +130,7 @@ func TestParseSumReadResponse_PerItemOversize(t *testing.T) {
 // touches the network.
 // Validates: R-NOT-015.
 func TestBestEffortDeleteNotifications_Empty(t *testing.T) {
-	conn := &Session{logger: getDefaultLogger()}
+	conn := &Session{logger: slog.Default()}
 	conn.client.Store(&Client{logger: conn.logger})
 	got := conn.bestEffortDeleteNotifications(context.Background(), nil)
 	if got != 0 {
@@ -157,7 +157,7 @@ func TestSumReadOverflowGuard(t *testing.T) {
 	// capabilities zero-value (sumReadCmd == 0) routes the call through
 	// the probe path, which still computes totalReadLen first.
 	c := &Client{
-		logger: getDefaultLogger(),
+		logger: slog.Default(),
 		tx: &transport{
 			sendChannel:    make(chan []byte),
 			systemResponse: make(chan []byte),

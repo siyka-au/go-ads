@@ -1358,7 +1358,7 @@ func TestConnectedGeneration_OnlyAdvancesOnAConnectOrReconnect(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sess := &Session{
 				lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
-				logger:    getDefaultLogger(),
+				logger:    slog.Default(),
 			}
 			sess.lifecycle.state.value.Store(uint32(tt.from))
 			sess.enterConnected()
@@ -1632,7 +1632,7 @@ func TestWithHeartbeatRecovery_Modes(t *testing.T) {
 		})
 	}
 	t.Run("an unrecognised mode keeps the default", func(t *testing.T) {
-		sess := Session{logger: getDefaultLogger()}
+		sess := Session{logger: slog.Default()}
 		WithHeartbeatRecovery(HeartbeatRecovery(99))(&sess)
 		if got := sess.heartbeatRecoveryMode(); got != HeartbeatRecoveryImmediate {
 			t.Errorf("mode = %v, want immediate — a typo must not disable recovery", got)

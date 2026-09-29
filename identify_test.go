@@ -2,6 +2,7 @@ package ads
 
 import (
 	"encoding/binary"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -358,7 +359,7 @@ func TestDiscoverTarget_RefusesPortWithoutVersion(t *testing.T) {
 		t.Errorf("RuntimePort() = %d, want the documented 851 default", got)
 	}
 
-	sess := &Session{ip: addr.IP.String(), logger: getDefaultLogger()}
+	sess := &Session{ip: addr.IP.String(), logger: slog.Default()}
 	err = sess.applyDiscoveredIdentity(id)
 	if err == nil {
 		t.Fatal("discovery accepted a device that reported no version and left the port to be guessed")

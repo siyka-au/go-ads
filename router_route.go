@@ -10,6 +10,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
 // UDP route registration constants
@@ -59,7 +61,7 @@ func splitHostRouterPort(host string) (string, int, error) {
 // Security: Beckhoff's protocol sends credentials in cleartext and offers no
 // encrypted alternative. Trusted networks only.
 func AddRemoteRoute(remoteHost string, localNetID [6]byte, routeName string, computerName string, username string, password string) error {
-	return AddRemoteRouteWithLogger(getDefaultLogger(), remoteHost, localNetID, routeName, computerName, username, password)
+	return AddRemoteRouteWithLogger(slog.Default(), remoteHost, localNetID, routeName, computerName, username, password)
 }
 
 // AddRemoteRouteWithLogger is like AddRemoteRoute but accepts an explicit logger.
@@ -78,7 +80,7 @@ func AddRemoteRouteWithLogger(logger *slog.Logger, remoteHost string, localNetID
 // registration. nil keeps OS-default routing.
 func addRemoteRouteFrom(logger *slog.Logger, localIP net.IP, remoteHost string, port int, localNetID [6]byte, routeName string, computerName string, username string, password string) error {
 	if logger == nil {
-		logger = getDefaultLogger()
+		logger = slog.Default()
 	}
 	logger.Info("registering route",
 		"remoteHost", remoteHost,
@@ -272,7 +274,7 @@ func appendNull(data []byte) []byte {
 // echoes it per ADS InvokeID semantics and we reject mismatches as possible
 // UDP-spoofing attempts.
 func parseRouteResponse(logger *slog.Logger, data []byte, expectedInvokeID uint32) error {
-	logger.Debug("route response raw bytes", hexAttr("response", data), "length", len(data))
+	logger.Debug("route response raw bytes", logging.HexAttr("response", data), "length", len(data))
 
 	if len(data) < 24 {
 		return fmt.Errorf("route response too short: %d bytes", len(data))
@@ -311,7 +313,7 @@ func parseRouteResponse(logger *slog.Logger, data []byte, expectedInvokeID uint3
 		if offset+int(tlen) > len(data) {
 			return fmt.Errorf("route response truncated: tag %d data exceeds response", tid)
 		}
-		logger.Debug("route response tag", "tagID", tid, "tagLen", tlen, hexAttr("tagData", data[offset:offset+int(tlen)]))
+		logger.Debug("route response tag", "tagID", tid, "tagLen", tlen, logging.HexAttr("tagData", data[offset:offset+int(tlen)]))
 		if tid == tagResponseError && tlen >= 4 {
 			errCode := binary.LittleEndian.Uint32(data[offset:])
 			if errCode != 0 {

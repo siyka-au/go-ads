@@ -2,6 +2,7 @@ package ads
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -84,7 +85,7 @@ func TestReleaseCleanupCtx_NilLifecycleCtxDoesNotPanic(t *testing.T) {
 	sess := &Session{
 		lifecycle:     &sessionLifecycle{closedCh: make(chan struct{})},
 		notifications: &notificationManager{},
-		logger:        getDefaultLogger(),
+		logger:        slog.Default(),
 	}
 	expired, cancelExpired := context.WithCancel(context.Background())
 	cancelExpired()

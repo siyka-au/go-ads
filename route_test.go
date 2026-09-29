@@ -152,7 +152,7 @@ func TestParseRouteResponse_Success(t *testing.T) {
 	binary.LittleEndian.PutUint16(resp[26:], 4)
 	binary.LittleEndian.PutUint32(resp[28:], 0) // success
 
-	err := parseRouteResponse(getDefaultLogger(), resp, 0)
+	err := parseRouteResponse(slog.Default(), resp, 0)
 	if err != nil {
 		t.Errorf("expected success, got error: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestParseRouteResponse_ErrorCode(t *testing.T) {
 	binary.LittleEndian.PutUint16(resp[26:], 4)
 	binary.LittleEndian.PutUint32(resp[28:], 7) // error code 7
 
-	err := parseRouteResponse(getDefaultLogger(), resp, 0)
+	err := parseRouteResponse(slog.Default(), resp, 0)
 	if err == nil {
 		t.Error("expected error for non-zero error code")
 	}
@@ -176,7 +176,7 @@ func TestParseRouteResponse_ErrorCode(t *testing.T) {
 
 // Validates: R-ROUTE-001.
 func TestParseRouteResponse_TooShort(t *testing.T) {
-	err := parseRouteResponse(getDefaultLogger(), []byte{1, 2, 3}, 0)
+	err := parseRouteResponse(slog.Default(), []byte{1, 2, 3}, 0)
 	if err == nil {
 		t.Error("expected error for short response")
 	}
@@ -188,7 +188,7 @@ func TestParseRouteResponse_WrongCookie(t *testing.T) {
 	binary.LittleEndian.PutUint32(resp[0:], 0xDEADBEEF) // wrong cookie
 	binary.LittleEndian.PutUint32(resp[8:], 0x80000000|routeServiceAdd)
 
-	err := parseRouteResponse(getDefaultLogger(), resp, 0)
+	err := parseRouteResponse(slog.Default(), resp, 0)
 	if err == nil {
 		t.Error("expected error for wrong cookie")
 	}
@@ -200,14 +200,14 @@ func TestParseRouteResponse_WrongServiceID(t *testing.T) {
 	binary.LittleEndian.PutUint32(resp[0:], routeCookie)
 	binary.LittleEndian.PutUint32(resp[8:], 0x12345678) // wrong serviceId
 
-	err := parseRouteResponse(getDefaultLogger(), resp, 0)
+	err := parseRouteResponse(slog.Default(), resp, 0)
 	if err == nil {
 		t.Error("expected error for wrong serviceId")
 	}
 }
 
 // F-25: AddRemoteRouteWithLogger must not panic when logger is nil.
-// A nil logger must be replaced by getDefaultLogger() before first use.
+// A nil logger must be replaced by slog.Default() before first use.
 //
 // Aimed at a local responder on an ephemeral port, never at 48899: passing a
 // bare "127.0.0.1" made this test write a real routeServiceAdd datagram (source

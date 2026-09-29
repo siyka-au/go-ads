@@ -31,7 +31,7 @@ func newNotifTestSession() *Session {
 		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		lifecycle:     &sessionLifecycle{closedCh: make(chan struct{})},
-		logger:        getDefaultLogger(),
+		logger:        slog.Default(),
 	}
 }
 

@@ -213,7 +213,7 @@ func TestListen_TwoSequentialPackets(t *testing.T) {
 
 	conn := &Session{
 		tx:        &transport{connection: client, systemResponse: make(chan []byte, 2)},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		lifecycle: &sessionLifecycle{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -265,7 +265,7 @@ func TestListen_OversizePacketTriggersReconnect(t *testing.T) {
 
 	conn := &Session{
 		tx:        &transport{connection: client, systemResponse: make(chan []byte, 1)},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
 	}
 	// Mark closed via FSM (legacy closed flag removed in Phase 3.b).
@@ -348,7 +348,7 @@ func TestEncodePacket(t *testing.T) {
 	conn := &Session{
 		tx:        &transport{},
 		lifecycle: &sessionLifecycle{ctx: ctx},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		target: AMSAddress{
 			NetID: [6]byte{5, 154, 236, 19, 1, 1},
 			Port:  851,
@@ -433,7 +433,7 @@ func TestEncodePacket_EmptyData(t *testing.T) {
 	conn := &Session{
 		tx:        &transport{},
 		lifecycle: &sessionLifecycle{ctx: ctx},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		target:    AMSAddress{NetID: [6]byte{1, 2, 3, 4, 5, 6}, Port: 851},
 		source:    AMSAddress{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 10500},
 	}
@@ -471,7 +471,7 @@ func TestEncodePacket_AllCommands(t *testing.T) {
 	conn := &Session{
 		tx:        &transport{},
 		lifecycle: &sessionLifecycle{ctx: ctx},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		target:    target,
 		source:    source,
 	}
@@ -552,7 +552,7 @@ func TestHandleReceive_RoutesToCorrectChannel(t *testing.T) {
 	defer cancel()
 	conn := &Session{
 		lifecycle: &sessionLifecycle{ctx: ctx},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		tx:        &transport{activeRequests: make(map[uint32]chan amsReply)},
 	}
 	conn.client.Store(&Client{tx: conn.tx, logger: conn.logger, ctx: ctx})
@@ -597,7 +597,7 @@ func TestHandleReceive_UnknownInvokeID(t *testing.T) {
 	defer cancel()
 	conn := &Session{
 		lifecycle: &sessionLifecycle{ctx: ctx},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		tx:        &transport{activeRequests: make(map[uint32]chan amsReply)},
 	}
 	conn.client.Store(&Client{tx: conn.tx, logger: conn.logger, ctx: ctx})
@@ -643,28 +643,6 @@ func TestHandleReceive_TooShort(t *testing.T) {
 	}
 	if len(conn.tx.activeRequests) != 0 {
 		t.Errorf("short packet touched activeRequests: %d entries", len(conn.tx.activeRequests))
-	}
-}
-
-// ==========================================================================
-// hexAttr utility
-// ==========================================================================
-
-func TestHexAttr(t *testing.T) {
-	attr := hexAttr("data", []byte{0xDE, 0xAD, 0xBE, 0xEF})
-	if attr.Key != "data" {
-		t.Errorf("key = %q, want %q", attr.Key, "data")
-	}
-	s := attr.Value.String()
-	if !strings.Contains(s, "DEADBEEF") && !strings.Contains(s, "deadbeef") {
-		t.Errorf("hex string = %q, expected to contain DEADBEEF", s)
-	}
-}
-
-func TestHexAttr_Empty(t *testing.T) {
-	attr := hexAttr("empty", []byte{})
-	if attr.Key != "empty" {
-		t.Errorf("key = %q, want %q", attr.Key, "empty")
 	}
 }
 
@@ -1080,7 +1058,7 @@ func TestClient_OnDropFiresExactlyOnce(t *testing.T) {
 
 	var fires atomic.Int32
 	c := &Client{
-		logger: getDefaultLogger(),
+		logger: slog.Default(),
 		tx: &transport{
 			connection:     client,
 			sendChannel:    make(chan []byte),
@@ -1207,7 +1185,7 @@ func TestSetSource_TakesEffectOnTheWire(t *testing.T) {
 
 	c := &Client{
 		tx:     &transport{},
-		logger: getDefaultLogger(),
+		logger: slog.Default(),
 		target: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 		source: placeholder,
 	}
@@ -1444,7 +1422,7 @@ func TestHandleReceive_AMSErrorSurfacesAsItself(t *testing.T) {
 	defer cancel()
 	conn := &Session{
 		lifecycle: &sessionLifecycle{ctx: ctx},
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		tx:        &transport{activeRequests: make(map[uint32]chan amsReply)},
 	}
 	conn.client.Store(&Client{tx: conn.tx, logger: conn.logger, ctx: ctx})

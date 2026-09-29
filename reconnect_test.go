@@ -2,6 +2,7 @@ package ads
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,7 +25,7 @@ func newReconnectTestSession() *Session {
 		tx:            &transport{},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
-		logger:        getDefaultLogger(),
+		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:      make(chan struct{}),
 			autoReconnect: false,
@@ -215,7 +216,7 @@ func TestReconnectExhaustsMaxAttemptsTransitionsToClosed(t *testing.T) {
 		},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
-		logger:        getDefaultLogger(),
+		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:             make(chan struct{}),
 			autoReconnect:        false,
@@ -282,7 +283,7 @@ func TestReconnectExhaustConcurrentClose_NoPanic(t *testing.T) {
 			},
 			notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 			cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
-			logger:        getDefaultLogger(),
+			logger:        slog.Default(),
 			lifecycle: &sessionLifecycle{
 				closedCh:             make(chan struct{}),
 				autoReconnect:        false,
@@ -365,7 +366,7 @@ func TestReconnect_FlapDetection_AccumulatesAcrossCycles(t *testing.T) {
 		},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
-		logger:        getDefaultLogger(),
+		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:             make(chan struct{}),
 			autoReconnect:        false,
@@ -432,7 +433,7 @@ func TestReconnect_WipesActiveNotificationsBeforeRetryLoop(t *testing.T) {
 		},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
-		logger:        getDefaultLogger(),
+		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:             make(chan struct{}),
 			autoReconnect:        false,

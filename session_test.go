@@ -299,7 +299,7 @@ func TestSession_OnDisconnectFiresOnceOnConcurrentTrigger(t *testing.T) {
 		tx:            &transport{},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
-		logger:        getDefaultLogger(),
+		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:      make(chan struct{}),
 			autoReconnect: false,
@@ -350,7 +350,7 @@ func TestSession_OnDisconnectFiresOnceOnConcurrentTrigger(t *testing.T) {
 func TestSession_HandleStaleDetection_NoMatch(t *testing.T) {
 	sess := &Session{
 		versionStrategy: SymbolVersionIgnore,
-		logger:          getDefaultLogger(),
+		logger:          slog.Default(),
 	}
 	stale, reason := sess.handleStaleDetection(ReturnCodeNoErrors)
 	if stale || reason != "" {
@@ -368,7 +368,7 @@ func TestSession_HandleStaleDetection_Ignore_FiresCallback(t *testing.T) {
 	sess := &Session{
 		versionStrategy: SymbolVersionIgnore,
 		versionCallback: func(r Reason) { cbReason <- r },
-		logger:          getDefaultLogger(),
+		logger:          slog.Default(),
 	}
 
 	stale, reason := sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
@@ -394,7 +394,7 @@ func TestSession_HandleStaleDetection_NilCallbackOK(t *testing.T) {
 	sess := &Session{
 		versionStrategy: SymbolVersionIgnore,
 		versionCallback: nil,
-		logger:          getDefaultLogger(),
+		logger:          slog.Default(),
 	}
 	stale, _ := sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
 	if !stale {
@@ -520,7 +520,7 @@ func TestSession_MarkAllHandlesStale(t *testing.T) {
 // TestSession_MarkAllHandlesStale_NilNotificationsSafe validates the
 // nil-guard for unit-test bare Session{} construction.
 func TestSession_MarkAllHandlesStale_NilNotificationsSafe(t *testing.T) {
-	sess := &Session{logger: getDefaultLogger()}
+	sess := &Session{logger: slog.Default()}
 	// Must not panic even without notifications manager.
 	sess.markAllHandlesStale(ReasonReloadInProgress)
 }

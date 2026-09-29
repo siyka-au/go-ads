@@ -73,7 +73,7 @@ func newDialableTestSession(t *testing.T, host string, port int, maxAttempts int
 		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
 		// Production always has one; ensureRoute dereferences it unconditionally.
 		route:          &routeManager{},
-		logger:         getDefaultLogger(),
+		logger:         slog.Default(),
 		requestTimeout: 500 * time.Millisecond,
 		lifecycle: &sessionLifecycle{
 			closedCh:             make(chan struct{}),
@@ -1008,7 +1008,7 @@ func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 // is not confined to internal timing.
 func TestTrackGoroutine_RefusesAfterClose(t *testing.T) {
 	sess := &Session{
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
 	}
 
@@ -1153,7 +1153,7 @@ func TestReconnect_RuntimeNotRunningDoesNotBurnAttempts(t *testing.T) {
 // once a connection arrives, which on a dead PLC never happens.
 func TestPeerListener_NotBoundAfterStop(t *testing.T) {
 	sess := &Session{
-		logger:    getDefaultLogger(),
+		logger:    slog.Default(),
 		lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
 	}
 	sess.peerListenPort = freeLocalPort(t)

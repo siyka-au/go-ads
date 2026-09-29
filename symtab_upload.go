@@ -8,6 +8,8 @@ import (
 	"math"
 	"slices"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
 // datatypeFlagBitValues marks a datatype entry whose Offs and Size count bits,
@@ -159,7 +161,7 @@ func (data *SymbolUploadDataType) addOffset(parent *symbol, datatypes map[string
 func (data *SymbolUploadDataType) addOffsetDepth(parent *symbol, datatypes map[string]SymbolUploadDataType, group uint32, depth int, lg *slog.Logger) (children map[string]*symbol) {
 	children = map[string]*symbol{}
 	if depth >= addOffsetMaxDepth {
-		logOr(lg).Warn("addOffset hit depth cap; possible datatype self-cycle in PLC response",
+		logging.Or(lg).Warn("addOffset hit depth cap; possible datatype self-cycle in PLC response",
 			"parent", parent.FullName,
 			"datatype", data.DataType,
 			"max_depth", addOffsetMaxDepth)
@@ -250,13 +252,13 @@ func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logg
 
 	if totalSize < 48 {
 		err = fmt.Errorf("%s - wrong size < 48 bytes", parent)
-		logOr(lg).Error("error during binary read", "error", err, hexAttr("data", data.Bytes()))
+		logging.Or(lg).Error("error during binary read", "error", err, logging.HexAttr("data", data.Bytes()))
 		return
 	}
 
 	err = binary.Read(data, binary.LittleEndian, &result)
 	if err != nil {
-		logOr(lg).Error("error during binary read", "error", err)
+		logging.Or(lg).Error("error during binary read", "error", err)
 		return
 	}
 	name := make([]byte, result.NameLength)
@@ -265,19 +267,19 @@ func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logg
 
 	err = binary.Read(data, binary.LittleEndian, name)
 	if err != nil {
-		logOr(lg).Error("error during binary read", "error", err)
+		logging.Or(lg).Error("error during binary read", "error", err)
 		return
 	}
 	data.Next(1)
 	err = binary.Read(data, binary.LittleEndian, dt)
 	if err != nil {
-		logOr(lg).Error("error during binary read", "error", err)
+		logging.Or(lg).Error("error during binary read", "error", err)
 		return
 	}
 	data.Next(1)
 	err = binary.Read(data, binary.LittleEndian, comment)
 	if err != nil {
-		logOr(lg).Error("error during binary read", "error", err)
+		logging.Or(lg).Error("error during binary read", "error", err)
 		return
 	}
 	data.Next(1)
@@ -358,14 +360,14 @@ func makeArrayChildren(levels []datatypeArrayInfo, dt string, size uint32, lg *s
 	// (1) Cap Elements at a sanity limit to prevent DoS via huge map allocation.
 	// (2) Reject when the upper bound would pass DINT's range.
 	if level.Elements > maxArrayElementsPerLevel {
-		logOr(lg).Error("makeArrayChildren: array Elements exceeds sanity cap, refusing to allocate",
+		logging.Or(lg).Error("makeArrayChildren: array Elements exceeds sanity cap, refusing to allocate",
 			"declared_elements", level.Elements,
 			"cap", maxArrayElementsPerLevel,
 			"datatype", dt)
 		return
 	}
 	if lbound+int64(level.Elements)-1 > math.MaxInt32 {
-		logOr(lg).Error("makeArrayChildren: LBound + Elements overflows DINT, refusing",
+		logging.Or(lg).Error("makeArrayChildren: LBound + Elements overflows DINT, refusing",
 			"lbound", lbound,
 			"elements", level.Elements,
 			"datatype", dt)
