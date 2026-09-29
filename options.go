@@ -91,7 +91,8 @@ func WithLocalMode() Option {
 // WithRoute registers an AMS route during Connect, over UDP 48899 once the source
 // NetID is derived and before any ADS command. Connect and Reconnect probe first
 // and register only if that fails; WithForceRouteRegistration always registers.
-// The route points back at this host's outbound IP, or at WithHostIP. When the
+// The route points back at this host's outbound IP, or at WithHostIP, and an
+// empty routeName names it after that address. When the
 // process runs in a container the session logs that the address may not be one
 // the PLC can reach.
 //

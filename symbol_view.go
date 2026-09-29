@@ -46,7 +46,7 @@ type SymbolView struct {
 	Parsed      bool  // true if Value has been decoded at least once at snapshot time
 	IsRoot      bool  // true if this symbol has no parent (top-level program/global var)
 	BitMember   bool  // a BIT member of a struct: Offset and Length count bits
-	Value       any   // the cached value as its Go type (see value.go); a copy
+	Value       any   // the cached value as its Go type (see internal/symtab/value.go); a copy
 
 	conn *Session
 }

@@ -36,6 +36,7 @@ fmt:
 vet:
 	go vet ./...
 	go vet -tags integration ./...
+	go vet -tags symbol_version_hardware ./...
 
 test:
 	go test -v -timeout 600s ./...
@@ -52,7 +53,7 @@ build:
 	go build ./...
 
 build-examples:
-	cd examples/simple && go build ./...
+	cd examples/cli && go build ./...
 
 test-docker-tc3:
 	docker/run-tests.sh .env.integration.224
@@ -73,12 +74,12 @@ hardware-parallel:
 # Native hardware integration tests (run on host, not Docker)
 # Requires PLC reachable from host network. macOS may prompt for firewall on first run.
 test-native-tc3:
-	set -a && . ./.env.integration.224 && set +a && go test -v -tags integration -timeout 10m -run 'TestIntegration' .
+	set -a && . ./.env.integration.224 && set +a && go test -v -tags integration -timeout 10m -run 'TestIntegration' ./integration/
 
 test-native-tc2:
-	set -a && . ./.env.integration.70 && set +a && go test -v -tags integration -timeout 10m -run 'TestIntegration' .
+	set -a && . ./.env.integration.70 && set +a && go test -v -tags integration -timeout 10m -run 'TestIntegration' ./integration/
 
 clean:
 	rm -f coverage.out coverage.html
-	rm -f examples/simple/simple examples/simple/go-ads-cli
+	rm -f examples/cli/cli examples/cli/cli.exe
 	rm -rf logs/

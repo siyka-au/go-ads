@@ -80,8 +80,8 @@ func buildNotificationPacketMultiSample(stamps []struct {
 func testEndpoint() Endpoint {
 	return Endpoint{
 		Host:   "127.0.0.1",
-		Port: 48898,
-		Target:  ams.Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
+		Port:   48898,
+		Target: ams.Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
 	}
 }
 

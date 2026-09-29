@@ -556,6 +556,12 @@ func (sess *Session) AddRoute(ctx context.Context, routeName, username, password
 	if hostIP == "" {
 		hostIP = fmt.Sprintf("%d.%d.%d.%d", netID[0], netID[1], netID[2], netID[3])
 	}
+	if routeName == "" {
+		// The name is only a label in the PLC's route table (routes match by NetID),
+		// but a fixed one collides when this host's address changes and a stale
+		// entry keeps the old name. The address it points at is unique.
+		routeName = hostIP
+	}
 	return router.AddRoute(ctx, sess.ip, router.Route{
 		Name:         routeName,
 		LocalNetID:   netID,

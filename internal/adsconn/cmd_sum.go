@@ -13,7 +13,7 @@ import (
 // Batched ADS sum commands: SumRead, SumWrite, SumAddDeviceNotification,
 // SumDeleteDeviceNotification. Each falls back to individual commands when
 // the PLC does not support the sum variant. Capability state is tracked via
-// the capabilities type on *Client (see capabilities.go).
+// the Capabilities type on *Conn (see capabilities.go).
 
 // sumCmdSpec describes a single sum-command's protocol contract for use
 // with executeSumCommand. SumAddDeviceNotification and SumDeleteDeviceNotification
@@ -173,7 +173,7 @@ func (c *Conn) sumReadExec(ctx context.Context, group ams.Group, count uint32, r
 //
 // Note: The official Beckhoff PDF shows 0xF083 with a separate error array (like 0xF080),
 // but empirical testing on both TwinCAT 2 and TwinCAT 3 confirms 0xF083 returns the
-// interleaved format identical to 0xF084. See PROTOCOL.md for details.
+// interleaved format identical to 0xF084. See docs/protocol.md for details.
 func (c *Conn) parseSumReadResponse(resp []byte, n int, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
 	if len(resp) < n*8 {
 		return nil, fmt.Errorf("SumRead response too short: got %d bytes, expected at least %d", len(resp), n*8)

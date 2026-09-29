@@ -57,26 +57,44 @@ var writeEdges = map[string][]any{
 	"nLintVar":  {int64(math.MinInt64), int64(-1), int64(0), int64(1<<53 + 1), int64(math.MaxInt64)},
 	"nUlintVar": {uint64(0), uint64(1), uint64(1<<53 + 1), uint64(1 << 63), uint64(math.MaxUint64)},
 	"nLwordVar": {uint64(0), uint64(0xCAFEBABEDEADBEEF), uint64(math.MaxUint64)},
-	"fRealVar": {float32(0), float32(math.Copysign(0, -1)), float32(1.5), float32(-3.14),
+	"fRealVar": {
+		float32(0), float32(math.Copysign(0, -1)), float32(1.5), float32(-3.14),
 		float32(math.MaxFloat32), float32(-math.MaxFloat32), float32(math.SmallestNonzeroFloat32),
-		float32(1.1754944e-38), float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN())},
-	"fLrealVar": {0.0, math.Copysign(0, -1), 0.1, -2.718281828459045, math.MaxFloat64, -math.MaxFloat64,
-		math.SmallestNonzeroFloat64, 2.2250738585072014e-308, math.Inf(1), math.Inf(-1), math.NaN()},
-	"tTimeVar": {time.Duration(0), time.Millisecond, 24 * time.Hour, 25*time.Hour + time.Minute + time.Second + time.Millisecond,
-		time.Duration(math.MaxUint32) * time.Millisecond},
-	"tdTimeOfDayVar": {civil.Time{}, civil.Time{Nanosecond: 1_000_000}, civil.Time{Hour: 12},
-		civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_000_000}},
+		float32(1.1754944e-38), float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN()),
+	},
+	"fLrealVar": {
+		0.0, math.Copysign(0, -1), 0.1, -2.718281828459045, math.MaxFloat64, -math.MaxFloat64,
+		math.SmallestNonzeroFloat64, 2.2250738585072014e-308, math.Inf(1), math.Inf(-1), math.NaN(),
+	},
+	"tTimeVar": {
+		time.Duration(0), time.Millisecond, 24 * time.Hour, 25*time.Hour + time.Minute + time.Second + time.Millisecond,
+		time.Duration(math.MaxUint32) * time.Millisecond,
+	},
+	"tdTimeOfDayVar": {
+		civil.Time{},
+		civil.Time{Nanosecond: 1_000_000},
+		civil.Time{Hour: 12},
+		civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_000_000},
+	},
 	"dDateVar": {date(1970, 1, 1), date(2000, 2, 29), date(2024, 2, 29), date(2038, 1, 19), date(2038, 1, 20), date(2106, 2, 7)},
-	"dtDateTimeVar": {dateTime(1970, 1, 1, 0, 0, 0, 0), dateTime(2024, 2, 29, 23, 59, 59, 0),
-		dateTime(2038, 1, 19, 3, 14, 7, 0), dateTime(2038, 1, 19, 3, 14, 8, 0), dateTime(2106, 2, 7, 6, 28, 15, 0)},
+	"dtDateTimeVar": {
+		dateTime(1970, 1, 1, 0, 0, 0, 0), dateTime(2024, 2, 29, 23, 59, 59, 0),
+		dateTime(2038, 1, 19, 3, 14, 7, 0), dateTime(2038, 1, 19, 3, 14, 8, 0), dateTime(2106, 2, 7, 6, 28, 15, 0),
+	},
 	"tLtimeVar": {time.Duration(0), time.Nanosecond, 999 * time.Nanosecond, 25 * time.Hour, time.Duration(math.MaxInt64)},
-	"tdLTimeOfDayVar": {civil.Time{}, civil.Time{Nanosecond: 1}, civil.Time{Hour: 12, Minute: 34, Second: 56, Nanosecond: 789_012_345},
-		civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_999_999}},
+	"tdLTimeOfDayVar": {
+		civil.Time{},
+		civil.Time{Nanosecond: 1},
+		civil.Time{Hour: 12, Minute: 34, Second: 56, Nanosecond: 789_012_345},
+		civil.Time{Hour: 23, Minute: 59, Second: 59, Nanosecond: 999_999_999},
+	},
 	// LDATE's first whole day is 1677-09-22: the 21st's midnight is before
 	// its earliest instant, 1677-09-21T00:12:43.145224192.
 	"dLDateVar": {date(1677, 9, 22), date(1900, 1, 1), date(1969, 12, 31), date(1970, 1, 1), date(2024, 2, 29), date(2262, 4, 11)},
-	"dtLDateTimeVar": {dateTime(1677, 9, 21, 0, 12, 43, 145_224_192), dateTime(1969, 12, 31, 23, 59, 59, 999_999_999),
-		dateTime(1970, 1, 1, 0, 0, 0, 0), dateTime(2024, 2, 29, 12, 34, 56, 789_012_345), dateTime(2262, 4, 11, 23, 47, 16, 854_775_807)},
+	"dtLDateTimeVar": {
+		dateTime(1677, 9, 21, 0, 12, 43, 145_224_192), dateTime(1969, 12, 31, 23, 59, 59, 999_999_999),
+		dateTime(1970, 1, 1, 0, 0, 0, 0), dateTime(2024, 2, 29, 12, 34, 56, 789_012_345), dateTime(2262, 4, 11, 23, 47, 16, 854_775_807),
+	},
 	"sStringVar": {"", "a", "S=1", printableASCII(), strings.Repeat("x", 255), strings.Repeat("é", 255), "Grüße ÄÖÜ ñ © ¿ ÿ"},
 }
 
@@ -97,8 +115,10 @@ var writeRejects = map[string][]any{
 	"tTimeVar":       {-time.Millisecond, time.Microsecond, time.Duration(math.MaxUint32+1) * time.Millisecond, uint32(5)},
 	"tdTimeOfDayVar": {civil.Time{Hour: 24}, civil.Time{Nanosecond: 1}, time.Hour},
 	"dDateVar":       {date(1969, 12, 31), date(2106, 2, 8), date(2024, 2, 30), dateTime(2024, 1, 1, 0, 0, 0, 0)},
-	"dtDateTimeVar": {dateTime(1969, 12, 31, 23, 59, 59, 0), dateTime(2106, 2, 7, 6, 28, 16, 0),
-		dateTime(2024, 1, 1, 0, 0, 0, 1), date(2024, 1, 1)},
+	"dtDateTimeVar": {
+		dateTime(1969, 12, 31, 23, 59, 59, 0), dateTime(2106, 2, 7, 6, 28, 16, 0),
+		dateTime(2024, 1, 1, 0, 0, 0, 1), date(2024, 1, 1),
+	},
 	"tLtimeVar":       {-time.Nanosecond},
 	"tdLTimeOfDayVar": {civil.Time{Hour: 24}, civil.Time{Minute: 60}},
 	"dLDateVar":       {date(1677, 9, 21), date(2262, 4, 12)},

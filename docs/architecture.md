@@ -1,8 +1,8 @@
-# go-ads Implementation Details
+# go-ads architecture
 
-Library-specific implementation details, fallback strategies, and API reference for the go-ads library. For protocol-level documentation, see [PROTOCOL.md](PROTOCOL.md).
+Library-specific implementation details, fallback strategies, and API reference for the go-ads library. For protocol-level documentation, see [protocol.md](protocol.md).
 
-This document is the source-of-truth for architectural detail. godoc comments stay short and point here; this file holds the longer explanation. Historical behavioral specs for the v2.0 → v2.2 redesign live in [`docs/archive/specs/`](docs/archive/specs/) — kept for design-rationale reference, not maintained for v2.2.1+.
+This document is the source-of-truth for architectural detail. godoc comments stay short and point here; this file holds the longer explanation. Historical behavioral specs for the v2.0 → v2.2 redesign live in [`archive/specs/`](archive/specs/) — kept for design-rationale reference, not maintained for v2.2.1+.
 
 ## Table of Contents
 
@@ -23,71 +23,73 @@ This document is the source-of-truth for architectural detail. godoc comments st
 
 ## Architecture
 
-Post-Phase-5 layout: `Session` is a managed façade that composes sub-types; `Client` is the raw RPC layer exposed as an escape hatch for power users.
+The module is split into packages along its layers. Import edges only point
+down, and nothing imports the root package.
 
 ```text
-                  Application
-                       │
-                       ▼
-  ┌─────────────────────────────────────────────┐
-  │ Session (managed)                           │
-  │   - symbol cache + datatype cache           │
-  │   - notification manager + dispatch         │
-  │   - lifecycle FSM + reconnect manager       │
-  │   - online-change strategy dispatcher       │
-  │   - route registration                      │
-  └────────────────┬────────────────────────────┘
-                   │ composes
-                   ▼
-  ┌─────────────────────────────────────────────┐
-  │ Client (raw)                                │
-  │   - sendRequest, listen, transmit workers   │
-  │   - capability probe state (3-state atomic) │
-  │   - transport (TCP socket)                  │
-  └────────────────┬────────────────────────────┘
-                   │
-                   ▼
-              ams.go (AMS/TCP encode/decode)
-                   │
-                   ▼
-              transport (net.Conn)
+                     Application
+                          │
+          ┌───────────────┼───────────────────────┐
+          ▼               ▼                       ▼
+  ads (root)         adsclient                 router
+  Session            Client (public,           Identify / AddRoute
+  - symbol cache     thin wrapper)             (UDP 48899)
+  - subscriptions         │                       │
+  - reconnect FSM         │                       │
+  - online change         │                       │
+  - route activation      │                       │
+          │               │                       │
+          ▼               ▼                       │
+     internal/adsconn  Conn + Transport           │
+     (socket, framing, workers, every command)    │
+          │                                       │
+          ▼                                       ▼
+     internal/symtab                             ams
+     (symbol table, value codec)   (protocol vocabulary, header codec; no I/O)
 ```
 
-### File layout
+| Package | Role |
+|---|---|
+| `ams` | Addresses, ports, commands, index groups, return codes, states, data types, `TransMode`, the AMS header codec. No I/O, no logging. |
+| `router` | The AMS router's UDP service: `Identify` a device, `AddRoute` for this host. Context-aware; no dependency on the connection. |
+| `internal/adsconn` | `Conn`: one TCP connection, invoke-ID multiplexing, listen/transmit/receive workers, every ADS command, sum-command capability probing. `Transport`: the socket, queues and source address a Session keeps across redials. |
+| `adsclient` | The public raw client: forwards to a `Conn`, with typed index groups and `time.Time` notification timestamps. `Session.Client()` returns one bound to the session's current connection. |
+| `internal/symtab` | The symbol and data type table parsers, the `Symbol` tree, and `Decode`/`Encode` between a symbol's bytes and its Go value. |
+| root `ads` | `Session`: the cache and its locking, `SymbolView`, subscriptions and their delivery, reconnect, heartbeat, online-change handling, runtime-state watch, route activation. |
+| `internal/logging`, `internal/fakeplc`, `internal/testlog`, `internal/testproxy` | Log helpers; test fakes (a scriptable PLC and AMS router), a recording slog handler, and a TCP/UDP fault proxy for the hardware tests. |
+| `integration` | Hardware tests. They import only the public API. |
+
+### Root package file layout
 
 | File | Role |
 |------|------|
-| `session.go` | `Session` façade + reload/stale dispatcher + reconnect orchestration |
-| `session_fsm.go` | `SessionState` enum, `sessionFSM` struct (atomic.Uint32 state, atomic.Uint64 epoch) |
-| `session_options.go` | `SessionOption` functional options |
-| `client.go` | Raw `Client`: Dial, sendRequest, listen, lifecycle, notification dispatch |
-| `transport.go` | TCP socket + dial helpers |
-| `capabilities.go` | Per-command sum-capability state (3-state atomic) |
-| `ams.go` | AMS/TCP packet encode/decode |
-| `route.go` | UDP route registration (port 48899) |
-| `defs.go` | Types, enums, error codes, `Reason` constants, `SymbolVersionStrategy` |
-| `logger.go` | Logger plumbing + helpers |
-| `cmd_simple.go` | Single Read/Write/WriteRead/ReadState/ReadDeviceInfo on Client |
-| `cmd_sum.go` | SumRead/SumWrite/SumAddDeviceNotification/SumDeleteDeviceNotification |
-| `cmd_notification.go` | AddDeviceNotification + listener dispatch |
-| `symbol_access.go` | Session.ReadValue/WriteValue/ReadValues/WriteValues (handles caches + online-change detection) |
-| `symbol_discovery.go` | LoadSymbols / LoadSymbolsSlow / LoadSymbolList / LoadDataTypes / RefreshSymbols |
-| `symbol_codec.go` | Symbol.parse / serialize (typed value codec) |
-| `symbols.go` | `Symbol` struct + `symbolCache` primitives |
-| `notification_api.go` | `Update`, AddSymbolNotification(s), DeleteDeviceNotification, `notificationManager` |
-| `browse.go` | BrowseSymbols |
-| `process_image.go` | Raw process-image read/write helpers |
+| `session.go` | `Session` struct, `Endpoint`, `NewSession` |
+| `options.go` | `Option` functional options |
+| `info.go` | `State`, `Done`/`Err`, `Info`, `Subscriptions`, `Client` |
+| `fsm.go`, `lifecycle.go` | `SessionState` FSM, goroutine tracking, flap accounting |
+| `connect.go` | `Connect`, dial, `tearDownAndReset`, wiring a `Conn` to the transport |
+| `target.go` | Target discovery and `VerifyTarget` |
+| `route.go` | Route probing, activation and registration; `routeManager` |
+| `reconnect.go`, `close.go` | Reconnect loop with backoff and cooldown; `Close` |
+| `peer.go` | Listening for devices that answer on a connection they open to us |
+| `stale.go` | Stale-cache detection and the online-change strategies |
+| `runtime_state.go` | Polling the system service for RUN/CONFIG |
+| `cache.go`, `discovery.go`, `symbol_view.go`, `browse.go` | Symbol cache, `LoadSymbols`/`Symbol`/`Symbols`, `SymbolView`, `Browse` |
+| `access.go`, `batch_error.go` | `ReadValue(s)`/`WriteValue(s)`, `BatchError` |
+| `notify.go`, `subscribe.go`, `dispatch.go`, `unsubscribe.go`, `resubscribe.go`, `orphan.go`, `heartbeat.go` | Subscriptions: intent and registration, delivery, removal, re-subscribe after reconnect, orphan cleanup, silent-death detection |
+| `errors.go`, `logger.go`, `doc.go` | Sentinels, `LevelTrace`, package doc |
 
-### Composition
+### The Session↔Conn seam
 
-`Session` (session.go) embeds and owns:
-- `*Client` — raw RPC layer (sess.client)
-- `*symbolCache` — symbols + datatypes + on-demand tracking (sess.cache)
-- `*notificationManager` — active notifications + configs (sess.notifications)
-- `*sessionLifecycle` — FSM, reconnect state, epoch counter (sess.lifecycle)
-- `routeConfig` — route name/user/pass + host IP (sess.route)
+A Session keeps one `adsconn.Transport` for its whole life and wires a fresh
+`adsconn.Conn` to it on every (re)dial (`publishWiredClient`). It drives the Conn
+only through methods exported inside the module: `New`/`Start`, `Release`
+(fail waiting requests, close adopted peer connections), `Wait`, `Err`,
+`BeginHandshake`/`EndHandshake`, `LocalHandshake`. The source AMS address lives
+once, on the Transport, so a local-mode handshake that learns the real address
+after the Conn is running updates every later request.
 
-Receiver naming: `sess *Session`, `c *Client`. Callers construct a Session via `NewSession(...)`.
+Receiver naming: `sess *Session`, `c *Conn`. Callers construct a Session via `NewSession(...)`.
 
 ---
 
@@ -136,7 +138,7 @@ When `tx.disconnected` is set, `sendRequest` returns `ErrDisconnected` immediate
 
 ## Sum Command Fallback Strategy
 
-Per Beckhoff: try newest commands first, fall back on "not supported" errors. The library probes once per Connect cycle and caches the result in per-command 3-state atomics defined in `capabilities.go`.
+Per Beckhoff: try newest commands first, fall back on "not supported" errors. The library probes once per Connect cycle and caches the result in per-command 3-state atomics defined in `internal/adsconn/capabilities.go`.
 
 ### Capability state (3-state atomic)
 
@@ -241,11 +243,11 @@ sess.LoadSymbolsSlow(ads.SlowDiscoveryConfig{
 })
 ```
 
-Falls back to a single-request download if the PLC doesn't support offset-based chunked reads (gated by `chunkedDownloadState` in `capabilities.go`).
+Falls back to a single-request download if the PLC doesn't support offset-based chunked reads (gated by `chunkedDownloadState` in `internal/adsconn/capabilities.go`).
 
 ### On-demand resolution
 
-When discovery mode is None, `GetSymbol(name)` and the `ReadValue`/`WriteValue` path resolve symbols lazily via `GetSymbolInfoByName` + `GetHandleByName` and add them to `cache.onDemandSymbols`. On reconnect, only on-demand symbols are re-resolved (graceful skip on missing — see [Reconnection](#reconnection)).
+When discovery mode is None, `Symbol(name)` and the `ReadValue`/`WriteValue` path resolve symbols lazily via `GetSymbolInfoByName` + `GetHandleByName` and add them to `cache.onDemandSymbols`. On reconnect, only on-demand symbols are re-resolved (graceful skip on missing — see [Reconnection](#reconnection)).
 
 ### Symbol handles
 
@@ -292,7 +294,7 @@ Six return codes trigger the dispatcher:
 
 `Session.handleStaleDetection(rc)` fires from:
 - `ReadValue` / `WriteValue` (and the `ReadValues` / `WriteValues` Sum paths)
-- `AddSymbolNotifications`
+- `SubscribeAll`
 - The notification listener, on receipt of a 0-byte terminal sample (PLC sends this when a subscribed handle is invalidated)
 - `Symbol.parse`, on Length-vs-payload mismatch
 
@@ -333,7 +335,7 @@ Constructed → Connecting → Connected
                             Closed ←──────────── Connected (back to top)
 ```
 
-State is `atomic.Uint32` inside `sessionFSM`; transitions go through `CompareAndSwap` with an allow-list (`session_fsm.go`). `Closed` is terminal.
+State is `atomic.Uint32` inside `sessionFSM`; transitions go through `CompareAndSwap` with an allow-list (`fsm.go`). `Closed` is terminal.
 
 ### Two "down" signals (intentional)
 
@@ -439,7 +441,7 @@ credentials. Requires `WithRoute(...)`.
 #### `ondrop` suppression during Connect
 
 During `ensureRouteOnConnect` the `ondrop` callback on the active
-`*Client` is disarmed (set to nil) and restored on function exit via
+the `Conn`'s drop callback is disarmed (set to nil) and restored on function exit via
 `defer`. Reason: a probe RST during the probe-RPC call would otherwise
 fire `sess.triggerReconnect` via the listen goroutine, spawning a
 concurrent Reconnect goroutine that competes with our own
@@ -461,7 +463,7 @@ SHOULD make the route name unique per source IP (e.g.,
 `go-ads-{source-ip}`). The integration test helper does this
 automatically when `ADS_HOST_IP` is set.
 
-> Security note: route credentials passed via `WithRoute` / `AddRemoteRoute` are transmitted in plaintext over UDP. Avoid hardcoding; load from env or secret store.
+> Security note: route credentials passed via `WithRoute` / `router.AddRoute` are transmitted in plaintext over UDP. Avoid hardcoding; load from env or secret store.
 
 ### Stale-handle retry (epoch-based)
 
@@ -491,7 +493,7 @@ is NOT in `activeNotifications`, the library schedules an asynchronous
 best-effort Delete RPC against that handle. Catches handles leaked by
 prior session/process crashes that the PLC is still firing for.
 
-Guard rails (`cmd_notification.go`):
+Guard rails (`orphan.go`):
 
 - **Lifecycle guards**: skip if Session is closing or actively reconnecting.
 - **Throttle**: per-handle 60-second window prevents repeated Delete
@@ -505,7 +507,7 @@ Guard rails (`cmd_notification.go`):
   on each invocation.
 - **Race re-check**: under `notifications.lock` immediately before
   firing the RPC, re-check that the handle is still NOT in
-  `activeNotifications` — a concurrent `AddSymbolNotification` may
+  `activeNotifications` — a concurrent `Subscribe` may
   legitimately have received this handle from the PLC between
   scheduling and firing. Skip the Delete if so.
 - **ctx snapshot**: `lifecycle.ctx` read under `ctxMu.RLock` because
@@ -571,7 +573,7 @@ The library provides three escape hatches:
 - `WithSkipRouteRegistration()` — explicit opt-out from AddRoute/probe.
   Required when callers manage routes externally (TC3 UI pre-registered
   routes, or a local AMS router daemon front-ends the connection).
-- `WithLocalAMS(AMSAddress{NetID, Port})` — override the source AMS
+- `WithLocalAddress(ams.Address{NetID, Port})` — override the source AMS
   identity in outgoing ADS headers. NetID defaults to auto-derivation
   from local TCP source IP; Port defaults to a random value in IANA
   dynamic range 32768-49151 (each Session = distinct AMS source
@@ -587,19 +589,23 @@ TCP endpoint; the router multiplexes a single PLC connection.
 
 ## API Reference
 
-### Session lifecycle (7)
+### Session lifecycle
 
 | Method | Description |
 |--------|-------------|
-| `NewSession(ctx, AMSEndpoint{IP, Port, AMS}, opts...)` | Construct Session with options (no I/O) |
+| `NewSession(ctx, Endpoint{Host, Port, Target, RouterPort}, opts...)` | Construct Session with options (no I/O) |
 | `Connect(ctx)` | TCP dial + start goroutines + probe/register route. Local-mode via `WithLocalMode()` option |
 | `Close() error` | Delete notifications, release handles, close TCP, terminal Closed. Implements `io.Closer` |
 | `Reconnect(ctx)` | Re-establish after failure (auto or manual) |
 | `AddRoute(ctx, routeName, username, password)` | Register an AMS route over UDP after construction |
 | `IsDisconnected()` | True while transport is down (auto-reconnect may resolve) |
 | `IsClosed()` | True after `Close()` or a terminal FSM transition (e.g. `SymbolVersionClose`) — Session cannot be reused |
+| `Done()` / `Err()` | Channel closed when the session ends for good; `Err` says whether `Close` (`ErrClosed`) or a reconnect give-up ended it |
+| `State()` / `Info()` | FSM state; a snapshot of target, local AMS and TCP addresses, peer listener and runtime state (no I/O) |
+| `VerifyTarget(ctx)` | Compare the target NetID with the device's own, as `Connect` does under `WithTargetCheck` |
+| `Client()` | An `adsclient.Client` over the session's own connection |
 
-### Reading and writing (4)
+### Reading and writing
 
 | Method | Description |
 |--------|-------------|
@@ -608,16 +614,17 @@ TCP endpoint; the router multiplexes a single PLC connection.
 | `ReadValues(ctx, names)` | Batch read via SumRead with fallback |
 | `WriteValues(ctx, values)` | Batch write via SumWrite with fallback |
 
-### Notifications (4)
+### Notifications
 
 | Method | Description |
 |--------|-------------|
-| `AddSymbolNotification(ctx, name, maxDelay, cycleTime, mode, ch)` | Subscribe single symbol |
-| `AddSymbolNotifications(ctx, configs, ch)` | Subscribe many (uses SumAdd internally) |
-| `DeleteDeviceNotification(ctx, handle)` | Unsubscribe one |
-| `SumDeleteDeviceNotification(ctx, handles)` | Unsubscribe many |
+| `Subscribe(ctx, name, maxDelay, cycleTime, mode, ch)` | Subscribe single symbol |
+| `SubscribeAll(ctx, configs, ch)` | Subscribe many (uses SumAdd internally); each `SubscribeResult` carries the symbol's `SymbolView` and one `Err` |
+| `Unsubscribe(ctx, handle)` | Unsubscribe one |
+| `UnsubscribeAll(ctx, handles)` | Unsubscribe many |
+| `Subscriptions()` | What the session keeps alive, with each entry's current handle |
 
-### Symbol discovery (8)
+### Symbol discovery
 
 | Method | Description |
 |--------|-------------|
@@ -625,13 +632,13 @@ TCP endpoint; the router multiplexes a single PLC connection.
 | `LoadSymbolsSlow(ctx, cfg)` | Full discovery in chunks (PLC-friendly) |
 | `LoadSymbolList(ctx, cfg)` | Symbol names only |
 | `LoadDataTypes(ctx, cfg)` | Datatype definitions only |
-| `BrowseSymbols(path)` | Navigate symbol hierarchy |
-| `ListSymbols()` | Get full symbol map (requires LoadSymbols) |
-| `GetSymbol(ctx, name)` | Get symbol; resolve on-demand if needed |
+| `Browse(path)` | Navigate symbol hierarchy |
+| `Symbols()` | Get full symbol map (requires LoadSymbols) |
+| `Symbol(ctx, name)` | Get symbol; resolve on-demand if needed |
 | `RefreshSymbols(ctx)` | Reload if version changed |
 | `CheckSymbolVersion(ctx)` | Check version without reload |
 
-### SessionOption
+### Option
 
 All options compose — no mutual exclusions. See [README.md → Connection
 options](README.md#connection-options) for the user-facing reference;
@@ -642,13 +649,13 @@ quick-start.
   caller-side `Validate()` method — invalid configs are rejected at
   option-application time with a Warn log; the default is kept.
 - `WithStrictReconnect(maxAttempts)` only affects on-demand symbols
-  (resolved via `GetSymbol` before reconnect). Symbols loaded via
+  (resolved via `Symbol` before reconnect). Symbols loaded via
   `LoadSymbols(Slow)` are not in scope.
 - `WithSymbolVersionStrategy(SymbolVersionAutoReload)` gates the
   sliding-window cap (`WithMaxSymbolVersionReloadAttempts`,
   `WithSymbolVersionReloadWindow`) — these options are no-ops under
   `Close` or `Ignore` strategies.
-- `WithLocalAMS(AMSAddress{Port:0})` keeps the default random AMS port
+- `WithLocalAddress(ams.Address{Port:0})` keeps the default random AMS port
   (each Session = distinct AMS source identity per process). Pass a
   non-zero `Port` only when the deployment needs a stable AMS port
   (firewalled environments with port allow-lists, PLC-side route
@@ -709,7 +716,7 @@ Process I/O / discovery: `ReadProcessInput`, `ReadProcessOutput`, `WriteProcessO
 ## Connection Lifecycle
 
 ```text
-1. NewSession(ctx, AMSEndpoint{...}, opts...)   configure target, source, timeouts, options
+1. NewSession(ctx, Endpoint{...}, opts...)     configure target, source, timeouts, options
        │
        ▼
 2. Connect(ctx)                     TCP dial → probe route → register if needed
@@ -724,8 +731,8 @@ Process I/O / discovery: `ReadProcessInput`, `ReadProcessOutput`, `WriteProcessO
        ▼
 4. Use the Session:
    ReadValue / WriteValue           on-demand resolution + epoch retry
-   AddSymbolNotifications           batched subscribe via 0xF085 (or fallback)
-   BrowseSymbols(path)              requires step 3
+   SubscribeAll           batched subscribe via 0xF085 (or fallback)
+   Browse(path)              requires step 3
        │
    ┌───┴── (online change) ──────────────────────┐
    │  detection set hit (R-CACHE-009)            │
@@ -762,7 +769,7 @@ Process I/O / discovery: `ReadProcessInput`, `ReadProcessOutput`, `WriteProcessO
 
 ## Data Types
 
-Parsed PLC types serialized via `symbol_codec.go`:
+Parsed PLC types serialized via `internal/symtab/value.go`:
 
 | PLC Type       | Size    | Go representation          |
 |----------------|---------|----------------------------|

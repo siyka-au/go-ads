@@ -24,7 +24,7 @@ func TestFSM_AllowedTransitions(t *testing.T) {
 		SessionStateClosed,
 	}
 
-	// Legal edges. Keep in sync with allowedTransitions in session_fsm.go.
+	// Legal edges. Keep in sync with allowedTransitions in fsm.go.
 	legal := map[SessionState]map[SessionState]bool{
 		SessionStateConstructed: {
 			SessionStateConnecting: true,

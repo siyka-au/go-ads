@@ -619,7 +619,7 @@ func TestBatchSymbols_FullSuccessIsNotAnError(t *testing.T) {
 // TestAMSRouterErrorIsNotADeviceVerdict pins the provenance invariant at the one
 // line where it used to be lost: amsReply.payload() wraps the AMS header's
 // ErrorCode, and the result must not look like something the PLC said about an
-// item. Every abort guard in this package (cmd_sum.go's notification fallbacks
+// item. Every abort guard in this package (internal/adsconn/cmd_sum.go's notification fallbacks
 // among them) decides "transport failure" vs "device verdict" with
 // errors.As(err, &ReturnCode), so a router code that satisfies errors.As is
 // silently promoted to a per-item PLC verdict.

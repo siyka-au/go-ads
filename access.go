@@ -74,7 +74,7 @@ func (sess *Session) writeValueRetry(ctx context.Context, symbolName string, val
 }
 
 // ReadValue reads a PLC symbol by name (handle resolved on demand and cached)
-// and returns its value as a Go type: see the table in value.go. A struct or
+// and returns its value as a Go type: see the table in internal/symtab/value.go. A struct or
 // array needs the datatype table (LoadSymbols) and comes back as
 // map[string]any or []any, freshly allocated per call.
 func (sess *Session) ReadValue(ctx context.Context, symbolName string) (any, error) {

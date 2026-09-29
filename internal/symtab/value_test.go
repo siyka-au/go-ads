@@ -336,8 +336,10 @@ func bitStructSymbol() (*Symbol, map[string]TypeInfo) {
 	children := map[string]*TypeInfo{}
 	for i := range 16 {
 		name := fmt.Sprintf("b%d", i)
-		children[name] = &TypeInfo{Name: name, DataType: "BIT",
-			DatatypeEntry: DatatypeEntry{Offs: uint32(i), Size: 1, Flags: 0xA2, DataType: 33}}
+		children[name] = &TypeInfo{
+			Name: name, DataType: "BIT",
+			DatatypeEntry: DatatypeEntry{Offs: uint32(i), Size: 1, Flags: 0xA2, DataType: 33},
+		}
 	}
 	datatypes := map[string]TypeInfo{
 		"ST_Bits": {Name: "ST_Bits", DatatypeEntry: DatatypeEntry{Size: 2, Flags: 0x81}, Children: children},

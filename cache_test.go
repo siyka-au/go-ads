@@ -212,7 +212,7 @@ func TestCacheEpoch_BumpsOnSwapNotInsert(t *testing.T) {
 // survived stripping every production cache.lock call in the package.
 //
 // It was deleted rather than rewritten because the invariant is STATIC: no
-// production path holds both locks (notification_api.go:19, and the ordering
+// production path holds both locks (subscribe.go, and the ordering
 // comments in dispatchSample). A deadlock only materialises when TWO paths each
 // hold both in opposite order, so no single-site mutation can turn a runtime
 // probe red — verifying a rewrite would mean injecting the bug twice, in two

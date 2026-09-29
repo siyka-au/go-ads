@@ -768,7 +768,7 @@ func decodeAddNotifRequest(payload []byte) AddNotifRequest {
 // respPayload is the post-header response data.
 //
 // amsErr, when non-zero, goes into the AMS header's ErrorCode field and the body
-// is dropped: an AMS rejection never carries a response, and client.go rejects
+// is dropped: an AMS rejection never carries a response, and adsconn rejects
 // the frame outright unless Length matches the body actually written.
 func writeResponse(c net.Conn, reqBody []byte, cmd ams.Command, invokeID uint32, respPayload []byte, amsErr uint32) error {
 	if amsErr != 0 {

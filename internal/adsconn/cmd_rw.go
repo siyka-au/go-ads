@@ -12,7 +12,7 @@ import (
 
 // Single-symbol ADS commands on *Client: Read, Write, WriteRead,
 // ReadState, ReadDeviceInfo. Beckhoff-equivalent thin RPC surface.
-// Cache-aware Session methods (ReadFromSymbol etc.) in symbol_access.go
+// Cache-aware Session methods (ReadValue etc.) are in the root package's access.go
 // call s.client.Read/Write internally.
 
 // Read issues ADS Read (cmd 2) against the given index group/offset.

@@ -29,7 +29,7 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(&bytes.Buf
 func TestParseRouteResponse_RejectsInvokeIdMismatch(t *testing.T) {
 	resp := make([]byte, 24)
 	binary.LittleEndian.PutUint32(resp[0:], routeCookie)
-	binary.LittleEndian.PutUint32(resp[4:], 0xCAFEBABE)                    // response invokeID
+	binary.LittleEndian.PutUint32(resp[4:], 0xCAFEBABE)                   // response invokeID
 	binary.LittleEndian.PutUint32(resp[8:], responseFlag|serviceAddRoute) // valid serviceId
 
 	err := parseRouteResponse(quietLogger(), resp, 0xDEADBEEF) // expecting different invokeID

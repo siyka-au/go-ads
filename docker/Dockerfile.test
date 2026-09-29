@@ -6,6 +6,6 @@ RUN go mod download
 COPY . .
 
 # Pre-compile integration test binary
-RUN go test -tags integration -c -o /app/integration.test .
+RUN go test -tags integration -c -o /app/integration.test ./integration
 
 ENTRYPOINT ["/app/integration.test"]

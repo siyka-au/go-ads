@@ -429,7 +429,7 @@ func TestSymbolVersionIgnore_StaleFlag(t *testing.T) {
 		t.Fatal("no post samples under Ignore — OLD handle should still flow")
 	}
 	// Hardware-only assertion: real TC3 must surface a R-CACHE-009 detection
-	// code through the notification listener path (cmd_notification.go:259)
+	// code through the notification listener path (dispatch.go)
 	// so the Ignore branch marks the first post-detection sample Stale.
 	// HARDWARE FINDING (pre-impl logs 20260510-114950 / 120341): TC3 keeps
 	// streaming through the OLD handle silently after online change for
@@ -459,7 +459,7 @@ func TestSymbolVersionIgnore_StaleFlag(t *testing.T) {
 // TestSymbolVersionIgnore_RemovedSymbolStops — when symbol B is deleted, OLD handle
 // stops yielding samples but no error is raised (Ignore strategy).
 //
-// Listener-path detection (cmd_notification.go: 0-byte terminal sample
+// Listener-path detection (dispatch.go: 0-byte terminal sample
 // intercept) is asserted via the onSymbolVersionChanged callback firing
 // with reason="symbol-not-found". By design the terminal 0-byte sample
 // is consumed BEFORE delivery (no Update emitted for the dead handle —

@@ -198,7 +198,7 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 
 // TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch drives the
 // post-roundtrip stranded-symbol detection in Subscribe
-// (notification_api.go). Two production branches detect strands:
+// (subscribe.go). Two production branches detect strands:
 //
 //	(a) fresh == nil: cache.symbols no longer contains the key after roundtrip.
 //	    Returns "removed from cache during subscribe (likely online change
@@ -451,7 +451,7 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 
 	t.Run("handle_invalid_surfaces_error", func(t *testing.T) {
 		// Production behavior pinned (Session.DeleteDeviceNotification at
-		// cmd_notification.go:109): when the underlying client RPC returns
+		// unsubscribe.go): when the underlying client RPC returns
 		// a non-success code, the wrapper returns the error before running
 		// activeNotifications cleanup. So state survives the call.
 		// This is what production does today; if the contract changes to
@@ -485,7 +485,7 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 
 // TestNotificationChannel_SetOnFirstSuccess pins the invariant that
 // notificationChannel is set ONLY on first successful subscribe. The
-// production code at notification_api.go:382 sets `notificationChannel = ch`
+// production code at subscribe.go sets `notificationChannel = ch`
 // only when `successes > 0`. With no successes (all-Skipped batch), the
 // field MUST stay nil.
 //

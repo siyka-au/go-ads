@@ -1077,7 +1077,7 @@ Routes persist across PLC reboots in most configurations but may be lost in some
 (e.g., TwinCAT CE devices, certain VM configurations).
 
 For an implementation that handles route registration and reconnection
-end-to-end, see this repository's [IMPLEMENTATION.md](IMPLEMENTATION.md).
+end-to-end, see this repository's [architecture.md](architecture.md).
 
 ---
 

@@ -6,6 +6,66 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) a
 [go-semantic-release](https://github.com/go-semantic-release/semantic-release) for
 automated versioning and changelog generation.
 
+## v3.0.0 (unreleased): package split and consumer-driven Session API
+
+The single package is split along its layers, and the Session API is reshaped
+around what a real consumer (bento-ads) had to work around.
+
+### Packages
+
+| Package | Holds |
+|---|---|
+| `github.com/siyka-au/go-ads/v3` | `Session` and its options, `SymbolView`, `Update`, `BatchError`, errors |
+| `.../v3/ams` | Protocol vocabulary: addresses, ports, commands, index groups, return codes, states, data types, `TransMode`, the AMS header codec |
+| `.../v3/adsclient` | The raw client (was `ads.Client`/`ads.Dial`) |
+| `.../v3/router` | UDP 48899: `Identify` (was `IdentifyRemote`) and `AddRoute` (was `AddRemoteRoute`) |
+
+### Renamed
+
+| Before | After |
+|---|---|
+| `ads.AMSAddress`, `NewAMSAddress`, `NetIDString()` | `ams.Address`, `ams.NewAddress(netID, ams.Port)`, `NetID.String()` |
+| `ads.ADSState`, `ADSStateRun`… / `States` | `ams.State`, `ams.StateRun`… / `ams.StateInfo` |
+| `ads.ADSDataType`, `ADSTInt16`… | `ams.DataType`, `ams.DataTypeInt16`… (with `IECName()`, `Size()`) |
+| `ads.CommandID`, `AMSHeader`, `AMSError` | `ams.Command`, `ams.Header`, `ams.RouterError` |
+| `ads.TransMode*`, `ReturnCode*`, `Group*`, `Port*`, `SymbolFlag*` | same names in `ams` |
+| `DeviceInfo{DeviceName [16]byte; Version}` | `ams.DeviceInfo{Name string; Build}` plus `Version()` |
+| `AMSEndpoint{IP, Port, AMS, RouterPort}` | `Endpoint{Host, Port, Target, RouterPort}` |
+| `SessionOption`, `WithLocalAMS` | `Option`, `WithLocalAddress` |
+| `GetSymbol` / `ListSymbols` / `BrowseSymbols` / `SymbolBrowseEntry` | `Symbol` / `Symbols` / `Browse` / `BrowseEntry` |
+| `AddSymbolNotification(s)` | `Subscribe` / `SubscribeAll` |
+| Session `DeleteDeviceNotification` / `SumDeleteDeviceNotification` | `Unsubscribe` / `UnsubscribeAll` |
+| `NotificationConfig{SymbolName, TransmissionMode}` | `NotificationConfig{Symbol, Mode}` |
+| `Update{Variable, TimeStamp}` | `Update{Symbol, Time}` |
+| `Client.GetSymbolInfoByName` (returned an unexported type) | `adsclient.Client.SymbolInfo` returning `ams.SymbolInfo` |
+| `Client.GetHandleByName`, `DownloadInChunks`, `GetSymbolVersion` | `Handle`, `ReadChunked`, `SymbolVersion` |
+| `SetDefaultLogger` | removed: pass `router.WithLogger` / `adsclient.WithLogger` |
+| `ReadBit`, `WriteBit`, `SymbolUploadDataType` | internal |
+
+### New
+
+- `SubscribeAll` returns `[]SubscribeResult{Symbol SymbolView, Handle, Err}`: the
+  symbol's type arrives with the result, and one `Err` replaces the
+  `Skipped`/`Error` pair.
+- `Update.Symbol` is the name as subscribed, not the PLC's casing (TC2
+  upper-cases).
+- `Session.Done()` and `Session.Err()` replace polling `IsClosed`; `Err` says
+  whether `Close` (`ErrClosed`) or a reconnect give-up ended the session.
+- `Session.State()`, `Info()` (target, local AMS and TCP addresses, peer
+  listener, runtime state) and `Subscriptions()`.
+- `Session.Client()`: an `adsclient.Client` over the session's own connection.
+- `Session.VerifyTarget(ctx)`, and `WithoutSumCommands()` on both layers.
+- `ams.TransMode` implements `encoding.TextMarshaler`/`TextUnmarshaler`
+  (`"serverOnChange"`, …); `ams.State` has `String`.
+- `router.Identify` and `router.AddRoute` take a context and stop at once when
+  it is cancelled.
+
+### Fixed
+
+- The router-awake probe now uses the session's router port and bind address,
+  like discovery and registration already did.
+- `symbol_version_hardware` tests compile again.
+
 ## v3.0.0 (unreleased): values are Go types
 
 A **major** release. The string layer is gone: values are read and written as Go

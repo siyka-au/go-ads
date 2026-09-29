@@ -975,7 +975,7 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 // stays up, and each reply carries AMS ErrorCode 0x06.
 //
 // The router's refusal must not be recorded as a per-item PLC verdict. Skipped
-// == nil means "Error carries the PLC-side return code" (cmd_sum.go's
+// == nil means "Error carries the PLC-side return code" (internal/adsconn/cmd_sum.go's
 // SumNotificationResult contract), so mislabelling here tells the consumer the
 // runtime individually rejected 37 named symbols it never saw — destroying the
 // ErrNotificationTransportFailure retry signal that is the documented way to

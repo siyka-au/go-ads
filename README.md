@@ -4,6 +4,8 @@ A pure Go library for communicating with Beckhoff TwinCAT PLCs using the ADS (Au
 
 A fork of [RuneRoven/go-ads](https://github.com/RuneRoven/go-ads), published as `github.com/siyka-au/go-ads/v3`.
 
+> **v3 package split**: the library is now several packages — `ams` (protocol types), `adsclient` (raw client), `router` (identify / route registration) and the root `ads` package (Session). The Session API was renamed around what consumers need: `Endpoint`, `Option`, `Subscribe`/`SubscribeAll`, `Symbol`/`Symbols`/`Browse`, `Update.Symbol`/`Update.Time`, plus `Done`/`Err`, `Info`, `Subscriptions` and `Client`. See [Packages](#packages) and [CHANGELOG.md](CHANGELOG.md).
+>
 > **v3 breaking change**: values are Go types. `ReadValue`/`ReadValues`/`WriteValue`/`WriteValues` replace the string methods, `Update.Value` and `SymbolView.Value` are `any`, and `GetJSON` is gone — see [Values](#values) and [CHANGELOG.md](CHANGELOG.md).
 >
 > **v2.2 breaking change**: every RPC method takes a `context.Context` as the first argument. `NewSession` accepts a typed `AMSEndpoint` plus options instead of 7 positional arguments. `Connect` takes `ctx` instead of a local-mode bool (use `WithLocalMode()`). `Symbol` is unexported (use `SymbolView`). `Update.Stale` is now `*StaleInfo`. See [CHANGELOG.md](CHANGELOG.md) for the full migration sketch.
@@ -16,7 +18,7 @@ A fork of [RuneRoven/go-ads](https://github.com/RuneRoven/go-ads), published as 
   from the device when omitted (no route, no credentials needed for the probe).
 
 - Connect to TwinCAT 2 and TwinCAT 3 PLCs over TCP
-- Two-layer API: a Beckhoff-equivalent raw `Client` for one-shot consumers and a managed `Session` that adds caching, notification persistence, and auto-reconnect
+- A managed `Session` that adds caching, notification persistence and auto-reconnect, over a raw `adsclient.Client` for one-shot consumers
 - Read/write PLC symbols by name
 - Batch read multiple symbols in a single round-trip (SumRead)
 - Subscribe to symbol change notifications (single and batch)
@@ -44,13 +46,14 @@ import (
 	"time"
 
 	ads "github.com/siyka-au/go-ads/v3"
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 func main() {
 	ctx := context.Background()
 
-	target, _ := ads.NewAMSAddress("5.1.2.3.1.1", 851)
-	sess, _ := ads.NewSession(ctx, ads.AMSEndpoint{IP: "192.168.1.100", Port: 48898, AMS: target},
+	target, _ := ams.NewAddress("5.1.2.3.1.1", 851)
+	sess, _ := ads.NewSession(ctx, ads.Endpoint{Host: "192.168.1.100", Target: target},
 		ads.WithRoute("my-route", "Administrator", "1"),
 		ads.WithRequestTimeout(5*time.Second),
 	)
@@ -68,7 +71,7 @@ func main() {
 
 	// Optional: load full symbol table for listing / struct access.
 	sess.LoadSymbols(ctx)
-	symbols, _ := sess.ListSymbols()
+	symbols, _ := sess.Symbols()
 	fmt.Printf("Total symbols: %d\n", len(symbols))
 }
 ```
@@ -114,11 +117,11 @@ Enums and aliases take their underlying type. The civil types are from
 A wrong or absent NetID is the most common ADS misconfiguration, and the hardest
 to recognise: the router accepts the TCP socket and then silently drops every
 request, which looks nothing like an addressing mistake. So the address is
-optional — omit `AMS` and the device is asked for it.
+optional — omit `Target` and the device is asked for it.
 
 ```go
-// No AMS field at all: NetID and AMS port both come from the device.
-sess, err := ads.NewSession(ctx, ads.AMSEndpoint{IP: "192.168.1.100"},
+// No Target at all: NetID and AMS port both come from the device.
+sess, err := ads.NewSession(ctx, ads.Endpoint{Host: "192.168.1.100"},
     ads.WithRoute("my-route", "Administrator", "1"),
 )
 ```
@@ -155,7 +158,7 @@ Two deliberate refusals:
 
 - **The AMS port is inferred from the reported TwinCAT version, never guessed.**
   If a device reports no version, `NewSession` fails and tells you to set
-  `AMS.Port` explicitly rather than planting 851 and addressing a runtime that may
+  `Target.Port` explicitly rather than planting 851 and addressing a runtime that may
   not exist. Multi-runtime projects (811, 852, …) must set it anyway — the
   inferred port is logged so that is visible.
 - **The response is the identity of the router answering at that IP**, not "the
@@ -187,7 +190,7 @@ never to use one that already exists:
 
 ```go
 // Already-provisioned device: no NetID, no route name, no credentials.
-sess, err := ads.NewSession(ctx, ads.AMSEndpoint{IP: "192.168.1.100"})
+sess, err := ads.NewSession(ctx, ads.Endpoint{Host: "192.168.1.100"})
 ```
 
 Consequences worth knowing, all measured on TwinCAT 2.10 and TwinCAT 3.1.4024:
@@ -196,7 +199,7 @@ Consequences worth knowing, all measured on TwinCAT 2.10 and TwinCAT 3.1.4024:
   already present for your NetID the probe succeeds and registration is skipped —
   logged as `route already exists on PLC, skipping registration`. Duplicate entries
   are one of the ways these devices go mute, so this matters more than it looks.
-- **What must line up is your source NetID.** Without `WithLocalAMS` the library
+- **What must line up is your source NetID.** Without `WithLocalAddress` the library
   derives it from the host IP, so a pre-registered route has to have been created
   for *that* NetID. If it was not, the PLC resets the connection and the error names
   it: `no route is registered on the PLC for our NetID (…)`.
@@ -215,7 +218,7 @@ working. Measured behaviour:
 
 | capability | UDP 48899 blocked |
 |---|---|
-| NetID / port discovery | unavailable — pass `AMS` explicitly |
+| NetID / port discovery | unavailable — pass `Target` explicitly |
 | route registration | unavailable — pre-register the route on the PLC, or pass `WithSkipRouteRegistration()` |
 | `WithTargetCheck` verification | skipped, never fatal (see below) |
 | reads, writes, notifications | unaffected |
@@ -224,7 +227,7 @@ Discovery fails fast rather than handing back a session that would silently drop
 every request — three attempts inside a 3s budget, then `NewSession` returns:
 
 ```
-ads: NewSession: target AMS address incomplete and discovery failed (set remote.AMS
+ads: NewSession: target AMS address incomplete and discovery failed (set remote.Target
 explicitly if the device does not answer the identify service): identify 192.0.2.1:
 no answer after 3 attempts: ... i/o timeout
 ```
@@ -235,78 +238,93 @@ with UDP 48899 firewalled off, and refusing those sessions over a check that cou
 not run would trade a real capability for a diagnostic. Only a definite mismatch is
 reported. The skip is logged at Info, so silence never reads as "verified".
 
-## Two layers
+## Packages
 
-The library exposes two types. Pick the one that fits your consumer.
+| Package | What it is |
+|---|---|
+| `github.com/siyka-au/go-ads/v3` (`ads`) | `Session`: a connection to one PLC runtime that survives drops and restarts — symbols by name, typed values, persistent subscriptions |
+| `.../v3/adsclient` | `Client`: one raw TCP connection, one ADS round-trip per call, no cache or reconnect |
+| `.../v3/ams` | The protocol's vocabulary: `Address`/`NetID`/`Port`, index groups, `ReturnCode`, `State`, `DataType`, `TransMode` |
+| `.../v3/router` | The AMS router's UDP services: `Identify` a device, `AddRoute` for this host |
 
-### Client — raw RPC (Beckhoff-equivalent)
+### Session — managed (long-running consumers)
 
-`Client` is a thin wrapper around one TCP connection. Each method is a single ADS round-trip. No symbol cache, no notification persistence, no auto-reconnect. If the transport drops, every subsequent call returns `ErrTransportClosed` and the caller reconstructs a new `Client`.
-
-Use this for one-shot consumers — CLI tools, web ADS browsers doing a quick probe, scripts that send a single command and exit.
+Symbol cache, name-based read/write, notification persistence with auto-resubscribe,
+auto-reconnect with backoff, online-change handling and lifecycle callbacks. Use it for
+daemons, message brokers, or anything that should survive a network blip without manual
+intervention.
 
 ```go
 ctx := context.Background()
-
-client, err := ads.Dial(
-    "192.168.1.100", 48898,
-    ads.AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
-    ads.AMSAddress{NetID: [6]byte{192, 168, 1, 50, 1, 1}, Port: 30000},
-    5*time.Second,
-    ads.WithClientLogger(slog.Default()),
+target, _ := ams.NewAddress("5.1.2.3.1.1", 851)
+sess, _ := ads.NewSession(ctx, ads.Endpoint{Host: "192.168.1.100", Target: target},
+    ads.WithRoute("my-route", "Administrator", "1"),
+    ads.WithOnReconnect(func() { log.Println("back online") }),
 )
+if err := sess.Connect(ctx); err != nil {
+    log.Fatal(err)
+}
+defer sess.Close()
+
+// Cache-aware read (resolves on demand, then caches for the connection's lifetime).
+value, _ := sess.ReadValue(ctx, "MAIN.myVar")
+
+// Persistent subscriptions (re-subscribed automatically after a reconnect). Each
+// result carries the symbol's type for labelling values, and one Err.
+ch := make(chan *ads.Update, 64)
+results, _ := sess.SubscribeAll(ctx, []ads.NotificationConfig{
+    {Symbol: "MAIN.bCounter", Mode: ams.TransModeServerOnChange, MaxDelay: 100 * time.Millisecond},
+}, ch)
+for _, r := range results {
+    if r.Err != nil {
+        log.Printf("%s: %v", r.Symbol.FullName, r.Err)
+    }
+}
+
+for {
+    select {
+    case u := <-ch:
+        // u.Symbol is the name as subscribed, whatever casing the PLC uses.
+        fmt.Println(u.Symbol, u.Value, u.Time)
+    case <-sess.Done():
+        log.Fatalf("session ended: %v", sess.Err()) // reconnection gave up, or Close
+    }
+}
+```
+
+`sess.Info()` reports the target, the local AMS and TCP addresses and the runtime state;
+`sess.Subscriptions()` lists what the session is keeping alive and under which handle.
+
+### Client — raw RPC
+
+`adsclient.Client` is one TCP connection; each method is a single ADS round-trip. If the
+connection drops, every later call returns `ErrTransportClosed` and the caller builds a new
+Client. Use it for one-shot consumers — CLI tools, quick probes, scripts.
+
+```go
+target := ams.Address{NetID: ams.NetID{5, 1, 2, 3, 1, 1}, Port: 851}
+client, err := adsclient.Dial(ctx, "192.168.1.100", target,
+    adsclient.WithRequestTimeout(5*time.Second))
 if err != nil {
-    panic(err)
+    log.Fatal(err)
 }
 defer client.Close()
 
 info, _ := client.ReadDeviceInfo(ctx)
-fmt.Printf("Device: %s\n", string(info.DeviceName[:]))
+fmt.Println("Device:", info.Name, info.Version())
 
-handle, _ := client.GetHandleByName(ctx, "MAIN.myVar")
+handle, _ := client.Handle(ctx, "MAIN.myVar")
 defer client.ReleaseHandle(ctx, handle)
-
-data, _ := client.Read(ctx, uint32(ads.GroupSymbolValueByHandle), handle, 4)
-fmt.Printf("Value bytes: %v\n", data)
+data, _ := client.Read(ctx, ams.GroupSymbolValueByHandle, handle, 4)
 ```
 
-### Session — managed (long-running consumers)
-
-`Session` wraps a `Client` and adds the value-add for long-running consumers: symbol cache, name-based read/write, notification persistence with auto-resubscribe, auto-reconnect with backoff, online-change handling, lifecycle callbacks. `Session` does NOT promote Client methods — call `sess.ReadFromSymbol(name)` for cache-aware access; raw consumers construct a separate `*Client`.
-
-Use this for daemons, message brokers, or anything that should survive a network blip without manual intervention.
-
-```go
-ctx := context.Background()
-target, _ := ads.NewAMSAddress("5.1.2.3.1.1", 851)
-sess, _ := ads.NewSession(ctx, ads.AMSEndpoint{IP: "192.168.1.100", Port: 48898, AMS: target},
-    ads.WithRoute("my-route", "Administrator", "1"),
-    ads.WithAutoReconnect(true),
-    ads.WithOnReconnect(func() { log.Println("back online") }),
-)
-sess.Connect(ctx)
-defer sess.Close()
-
-// Cache-aware read (resolves on-demand, then caches for the connection's lifetime).
-value, _ := sess.ReadValue(ctx, "MAIN.myVar")
-
-// Persistent subscription (resubscribes automatically after a reconnect).
-ch := make(chan *ads.Update, 64)
-sess.AddSymbolNotification(ctx, "MAIN.bCounter", 100*time.Millisecond, 100*time.Millisecond,
-    ads.TransModeServerOnChange, ch)
-for update := range ch {
-    if update.Stale != nil {
-        fmt.Println("STALE:", update.Stale.Reason, update.Variable, update.Value)
-        continue
-    }
-    fmt.Println(update.Variable, update.Value)
-}
-```
-
+A Session hands out a Client over its own connection with `sess.Client()`, for raw access
+without opening a second TCP connection — which the PLC would treat as this host replacing
+the session.
 ## Example CLI
 
 A ready-to-run example is included with two demo modes (Session-managed and
-raw Client). Selection is interactive by default, or via `ADS_DEMO`:
+raw adsclient.Client). Selection is interactive by default, or via `ADS_DEMO`:
 
 ```bash
 cd examples/cli
@@ -321,8 +339,8 @@ See `examples/cli/README.md` for the full env-var reference.
 All options are passed to `NewSession` and have sensible defaults:
 
 ```go
-target, _ := ads.NewAMSAddress(netid, 851)
-sess, _ := ads.NewSession(ctx, ads.AMSEndpoint{IP: ip, Port: 48898, AMS: target},
+target, _ := ams.NewAddress(netid, 851)
+sess, _ := ads.NewSession(ctx, ads.Endpoint{Host: ip, Target: target},
     // Route registration — probe first, register with credentials only if needed
     ads.WithRoute("my-route", "Administrator", "1"),
 
@@ -354,7 +372,7 @@ sess, _ := ads.NewSession(ctx, ads.AMSEndpoint{IP: ip, Port: 48898, AMS: target}
     // Always register route with credentials (skip probe, for non-persistent route environments)
     ads.WithForceRouteRegistration(),
 
-    // Override callback IP for Docker/VPN/NAT (default: derived from AMS NetID)
+    // Callback IP for Docker/VPN/NAT (default: this host's outbound IP)
     ads.WithHostIP("192.168.1.50"),
 )
 ```
@@ -368,13 +386,13 @@ sess, _ := ads.NewSession(ctx, ads.AMSEndpoint{IP: ip, Port: 48898, AMS: target}
 | `WithOnReconnect(fn)` | None | Callback after successful reconnect |
 | `WithStrictReconnect(n)` | Graceful skip (missing symbols warned + removed) | Fail if on-demand symbols missing after reconnect. `n` = max retry attempts before closing |
 | `WithForceRouteRegistration()` | Probe first | Always register route with credentials (skip probe). Requires `WithRoute` |
-| `WithHostIP(ip)` | Derived from AMS NetID | IP the PLC uses to reach this client (Docker/VPN/NAT). Requires `WithRoute` |
+| `WithHostIP(ip)` | This host's outbound IP | IP the PLC uses to reach this client (Docker/VPN/NAT). Also becomes the local NetID (`ip.1.1`) unless `WithLocalAddress` is given |
 | `WithLogger(logger)` | `slog.Default()` | Custom structured logger |
 | `WithSymbolVersionStrategy(s)` | `SymbolVersionAutoReload` | Online-change handling strategy (`AutoReload` / `Close` / `Ignore`) |
 | `WithMaxSymbolVersionReloadAttempts(n)` | `3` | Cap reload attempts within the sliding window (AutoReload only) |
 | `WithSymbolVersionReloadWindow(d)` | `60s` | Sliding window length for the reload-attempt cap |
 | `WithOnSymbolVersionChanged(fn)` | None | Callback fired once per online-change detection (`reason` is one of the `Reason*` constants). Also fires with `ReasonHeartbeatSilent` under `WithHeartbeatRecovery(HeartbeatRecoveryObserve)` |
-| `WithLocalAMS(addr)` | NetID auto-derived; Port random in 32768-49151 | Override source AMSAddress in outgoing ADS headers. The AMS port is a logical identifier inside the header, NOT the TCP source port (kernel-assigned) and NOT the TCP destination port (always 48898). Each Session randomizes by default so distinct Session instances present distinct AMS source identities to the PLC |
+| `WithLocalAddress(addr)` | NetID auto-derived; Port random in 32768-49151 | Override the source `ams.Address` in outgoing ADS headers. The AMS port is a logical identifier inside the header, NOT the TCP source port (kernel-assigned) and NOT the TCP destination port (always 48898). Each Session randomizes by default so distinct Session instances present distinct AMS source identities to the PLC |
 | `WithLocalBindIP(ip)` | Unset — OS picks via routing table | Pin the outbound TCP source IP. Used for multi-Session deployments on hosts with IP aliases. Invalid IP → Warn + nil (OS routing). See §Limitations for the multi-Session constraint |
 | `WithSkipRouteRegistration()` | Off | Explicit opt-out from probe+AddRoute. Required when routes are managed externally (TC3 UI pre-registered, AmsRouterDaemon front-end). Equivalent to omitting `WithRoute` but explicit |
 | `WithLocalMode()` | Off | Target the in-process TwinCAT runtime at 127.0.0.1 |
@@ -387,6 +405,8 @@ sess, _ := ads.NewSession(ctx, ads.AMSEndpoint{IP: ip, Port: 48898, AMS: target}
 | `WithoutRuntimeStateWatch()` | Watch on | Turn the state poll off. The gates on symbol and subscription calls then fall back to permitting, so a PLC in CONFIG fails the older, more obscure way |
 | `WithAmsPeerListen(port)` | Off (fallback binds 48898 on demand) | Listen on `port` for a connection the PLC opens to US. Needed for devices that treat their route to this host as a peer route and answer only on their own connection |
 | `WithoutAmsPeerFallback()` | Fallback on | Never bind the AMS port. Use on hosts where a local TwinCAT router owns 48898 |
+| `WithoutSumCommands()` | Sum commands when supported | Read, write and subscribe one request per item, for a device that claims sum-command support and misbehaves |
+| `WithTargetCheck(mode)` | `TargetCheckWarn` | Compare a supplied target NetID with the device's own before connecting; `VerifyTarget(ctx)` runs the same check on demand |
 
 ### Combining options
 
@@ -395,9 +415,9 @@ All options are composable — no mutual exclusions. Some require others to have
 | Option | Requires | Notes |
 |--------|----------|-------|
 | `WithForceRouteRegistration()` | `WithRoute()` | No-op without route credentials |
-| `WithHostIP()` | `WithRoute()` | Only affects route registration packet |
+| `WithHostIP()` | — | Sets the route's callback address and, without `WithLocalAddress`, the local NetID |
 | `WithBackoff()` | — | Used in both auto and manual `Reconnect()` |
-| `WithStrictReconnect()` | — | Only affects on-demand symbols (resolved via `GetSymbol` before reconnect) |
+| `WithStrictReconnect()` | — | Only affects on-demand symbols (resolved via `Symbol` before reconnect) |
 | `WithOnDisconnect()` / `WithOnReconnect()` | — | Fire regardless of auto/manual reconnect mode |
 | `WithAutoReconnect(false)` | — | Backoff still applies when caller invokes `Reconnect()` manually |
 | `WithSkipRouteRegistration()` | — | Overrides `WithRoute`. Skip wins. Useful when an options chain is built uniformly across Sessions and only some opt out |
@@ -418,15 +438,15 @@ connection it already has) and behaves accordingly:
 | | Behaviour |
 |---|---|
 | `Connect` | **Succeeds.** The session is usable and waits; there is simply no runtime to talk to yet |
-| `LoadSymbols`, `AddSymbolNotification(s)` | **Refuse**, with an error wrapping `ErrRuntimeNotRunning` that names the ADS state |
+| `LoadSymbols`, `Subscribe`/`SubscribeAll` | **Refuse**, with an error wrapping `ErrRuntimeNotRunning` that names the ADS state |
 | `IsClosed()` | Stays `false` — nothing is wrong |
 | Back in RUN | The poll notices and the same calls start working, with no reconnect and no rebuild |
 
 ```go
-if _, err := sess.AddSymbolNotifications(ctx, configs, ch); errors.Is(err, ads.ErrRuntimeNotRunning) {
+if _, err := sess.SubscribeAll(ctx, configs, ch); errors.Is(err, ads.ErrRuntimeNotRunning) {
     // Not a failure to give up on: the PLC is in CONFIG. Try again later.
-    state, _ := sess.RuntimeState(ctx) // ads.ADSStateConfig, ADSStateStop, ...
-    log.Printf("PLC not running (ADS state %d), will retry", state)
+    state, _ := sess.RuntimeState(ctx) // ams.StateConfig, ams.StateStop, ...
+    log.Printf("PLC not running (state %v), will retry", state)
 }
 ```
 
@@ -561,7 +581,7 @@ The library actively prevents PLC notification-handle accumulation
    dropped client identity) is treated as cleanup-success.
 
 No user action needed; the strategies fire automatically. Documented
-in detail in [IMPLEMENTATION.md → Notification handle hygiene](IMPLEMENTATION.md#notification-handle-hygiene).
+in detail in [docs/architecture.md → Notification handle hygiene](docs/architecture.md#notification-handle-hygiene).
 
 ## Limitations
 
@@ -588,11 +608,13 @@ Beckhoff documents ~550 notification handles per AMS port. The library does not 
 
 ## Process image I/O (experimental)
 
-> **Warning:** Direct process image access bypasses the symbol table and writes raw bytes to I/O memory. Writing to the wrong offset can cause unexpected physical output changes (motors, valves, actuators). The PLC runtime may overwrite your changes on the next scan cycle. **For normal operation, use symbol-based access (`sess.ReadFromSymbol`/`sess.WriteToSymbol`).**
+> **Warning:** Direct process image access bypasses the symbol table and writes raw bytes to I/O memory. Writing to the wrong offset can cause unexpected physical output changes (motors, valves, actuators). The PLC runtime may overwrite your changes on the next scan cycle. **For normal operation, use symbol-based access (`sess.ReadValue`/`sess.WriteValue`).**
 
-Process image methods live on `*Client` only — they are pure wire ops with no cache or notification dependency. Session users who need them construct a raw `*Client` via `Dial` alongside their `Session` (or use `Dial` exclusively if they never need cache-aware features).
+Process image methods live on `adsclient.Client` — they are pure wire ops with no cache or notification dependency. Session users reach them through `sess.Client()`, over the session's own connection.
 
 ```go
+client := sess.Client() // or an adsclient.Client from Dial
+
 // Read 4 bytes from input image at byte offset 0
 data, _ := client.ReadProcessInput(ctx, 0, 4)
 
@@ -639,8 +661,8 @@ make build      # build all packages
 
 | Port | Protocol | Direction | Purpose | Configurable |
 |------|----------|-----------|---------|--------------|
-| 48898 | TCP | Client → PLC | ADS data (commands, responses, notifications) | Yes (`NewSession` port param) |
-| 48899 | UDP | Client → PLC | AMS route registration (`WithRoute`) | No (Beckhoff fixed) |
+| 48898 | TCP | Client → PLC | ADS data (commands, responses, notifications) | Yes (`Endpoint.Port`) |
+| 48899 | UDP | Client → PLC | Identify and route registration (`WithRoute`) | Yes (`Endpoint.RouterPort`, for NAT) |
 
 Both ports must be open in firewalls between the client and PLC. If only TCP 48898 is open,
 ADS works with pre-existing routes but `WithRoute` cannot register new ones.
@@ -650,8 +672,8 @@ ADS works with pre-existing routes but `WithRoute` cannot register new ones.
 Only route credentials are needed — `WithHostIP` and `ADS_LOCAL_AMS` are optional:
 
 ```go
-target, _ := ads.NewAMSAddress(targetAMS, 851)
-sess, _ := ads.NewSession(ctx, ads.AMSEndpoint{IP: plcIP, Port: 48898, AMS: target},
+target, _ := ams.NewAddress(targetAMS, 851)
+sess, _ := ads.NewSession(ctx, ads.Endpoint{Host: plcIP, Target: target},
     ads.WithRoute("my-route", "Administrator", "password"),
 )
 sess.Connect(ctx)
@@ -662,11 +684,11 @@ packet. Auto-derived NetID from the container IP works because ADS uses the exis
 connection for all communication including notifications.
 
 > **Note:** Tested with TwinCAT 3 via Colima on macOS. More extensive testing across
-> TwinCAT versions and container runtimes is ongoing. See `PROTOCOL.md` for details.
+> TwinCAT versions and container runtimes is ongoing. See [docs/protocol.md](docs/protocol.md) for details.
 
 ### Integration tests
 
-Integration tests require a real Beckhoff PLC on the network. They are gated behind a build tag and skipped by default.
+Integration tests require a real Beckhoff PLC on the network. They live in `integration/`, use only the public API, and are gated behind a build tag. Link faults are staged through a local TCP/UDP proxy (`internal/testproxy`) rather than by touching the session.
 
 **Environment file format** (`.env.integration.XXX`):
 
@@ -694,17 +716,17 @@ ADS_READ_COUNTER=GVL_ProcessData.nMasterCycleCounter
 ```bash
 # Source env and run all integration tests against a PLC
 set -a && source .env.integration && set +a
-go test -tags integration -v -timeout 60s
+go test -tags integration -v -timeout 10m ./integration/
 
 # Run a specific test
-go test -tags integration -run TestIntegrationConnect -v -timeout 30s
+go test -tags integration -run TestIntegrationConnect -v -timeout 30s ./integration/
 ```
 
-**Symbol browse test** (`browse_test.go`) — connects to a PLC, loads all symbols slowly (chunked reads with delays to avoid disrupting real-time tasks), and writes a `.var` file documenting every symbol:
+**Symbol browse test** (`integration/browse_test.go`) — connects to a PLC, loads all symbols slowly (chunked reads with delays to avoid disrupting real-time tasks), and writes a `.var` file documenting every symbol:
 
 ```bash
 set -a && source .env.integration && set +a
-go test -tags integration -run TestBrowseAllSymbols -v -timeout 60s
+go test -tags integration -run TestBrowseAllSymbols -v -timeout 60s ./integration/
 # → writes plc_192_168_0_1.var (filename derived from ADS_PLC_IP)
 ```
 
@@ -718,7 +740,7 @@ CI runs automatically on pull requests to `main` with 4 parallel jobs: lint, tes
 
 - **Enum string resolution**: Add an option to return enum constant names (e.g. `"RUNNING"`) instead of numeric values (e.g. `"2"`). Requires parsing enum constant values from the datatype table's extra data. Only possible for TC3 non-strict enums; TC3 strict enums and TC2 do not expose constant names in the datatype table.
 - **TCP-based route registration**: Investigate whether AMS routes can be created via ADS system service commands over the existing TCP connection (AMS port 10000) instead of the UDP protocol (port 48899). This would eliminate the UDP 48899 firewall requirement and simplify deployment in locked-down networks. The Beckhoff `TcAmsRemoteMgr` service handles UDP route requests — a TCP equivalent may exist via the ADS system service but is unconfirmed.
-- **In-process AMS router subpackage (`router/`)**: Embeddable Go AMS router that lets a single process host multiple `Session`s targeting the same PLC, and that doubles as a standalone daemon (`cmd/ads-router/`) front-end for multi-process deployments. Bypasses the TwinCAT 1-TCP-per-source-IP constraint (see §Limitations) without requiring Beckhoff's .NET `Beckhoff.TwinCAT.Ads.TcpRouter`. Lib internals already prepped: `AMSHeader` / `ParseAMSHeader` / `EncodeAMSHeader` wire codec exported, `NotificationHandler` callback type exported, `WithSkipRouteRegistration` option for router-fronted Sessions, `WithLocalBindIP` for multi-NIC host setups. Passthrough mode planned for v2.3.0 (no notification coalescing — each client gets its own PLC handle, matching Beckhoff's official TcpRouter behavior).
+- **In-process AMS router**: Embeddable Go AMS router that lets a single process host multiple `Session`s targeting the same PLC, and that doubles as a standalone daemon (`cmd/ads-router/`) front-end for multi-process deployments. Bypasses the TwinCAT 1-TCP-per-source-IP constraint (see §Limitations) without requiring Beckhoff's .NET `Beckhoff.TwinCAT.Ads.TcpRouter`. Lib internals already prepped: the `ams.Header` / `ams.ParseHeader` / `ams.EncodeHeader` wire codec, `NotificationHandler` callback type exported, `WithSkipRouteRegistration` option for router-fronted Sessions, `WithLocalBindIP` for multi-NIC host setups. Passthrough mode planned for v2.3.0 (no notification coalescing — each client gets its own PLC handle, matching Beckhoff's official TcpRouter behavior).
 
 ## License
 

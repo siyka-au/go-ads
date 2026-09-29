@@ -160,8 +160,10 @@ func setSeed(t *testing.T, sess *ads.Session, seed uint32) {
 }
 
 func civilTimeOfDuration(d time.Duration) civil.Time {
-	return civil.Time{Hour: int(d / time.Hour), Minute: int(d % time.Hour / time.Minute),
-		Second: int(d % time.Minute / time.Second), Nanosecond: int(d % time.Second)}
+	return civil.Time{
+		Hour: int(d / time.Hour), Minute: int(d % time.Hour / time.Minute),
+		Second: int(d % time.Minute / time.Second), Nanosecond: int(d % time.Second),
+	}
 }
 
 // seedScalars is what FB_TypeTest computes from nSeed, as Go values.
@@ -469,13 +471,29 @@ func TestSeedSymbolMetadata(t *testing.T) {
 		name, dataType string
 		length         uint32
 	}{
-		{"bBoolVar", "BOOL", 1}, {"nSintVar", "SINT", 1}, {"nUsintVar", "USINT", 1}, {"nByteVar", "BYTE", 1},
-		{"nIntVar", "INT", 2}, {"nUintVar", "UINT", 2}, {"nWordVar", "WORD", 2},
-		{"nDintVar", "DINT", 4}, {"nUdintVar", "UDINT", 4}, {"nDwordVar", "DWORD", 4},
-		{"nLintVar", "LINT", 8}, {"nUlintVar", "ULINT", 8}, {"nLwordVar", "LWORD", 8},
-		{"fRealVar", "REAL", 4}, {"fLrealVar", "LREAL", 8},
-		{"tTimeVar", "TIME", 4}, {"tdTimeOfDayVar", "TIME_OF_DAY", 4}, {"dDateVar", "DATE", 4}, {"dtDateTimeVar", "DATE_AND_TIME", 4},
-		{"tLtimeVar", "LTIME", 8}, {"tdLTimeOfDayVar", "LTIME_OF_DAY", 8}, {"dLDateVar", "LDATE", 8}, {"dtLDateTimeVar", "LDATE_AND_TIME", 8},
+		{"bBoolVar", "BOOL", 1},
+		{"nSintVar", "SINT", 1},
+		{"nUsintVar", "USINT", 1},
+		{"nByteVar", "BYTE", 1},
+		{"nIntVar", "INT", 2},
+		{"nUintVar", "UINT", 2},
+		{"nWordVar", "WORD", 2},
+		{"nDintVar", "DINT", 4},
+		{"nUdintVar", "UDINT", 4},
+		{"nDwordVar", "DWORD", 4},
+		{"nLintVar", "LINT", 8},
+		{"nUlintVar", "ULINT", 8},
+		{"nLwordVar", "LWORD", 8},
+		{"fRealVar", "REAL", 4},
+		{"fLrealVar", "LREAL", 8},
+		{"tTimeVar", "TIME", 4},
+		{"tdTimeOfDayVar", "TIME_OF_DAY", 4},
+		{"dDateVar", "DATE", 4},
+		{"dtDateTimeVar", "DATE_AND_TIME", 4},
+		{"tLtimeVar", "LTIME", 8},
+		{"tdLTimeOfDayVar", "LTIME_OF_DAY", 8},
+		{"dLDateVar", "LDATE", 8},
+		{"dtLDateTimeVar", "LDATE_AND_TIME", 8},
 		{"sStringVar", "STRING", 256},
 		{"aIntArray", "ARRAY [0..9] OF INT", 20},
 		{"aDintArray", "ARRAY [-9..9] OF DINT", 76},

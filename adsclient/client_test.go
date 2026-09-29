@@ -42,6 +42,41 @@ func TestDial_ReadAndClose(t *testing.T) {
 	}
 }
 
+func TestDial_OptionsApplied(t *testing.T) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{0x42}
+	})
+	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), 2*time.Second)
+
+	dropped := make(chan struct{}, 1)
+	ctx := context.Background()
+	c, err := Dial(ctx, srv.Host, ams.Address{NetID: ams.NetID{5, 1, 2, 3, 1, 1}, Port: 851},
+		WithPort(srv.Port),
+		WithRequestTimeout(200*time.Millisecond),
+		WithOnDrop(func() { dropped <- struct{}{} }))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	start := time.Now()
+	if _, err := c.Read(ctx, ams.GroupSymbolVersion, 0, 1); err == nil {
+		t.Fatal("Read outlived WithRequestTimeout")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Read took %v; WithRequestTimeout(200ms) not applied", d)
+	}
+
+	srv.CloseClientConns()
+	select {
+	case <-dropped:
+	case <-time.After(2 * time.Second):
+		t.Error("WithOnDrop callback did not fire when the server closed the connection")
+	}
+}
+
 func TestDial_Unreachable(t *testing.T) {
 	_, err := Dial(context.Background(), "127.0.0.1", ams.Address{}, WithPort(1), WithRequestTimeout(250*time.Millisecond))
 	if err == nil {
