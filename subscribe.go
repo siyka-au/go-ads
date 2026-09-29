@@ -91,20 +91,20 @@ func (sess *Session) releaseNotificationHandles(ctx context.Context, handles []u
 	return deleted
 }
 
-// AddSymbolNotification subscribes a single symbol. All notifications on one
+// Subscribe subscribes a single symbol. All notifications on one
 // connection share the same channel, and a duplicate symbol is rejected; the
 // stored channel is reused to re-subscribe after a reconnect. Prefer
-// AddSymbolNotifications for more than one.
+// SubscribeAll for more than one.
 //
 // The caller MUST NOT close updateReceiver while any notification is active -- a
 // recover guards against it, but samples are silently dropped. Delete them or
 // Close first.
-func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName string, maxDelay time.Duration, cycleTime time.Duration, transMode ams.TransMode, updateReceiver chan *Update) (uint32, error) {
+func (sess *Session) Subscribe(ctx context.Context, symbolName string, maxDelay time.Duration, cycleTime time.Duration, transMode ams.TransMode, updateReceiver chan *Update) (uint32, error) {
 	// Refuse outside RUN rather than produce a misleading failure: in CONFIG the
 	// runtime port does not exist, so this cannot succeed, and the PLC's answer is
 	// an AMS "port not found" rather than anything about symbols. Permits when no
 	// state has been observed — see requireRunningRuntime.
-	if err := sess.requireRunningRuntime("AddSymbolNotification"); err != nil {
+	if err := sess.requireRunningRuntime("Subscribe"); err != nil {
 		return 0, err
 	}
 	// Pre-check: channel match + duplicate-subscribe.
@@ -226,34 +226,34 @@ func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName strin
 		return 0, fmt.Errorf("symbol %q already has an active notification; delete it before re-subscribing", symbolName)
 	}
 	defer sess.notifications.lock.Unlock()
-	sess.notifications.activeNotifications[handle] = activeNotification{Sym: fresh, Ch: updateReceiver}
+	sess.notifications.activeNotifications[handle] = activeNotification{Sym: fresh, Ch: updateReceiver, Name: symbolName}
 	// The PLC gave us this handle, so it is part of what a healthy session holds.
 	sess.notifications.raiseRegistered()
 	committed = append(committed, handle)
 
 	// Save config for reconnect re-subscribe
 	sess.notifications.addConfig(NotificationConfig{
-		SymbolName:       symbolName,
-		MaxDelay:         maxDelay,
-		CycleTime:        cycleTime,
-		TransmissionMode: transMode,
+		Symbol:    symbolName,
+		MaxDelay:  maxDelay,
+		CycleTime: cycleTime,
+		Mode:      transMode,
 	})
 	sess.notifications.notificationChannel = updateReceiver
 
 	return handle, nil
 }
 
-// AddSymbolNotifications subscribes several symbols in one round-trip, returning
+// SubscribeAll subscribes several symbols in one round-trip, returning
 // results parallel to configs; a non-nil error means the batch never went at all.
 // Partial outcomes are normal. Skipped != nil means the library did not commit it
 // (match the ErrNotification* sentinels), otherwise Error is the PLC's verdict and
 // NoErrors means Handle is valid. Do not close ch while notifications are active.
-func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []NotificationConfig, ch chan *Update) ([]ams.SumNotificationResult, error) {
+func (sess *Session) subscribeAll(ctx context.Context, configs []NotificationConfig, ch chan *Update) ([]ams.SumNotificationResult, error) {
 	// Refuse outside RUN rather than produce a misleading failure: in CONFIG the
 	// runtime port does not exist, so this cannot succeed, and the PLC's answer is
 	// an AMS "port not found" rather than anything about symbols. Permits when no
 	// state has been observed — see requireRunningRuntime.
-	if err := sess.requireRunningRuntime("AddSymbolNotifications"); err != nil {
+	if err := sess.requireRunningRuntime("SubscribeAll"); err != nil {
 		return nil, err
 	}
 	if len(configs) == 0 {
@@ -290,33 +290,33 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 	batchSeen := make(map[string]struct{}, len(configs))
 
 	for i, cfg := range configs {
-		key := symtab.Key(cfg.SymbolName)
+		key := symtab.Key(cfg.Symbol)
 		if _, dup := existing[key]; dup {
-			results[i].Skipped = fmt.Errorf("symbol %q: %w", cfg.SymbolName, ErrNotificationDuplicate)
-			sess.logger.Warn("duplicate notification rejected (already subscribed)", "symbol", cfg.SymbolName)
+			results[i].Skipped = fmt.Errorf("symbol %q: %w", cfg.Symbol, ErrNotificationDuplicate)
+			sess.logger.Warn("duplicate notification rejected (already subscribed)", "symbol", cfg.Symbol)
 			continue
 		}
 		if _, dup := batchSeen[key]; dup {
-			results[i].Skipped = fmt.Errorf("symbol %q duplicated within batch: %w", cfg.SymbolName, ErrNotificationDuplicate)
-			sess.logger.Warn("duplicate notification rejected (within batch)", "symbol", cfg.SymbolName)
+			results[i].Skipped = fmt.Errorf("symbol %q duplicated within batch: %w", cfg.Symbol, ErrNotificationDuplicate)
+			sess.logger.Warn("duplicate notification rejected (within batch)", "symbol", cfg.Symbol)
 			continue
 		}
 		batchSeen[key] = struct{}{}
 
-		symbol, err := sess.getSymbol(ctx, cfg.SymbolName)
+		symbol, err := sess.getSymbol(ctx, cfg.Symbol)
 		if err != nil {
-			results[i].Skipped = fmt.Errorf("resolve symbol %q: %w", cfg.SymbolName, err)
-			sess.logger.Error("error getting symbol for batch notification", "error", err, "symbol", cfg.SymbolName)
+			results[i].Skipped = fmt.Errorf("resolve symbol %q: %w", cfg.Symbol, err)
+			sess.logger.Error("error getting symbol for batch notification", "error", err, "symbol", cfg.Symbol)
 			continue
 		}
 		infos = append(infos, symbolInfo{configIndex: i, config: cfg, symbol: symbol})
 
-		actualMode := cfg.TransmissionMode
+		actualMode := cfg.Mode
 		if (actualMode == ams.TransModeServerCycle2 || actualMode == ams.TransModeServerOnChange2) && symbol.ContextMask == 0 {
 			actualMode = adsconn.DowngradeTransMode(actualMode)
 			sess.logger.Warn("InContext mode not available for symbol (ContextMask=0), falling back",
-				"symbol", cfg.SymbolName,
-				"requested", cfg.TransmissionMode.String(),
+				"symbol", cfg.Symbol,
+				"requested", cfg.Mode.String(),
 				"using", actualMode.String(),
 				"flags", fmt.Sprintf("0x%04X", uint32(symbol.Flags)))
 		}
@@ -339,7 +339,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 	// here than in the single-symbol path: on a PLC without sum-command
 	// support (TC2 answers 0x0701) SumAddDeviceNotification degrades to one
 	// Add per symbol, so the earliest handles stream for the whole duration
-	// of the remaining registrations. See AddSymbolNotification for the
+	// of the remaining registrations. See Subscribe for the
 	// defer-ordering rationale.
 	subTok := sess.beginSubscribe()
 	// Batch-scoped epoch. Compared per item, this refuses any commit once the
@@ -377,9 +377,9 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 			return
 		}
 		if r.Handle == 0 && r.Error == ams.ReturnCodeNoErrors {
-			results[info.configIndex].Skipped = fmt.Errorf("symbol %q: PLC reported success without a handle", info.config.SymbolName)
+			results[info.configIndex].Skipped = fmt.Errorf("symbol %q: PLC reported success without a handle", info.config.Symbol)
 			sess.logger.Error("notification batch: success with a zero handle",
-				"symbol", info.config.SymbolName)
+				"symbol", info.config.Symbol)
 			return
 		}
 		if r.Error != ams.ReturnCodeNoErrors {
@@ -393,7 +393,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 				level = slog.LevelWarn
 			}
 			sess.logger.Log(context.Background(), level, "error adding notification in batch",
-				"symbol", info.config.SymbolName,
+				"symbol", info.config.Symbol,
 				"errorCode", uint32(r.Error))
 			return
 		}
@@ -407,7 +407,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 			// registration sequence.
 			refused = append(refused, r.Handle)
 			sess.logger.Warn("batch entry not committed; releasing the PLC handle",
-				"symbol", info.config.SymbolName, "handle", r.Handle, "reason", skipErr)
+				"symbol", info.config.Symbol, "handle", r.Handle, "reason", skipErr)
 			return
 		}
 		results[info.configIndex] = r
@@ -419,9 +419,9 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 		// Per handle in the batch: subscribing 40 symbols produced 40 of these.
 		sess.logger.Debug("batch notification created",
 			"handle", r.Handle,
-			"symbol", info.config.SymbolName)
+			"symbol", info.config.Symbol)
 		// See the note at the single-subscribe site.
-		sess.warnUnresolvedBaseType(info.config.SymbolName)
+		sess.warnUnresolvedBaseType(info.config.Symbol)
 	}
 
 	// settle is the batch tail: amend the sweep, then release every handle nothing
@@ -446,7 +446,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 					// drops a config whose handle is still in activeNotifications, and
 					// the sweep emptied that map. Left in place, the retry this entry's
 					// error documents is rejected as a duplicate forever.
-					sess.removeNotificationConfig(configs[idx].SymbolName)
+					sess.removeNotificationConfig(configs[idx].Symbol)
 				}
 			}
 			sess.notifications.lock.Unlock()
@@ -454,7 +454,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 			for _, idx := range stranded {
 				results[idx] = ams.SumNotificationResult{
 					Handle:  results[idx].Handle,
-					Skipped: fmt.Errorf("symbol %q: %w", configs[idx].SymbolName, ErrNotificationStrandedByReload),
+					Skipped: fmt.Errorf("symbol %q: %w", configs[idx].Symbol, ErrNotificationStrandedByReload),
 				}
 			}
 			if len(stranded) > 0 {
@@ -538,7 +538,7 @@ func (sess *Session) commitNotification(cfg NotificationConfig, handle uint32, c
 	// PLC round-trip may have been stranded by a concurrent loadSymbols /
 	// online-change reload that swapped cache.symbols.
 	sess.cache.lock.Lock()
-	fresh := sess.cache.symbols[symtab.Key(cfg.SymbolName)]
+	fresh := sess.cache.symbols[symtab.Key(cfg.Symbol)]
 	sess.cache.lock.Unlock()
 
 	sess.notifications.lock.Lock()
@@ -549,22 +549,22 @@ func (sess *Session) commitNotification(cfg NotificationConfig, handle uint32, c
 	// every remaining item, not just the one unlucky enough to straddle it.
 	// Unchanged epoch also means the `fresh` pointer read above is current.
 	if sess.epoch() != batchCacheEpoch {
-		return fmt.Errorf("symbol %q: %w", cfg.SymbolName, ErrNotificationStrandedByReload)
+		return fmt.Errorf("symbol %q: %w", cfg.Symbol, ErrNotificationStrandedByReload)
 	}
 	if fresh == nil {
-		return fmt.Errorf("symbol %q: %w", cfg.SymbolName, ErrNotificationSymbolVanished)
+		return fmt.Errorf("symbol %q: %w", cfg.Symbol, ErrNotificationSymbolVanished)
 	}
 	if sess.notifications.notificationChannel != nil && sess.notifications.notificationChannel != ch {
-		return fmt.Errorf("symbol %q: %w", cfg.SymbolName, ErrNotificationChannelMismatch)
+		return fmt.Errorf("symbol %q: %w", cfg.Symbol, ErrNotificationChannelMismatch)
 	}
 	// activeNotifications already contains anything committed earlier in this same
 	// batch (the insert below precedes addConfig), so it doubles as the in-batch
 	// duplicate guard — no separate pre/post snapshot needed.
-	if sess.notifications.hasLiveNotification(cfg.SymbolName) {
-		return fmt.Errorf("symbol %q subscribed concurrently during batch: %w", cfg.SymbolName, ErrNotificationDuplicate)
+	if sess.notifications.hasLiveNotification(cfg.Symbol) {
+		return fmt.Errorf("symbol %q subscribed concurrently during batch: %w", cfg.Symbol, ErrNotificationDuplicate)
 	}
 
-	sess.notifications.activeNotifications[handle] = activeNotification{Sym: fresh, Ch: ch}
+	sess.notifications.activeNotifications[handle] = activeNotification{Sym: fresh, Ch: ch, Name: cfg.Symbol}
 	// Same as the single-subscribe site: this is what a healthy session holds.
 	// Missing it here made the gap check inert for every batch subscriber, which
 	// is how the plugin subscribes -- caught on hardware, want=0 have=1.
@@ -585,7 +585,7 @@ func (sess *Session) removeNotificationConfig(symbolName string) {
 	}
 	delete(sess.notifications.configsByKey, key)
 	for i, entry := range sess.notifications.pending {
-		if strings.EqualFold(entry.Config.SymbolName, symbolName) {
+		if strings.EqualFold(entry.Config.Symbol, symbolName) {
 			sess.notifications.pending = append(sess.notifications.pending[:i], sess.notifications.pending[i+1:]...)
 			return
 		}
@@ -595,7 +595,7 @@ func (sess *Session) removeNotificationConfig(symbolName string) {
 // Subscribe race window: the PLC-side notification handle exists from the
 // moment AddDeviceNotification returns, but our activeNotifications insert
 // happens afterwards — and on TC2, which answers 0x0701 to the sum command,
-// AddSymbolNotifications degrades to one Add per symbol, so the last symbol
+// SubscribeAll degrades to one Add per symbol, so the last symbol
 // of a 40-entry batch commits hundreds of milliseconds after the first
 // symbol started streaming. Samples arriving in that window must be neither
 // dropped nor mistaken for leaked handles.
@@ -786,4 +786,41 @@ func (sess *Session) replayEarlySamples(ctx context.Context, handles []uint32) {
 		sess.logger.Debug("replaying buffered early notification sample", "handle", p.handle)
 		sess.dispatchSample(ctx, p.handle, p.sample.timestamp, p.sample.content, false)
 	}
+}
+
+// SubscribeResult is the outcome of one entry of SubscribeAll.
+type SubscribeResult struct {
+	// Symbol describes the subscribed symbol — its type and size, for labelling
+	// the values that will arrive. Zero when the symbol could not be resolved.
+	Symbol SymbolView
+	// Handle identifies the subscription for Unsubscribe; 0 when Err is set.
+	Handle uint32
+	// Err is nil when the subscription is live. Otherwise it wraps one of the
+	// ErrNotification* sentinels, or is the PLC's ams.ReturnCode refusing it.
+	Err error
+}
+
+// SubscribeAll subscribes several symbols in one round-trip. Updates for all of
+// them arrive on ch, and the session re-subscribes them after a reconnect.
+//
+// The results are parallel to configs, and partial success is normal: check
+// each Err. A non-nil error means the batch was never sent. Do not close ch
+// while subscriptions are active.
+func (sess *Session) SubscribeAll(ctx context.Context, configs []NotificationConfig, ch chan *Update) ([]SubscribeResult, error) {
+	raw, err := sess.subscribeAll(ctx, configs, ch)
+	out := make([]SubscribeResult, len(raw))
+	for i, r := range raw {
+		res := SubscribeResult{Handle: r.Handle}
+		switch {
+		case r.Skipped != nil:
+			res.Err, res.Handle = r.Skipped, 0
+		case r.Error != ams.ReturnCodeNoErrors:
+			res.Err, res.Handle = r.Error, 0
+		}
+		if i < len(configs) {
+			res.Symbol, _ = sess.cachedView(configs[i].Symbol)
+		}
+		out[i] = res
+	}
+	return out, err
 }

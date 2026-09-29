@@ -24,7 +24,7 @@ func (v SymbolView) log() *slog.Logger { return connLogger(v.conn) }
 
 // SymbolView is a read-only snapshot of a symbol's metadata and cached value,
 // captured under cache.lock at creation. It does not track later updates -- call
-// GetSymbol again or subscribe for fresh data.
+// Symbol again or subscribe for fresh data.
 //
 // The snapshot model buys lock-free field access and internal consistency (Parsed
 // and Value captured together), at the cost of going stale after a concurrent
@@ -52,7 +52,7 @@ type SymbolView struct {
 }
 
 // IsValid reports whether the view is backed by a live connection. Zero-value
-// SymbolView returns false; views obtained from GetSymbol/ListSymbols return
+// SymbolView returns false; views obtained from Symbol/Symbols return
 // true (until the connection is closed).
 func (v SymbolView) IsValid() bool { return v.conn != nil && v.FullName != "" }
 
@@ -181,7 +181,7 @@ func (v SymbolView) Children() map[string]SymbolView {
 // ChildrenWalk visits every symbol in the subtree rooted at this view in
 // depth-first order. Snapshots the entire subtree under cache.lock once,
 // releases the lock, then invokes fn for each entry. fn is free to call
-// any Session method (Value field reads are lock-free, GetSymbol etc.
+// any Session method (Value field reads are lock-free, Symbol etc.
 // take their own locks - no deadlock risk).
 //
 // Walk terminates early if fn returns false.
@@ -255,4 +255,15 @@ func viewOf(s *symtab.Symbol, conn *Session) SymbolView {
 		Value:       symtab.CopyValue(s.Value),
 		conn:        conn,
 	}
+}
+
+// cachedView returns the view of a symbol already in the cache, with no I/O.
+func (sess *Session) cachedView(name string) (SymbolView, bool) {
+	sess.cache.lock.Lock()
+	defer sess.cache.lock.Unlock()
+	s := sess.cache.symbols[symtab.Key(name)]
+	if s == nil {
+		return SymbolView{}, false
+	}
+	return viewOf(s, sess), true
 }

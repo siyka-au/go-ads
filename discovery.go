@@ -13,13 +13,13 @@ import (
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
-// ListSymbols returns the full symbol table.
+// Symbols returns the full symbol table.
 // Requires LoadSymbols() or LoadSymbolsSlow() to have been called first.
 // Returns an error if full discovery has not been performed.
 //
-// ListSymbols returns read-only SymbolViews for every symbol discovered
+// Symbols returns read-only SymbolViews for every symbol discovered
 // via LoadSymbols/LoadSymbolsSlow. Keys are PLC-cased FullNames.
-func (sess *Session) ListSymbols() (map[string]SymbolView, error) {
+func (sess *Session) Symbols() (map[string]SymbolView, error) {
 	sess.cache.lock.Lock()
 	defer sess.cache.lock.Unlock()
 	if !sess.cache.symbolsFullyLoaded {
@@ -33,7 +33,7 @@ func (sess *Session) ListSymbols() (map[string]SymbolView, error) {
 }
 
 // LoadSymbols performs full symbol and datatype discovery from the PLC.
-// After calling this, ListSymbols() returns all symbols, and struct/array
+// After calling this, Symbols() returns all symbols, and struct/array
 // children are available. Write operations with type aliases also work.
 // This downloads the entire symbol and datatype tables in single requests,
 // which may cause real-time jitter on the PLC. For large programs, consider
@@ -176,10 +176,10 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 	return nil
 }
 
-// GetSymbol returns a read-only SymbolView for the named symbol.
+// Symbol returns a read-only SymbolView for the named symbol.
 // Resolves on-demand if the symbol is not in the cache (single-symbol
 // lookup against the PLC).
-func (sess *Session) GetSymbol(ctx context.Context, symbolName string) (SymbolView, error) {
+func (sess *Session) Symbol(ctx context.Context, symbolName string) (SymbolView, error) {
 	sym, err := sess.getSymbol(ctx, symbolName)
 	if err != nil {
 		return SymbolView{}, err
@@ -210,7 +210,7 @@ func (sess *Session) logSymbolGot(sym *symtab.Symbol) {
 
 // getSymbol returns the internal *symbol for the named symbol. Used by
 // in-package code paths that need direct access to mutable symbol state
-// (notifications, reads, writes). External callers should use GetSymbol.
+// (notifications, reads, writes). External callers should use Symbol.
 func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symtab.Symbol, error) {
 	sess.cache.lock.Lock()
 	localSymbol, ok := sess.cache.symbols[symtab.Key(symbolName)]
@@ -372,7 +372,7 @@ func (sess *Session) RefreshSymbols(ctx context.Context) error {
 
 // LoadSymbolList downloads only the symbol table (0xF00B) from the PLC in chunks.
 // This is the smaller of the two tables and enables browsing top-level symbol names.
-// After calling this, BrowseSymbols() can list root symbols and navigate by prefix.
+// After calling this, Browse() can list root symbols and navigate by prefix.
 // To also expand struct/array children, call LoadDataTypes() afterwards.
 func (sess *Session) LoadSymbolList(ctx context.Context, cfg SlowDiscoveryConfig) error {
 	cfg.applyDefaults()
@@ -441,7 +441,7 @@ func (sess *Session) LoadSymbolList(ctx context.Context, cfg SlowDiscoveryConfig
 
 // LoadDataTypes downloads only the datatype table (0xF00E) from the PLC in chunks.
 // After calling this along with LoadSymbolList(), struct/array children can be
-// browsed and expanded via BrowseSymbols().
+// browsed and expanded via Browse().
 func (sess *Session) LoadDataTypes(ctx context.Context, cfg SlowDiscoveryConfig) error {
 	cfg.applyDefaults()
 

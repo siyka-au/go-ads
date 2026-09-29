@@ -132,7 +132,7 @@ func TestNewSession_TotalConstruction(t *testing.T) {
 		t.Errorf("requestTimeout = %v, want 5s default", sess.requestTimeout)
 	}
 	// Default local AMS port is random in [32768, 49151] so each Session is
-	// a distinct AMS client identity to the PLC. WithLocalAMS overrides for
+	// a distinct AMS client identity to the PLC. WithLocalAddress overrides for
 	// stable-port deployments.
 	if sess.tx.Source().Port < 32768 || sess.tx.Source().Port > 49151 {
 		t.Errorf("localPort = %d, want random in [32768, 49151]", sess.tx.Source().Port)
@@ -148,7 +148,7 @@ func TestNewSession_TotalConstruction(t *testing.T) {
 // Validates: R-SES-001, R-SES-006 (option apply-time validation).
 func TestNewSession_OptionsApplied(t *testing.T) {
 	sess, err := NewSession(context.Background(), testEndpoint(),
-		WithLocalAMS(ams.Address{Port: 1234}),
+		WithLocalAddress(ams.Address{Port: 1234}),
 		WithRequestTimeout(11*time.Second))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -953,19 +953,19 @@ func TestNewSession_DefaultRandomLocalPort_Distribution(t *testing.T) {
 }
 
 // TestNewSession_WithLocalAMS_ZeroPort_KeepsRandomDefault verifies that
-// WithLocalAMS(Address{Port: 0}) does NOT clobber the random default port.
+// WithLocalAddress(Address{Port: 0}) does NOT clobber the random default port.
 // Port == 0 is the zero value; treating it as "explicit override to 0" would
-// produce an invalid AMS source. WithLocalAMS guards Port != 0 explicitly.
+// produce an invalid AMS source. WithLocalAddress guards Port != 0 explicitly.
 func TestNewSession_WithLocalAMS_ZeroPort_KeepsRandomDefault(t *testing.T) {
 	sess, err := NewSession(context.Background(), testEndpoint(),
-		WithLocalAMS(ams.Address{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 0}),
+		WithLocalAddress(ams.Address{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 0}),
 	)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	defer sess.Close()
 	if sess.tx.Source().Port < 32768 || sess.tx.Source().Port > 49151 {
-		t.Errorf("port=%d, want random default (Port=0 in WithLocalAMS must not override)", sess.tx.Source().Port)
+		t.Errorf("port=%d, want random default (Port=0 in WithLocalAddress must not override)", sess.tx.Source().Port)
 	}
 	if sess.tx.Source().NetID != ([6]byte{10, 20, 30, 40, 1, 1}) {
 		t.Errorf("NetID override lost: got %v", sess.tx.Source().NetID)

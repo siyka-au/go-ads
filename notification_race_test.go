@@ -111,9 +111,9 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 	})
 
 	ch := make(chan *Update, 4)
-	handle, err := sess.AddSymbolNotification(context.Background(), "MAIN.sMachineName", 0, 0, ams.TransModeServerOnChange, ch)
+	handle, err := sess.Subscribe(context.Background(), "MAIN.sMachineName", 0, 0, ams.TransModeServerOnChange, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	if handle != plcHandle {
 		t.Fatalf("handle = 0x%X, want 0x%X", handle, plcHandle)
@@ -124,8 +124,8 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 		if u.Value != int16(4242) {
 			t.Errorf("Update.Value = %#v, want int16(4242)", u.Value)
 		}
-		if u.Variable != "MAIN.sMachineName" {
-			t.Errorf("Update.Variable = %q, want %q", u.Variable, "MAIN.sMachineName")
+		if u.Symbol != "MAIN.sMachineName" {
+			t.Errorf("Update.Symbol = %q, want %q", u.Symbol, "MAIN.sMachineName")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("early sample never delivered: buffered sample was not replayed after commit")
@@ -140,7 +140,7 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 }
 
 // TestSubscribeRace_BatchOnSumUnsupportedPLC reproduces the TC2 shape: the sum
-// command is unsupported, so AddSymbolNotifications degrades to one Add per
+// command is unsupported, so SubscribeAll degrades to one Add per
 // symbol with enough latency that the batch outlasts subscribeRaceWindow. The
 // first symbol streams while the last is still registering. Every early sample
 // must survive and no handle may be reaped.
@@ -176,7 +176,7 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.tag" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xC000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -192,9 +192,9 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 	})
 
 	ch := make(chan *Update, 2*symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	for i, r := range results {
 		if r.Skipped != nil {
@@ -210,7 +210,7 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 	for len(got) < symbolCount {
 		select {
 		case u := <-ch:
-			got[u.Variable] = u.Value
+			got[u.Symbol] = u.Value
 		case <-deadline:
 			t.Fatalf("delivered %d/%d symbols, want all; missing early samples were dropped: got=%v", len(got), symbolCount, got)
 		}
@@ -252,7 +252,7 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.bind" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xD000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var mu sync.Mutex
@@ -282,9 +282,9 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 	})
 
 	ch := make(chan *Update, 4*symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	for i, r := range results {
 		if r.Skipped != nil || r.Error != ams.ReturnCodeNoErrors {
@@ -328,7 +328,7 @@ func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.reload" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xE000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var adds atomic.Int32
@@ -359,9 +359,9 @@ func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
 	})
 
 	ch := make(chan *Update, symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 
 	for i, r := range results {
@@ -417,7 +417,7 @@ func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.plain" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xC100+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var deletedMu sync.Mutex
@@ -442,9 +442,9 @@ func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
 	})
 
 	ch := make(chan *Update, symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 
 	// Item 0 was committed before the bump and nothing swept it: it stays a
@@ -500,7 +500,7 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.post" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xD200+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var deletedMu sync.Mutex
@@ -528,9 +528,9 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 	})
 
 	ch := make(chan *Update, symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 
 	// Item 0 was in the snapshot the sweep took: correctly stranded.
@@ -588,7 +588,7 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.retry" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xD400+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var adds atomic.Int32
@@ -605,16 +605,16 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 	})
 
 	ch := make(chan *Update, symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	if !errors.Is(results[0].Skipped, ErrNotificationStrandedByReload) {
 		t.Fatalf("results[0] Skipped = %v, want ErrNotificationStrandedByReload — the test did not reproduce the stranding it needs", results[0].Skipped)
 	}
 
 	// The documented response to a stranded entry: subscribe it again.
-	if _, err := sess.AddSymbolNotification(context.Background(), names[0], 0, 0, ams.TransModeServerOnChange, ch); err != nil {
+	if _, err := sess.Subscribe(context.Background(), names[0], 0, 0, ams.TransModeServerOnChange, ch); err != nil {
 		if errors.Is(err, ErrNotificationDuplicate) || strings.Contains(err.Error(), "already") {
 			t.Errorf("retry of a stranded symbol rejected as a duplicate: %v", err)
 		} else {
@@ -654,7 +654,7 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.abort" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xB000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var deletedMu sync.Mutex
@@ -687,7 +687,7 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	ch := make(chan *Update, symbolCount)
-	results, err := sess.AddSymbolNotifications(ctx, configs, ch)
+	results, err := sess.subscribeAll(ctx, configs, ch)
 	if err == nil {
 		t.Fatal("batch reported success despite the context expiring mid-batch")
 	}
@@ -767,7 +767,7 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 	for i := range configs {
 		name := fmt.Sprintf("MAIN.reaped%d", i)
 		preSeedTypedSymbol(sess, name, uint32(0xD600+i))
-		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: name, Mode: ams.TransModeServerOnChange}
 	}
 
 	var adds atomic.Int32
@@ -786,7 +786,7 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	ch := make(chan *Update, symbolCount)
-	if _, err := sess.AddSymbolNotifications(ctx, configs, ch); err == nil {
+	if _, err := sess.subscribeAll(ctx, configs, ch); err == nil {
 		t.Fatal("batch unexpectedly succeeded; the abort this test needs did not happen")
 	}
 
@@ -845,7 +845,7 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.drop" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xF000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: names[i], Mode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -857,9 +857,9 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 	srv.DropConnAfter(ams.CommandAddDeviceNotification, 3)
 
 	ch := make(chan *Update, symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	// An error is acceptable here and so is nil — what matters is the results.
-	t.Logf("AddSymbolNotifications returned err=%v", err)
+	t.Logf("SubscribeAll returned err=%v", err)
 
 	if len(results) != symbolCount {
 		t.Fatalf("results len = %d, want %d", len(results), symbolCount)
@@ -915,7 +915,7 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 	for i := range configs {
 		name := fmt.Sprintf("MAIN.scale%02d", i)
 		preSeedTypedSymbol(sess, name, uint32(0xA000+i))
-		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: name, Mode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -930,7 +930,7 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 
 	ch := make(chan *Update, symbolCount)
 	start := time.Now()
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	elapsed := time.Since(start)
 	t.Logf("40-symbol batch with the link dying at Add 3: took %v, err=%v (answered Adds=%d)",
 		elapsed.Round(time.Millisecond), err, adds.Load())
@@ -996,7 +996,7 @@ func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
 	for i := range configs {
 		name := fmt.Sprintf("MAIN.router%02d", i)
 		preSeedTypedSymbol(sess, name, uint32(0xB000+i))
-		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange}
+		configs[i] = NotificationConfig{Symbol: name, Mode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -1011,11 +1011,11 @@ func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
 	srv.AMSErrorAfter(ams.CommandAddDeviceNotification, 4, ams.ReturnCodeGlobalTargetPortNotFound)
 
 	ch := make(chan *Update, symbolCount)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	t.Logf("40-symbol batch with the router refusing from Add 4: err=%v (answered Adds=%d)", err, adds.Load())
 
 	if err == nil {
-		t.Error("AddSymbolNotifications returned nil error after the router refused 37 of 40 items")
+		t.Error("SubscribeAll returned nil error after the router refused 37 of 40 items")
 	}
 	if len(results) != symbolCount {
 		t.Fatalf("results len = %d, want %d", len(results), symbolCount)
@@ -1164,8 +1164,8 @@ func TestSubscribeRace_UncommittedSamplesDiscarded(t *testing.T) {
 	})
 
 	ch := make(chan *Update, 1)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.rejected", 0, 0, ams.TransModeServerOnChange, ch); err == nil {
-		t.Fatal("AddSymbolNotification: err = nil, want PLC rejection")
+	if _, err := sess.Subscribe(context.Background(), "MAIN.rejected", 0, 0, ams.TransModeServerOnChange, ch); err == nil {
+		t.Fatal("Subscribe: err = nil, want PLC rejection")
 	}
 
 	if got := earlySampleCount(sess); got != 0 {
@@ -1229,8 +1229,8 @@ func TestBufferEarlySample_SelfHealsWhenCommitLandedFirst(t *testing.T) {
 		if u.Value != int16(1234) {
 			t.Errorf("Update.Value = %#v, want int16(1234)", u.Value)
 		}
-		if u.Variable != "MAIN.sStaticName" {
-			t.Errorf("Update.Variable = %q, want %q", u.Variable, "MAIN.sStaticName")
+		if u.Symbol != "MAIN.sStaticName" {
+			t.Errorf("Update.Symbol = %q, want %q", u.Symbol, "MAIN.sStaticName")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("sample never delivered: buffering did not notice the handle was already bound")
@@ -1556,13 +1556,13 @@ func TestRestoreConfigs_KeepsWhatArrivedDuringTheAttempt(t *testing.T) {
 
 	// What recovery snapshotted before it started.
 	snapshot := []pendingNotification{
-		{Config: NotificationConfig{SymbolName: "MAIN.a"}},
-		{Config: NotificationConfig{SymbolName: "MAIN.b"}, resubscribeAttempts: 2},
+		{Config: NotificationConfig{Symbol: "MAIN.a"}},
+		{Config: NotificationConfig{Symbol: "MAIN.b"}, resubscribeAttempts: 2},
 	}
 	// What the attempt left on file: its own configs cleared, plus one the user
 	// subscribed while it was running.
 	mgr.resetConfigs(nil)
-	mgr.addConfig(NotificationConfig{SymbolName: "MAIN.late"})
+	mgr.addConfig(NotificationConfig{Symbol: "MAIN.late"})
 
 	mgr.restoreConfigs(snapshot)
 
@@ -1581,7 +1581,7 @@ func TestRestoreConfigs_KeepsWhatArrivedDuringTheAttempt(t *testing.T) {
 	// The retry counter has to survive, or a symbol that has already failed twice
 	// gets a fresh budget on every recovery and never drops out.
 	for _, entry := range mgr.pending {
-		if entry.Config.SymbolName == "MAIN.b" && entry.resubscribeAttempts != 2 {
+		if entry.Config.Symbol == "MAIN.b" && entry.resubscribeAttempts != 2 {
 			t.Errorf("MAIN.b restored with resubscribeAttempts = %d, want 2", entry.resubscribeAttempts)
 		}
 	}

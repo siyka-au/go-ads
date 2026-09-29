@@ -51,7 +51,7 @@ func (sess *Session) resubscribeNotificationsLocked() error {
 	}
 	if len(validConfigs) == 0 {
 		// All symbols gone (e.g., PLC online change removed all subscribed vars).
-		// Clear channel reference so a future AddSymbolNotification can use a new channel.
+		// Clear channel reference so a future Subscribe can use a new channel.
 		sess.notifications.lock.Lock()
 		sess.notifications.notificationChannel = nil
 		// A healthy session now holds nothing, so the baseline has to say so.
@@ -82,7 +82,7 @@ func (sess *Session) resubscribeNotificationsLocked() error {
 	}
 	sess.notifications.lock.Unlock()
 
-	subResults, err := sess.AddSymbolNotifications(sess.currentLifecycleCtx(), validConfigs, savedChannel)
+	subResults, err := sess.subscribeAll(sess.currentLifecycleCtx(), validConfigs, savedChannel)
 
 	// Skipped+Handle entries: the PLC accepted but we refused to commit, so the
 	// handle is not in activeNotifications and leaks unless released here. Re-queue
@@ -99,7 +99,7 @@ func (sess *Session) resubscribeNotificationsLocked() error {
 			entry := validPending[i]
 			entry.resubscribeAttempts++
 			if entry.resubscribeAttempts >= resubscribeMaxAttempts {
-				droppedConfigs = append(droppedConfigs, entry.Config.SymbolName)
+				droppedConfigs = append(droppedConfigs, entry.Config.Symbol)
 				continue
 			}
 			retryEntries = append(retryEntries, entry)

@@ -493,6 +493,7 @@ func (sess *Session) publishWiredClient() *adsconn.Conn {
 		Transport:      sess.tx,
 		Ctx:            clientCtx,
 		Cancel:         clientCancel,
+		DisableSum:     sess.disableSum,
 	})
 	// handleNotification gives the Client cache-aware dispatch for inbound
 	// DeviceNotification packets; triggerReconnect routes transport-down into the

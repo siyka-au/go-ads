@@ -46,9 +46,11 @@ type Session struct {
 	tx *adsconn.Transport
 
 	target ams.Address
-	// localAddr is the source address as configured (WithLocalAMS, or a random
+	// localAddr is the source address as configured (WithLocalAddress, or a random
 	// port); from NewSession on, tx holds the live copy.
-	localAddr   ams.Address
+	localAddr ams.Address
+	// disableSum is WithoutSumCommands, applied to every Conn the session wires.
+	disableSum  bool
 	callbackIP  string // IP PLC uses to reach us (for Docker/VPN; set via WithHostIP)
 	localBindIP net.IP // Force outbound TCP source IP (multi-session per host; set via WithLocalBindIP). nil = OS default routing.
 
@@ -147,23 +149,23 @@ type Session struct {
 	targetCheck TargetCheck
 
 	// routerPort is the UDP port for route registration and identify. Set from
-	// AMSEndpoint.RouterPort; 0 means the protocol default.
+	// Endpoint.RouterPort; 0 means the protocol default.
 	routerPort int
 
 	logger *slog.Logger
 }
 
-// AMSEndpoint identifies a remote ADS endpoint at the TCP and AMS layers.
+// Endpoint identifies a remote ADS endpoint at the TCP and AMS layers.
 // IP+Port locate the TwinCAT runtime over TCP (port 48898 by default);
 // AMS is the target Address carried in every ADS request header.
-type AMSEndpoint struct {
+type Endpoint struct {
 	// IP is the host or address of the PLC (or of the NAT that forwards to it).
-	IP string
+	Host string
 	// Port is the TCP port carrying AMS. Defaults to 48898, TwinCAT's own.
 	Port int
 	// AMS is the target AMS address. A zero NetID and/or Port is resolved from
 	// the device — see NewSession.
-	AMS ams.Address
+	Target ams.Address
 	// RouterPort is the AMS router's UDP port (default 48899), used to register a
 	// route and identify the device. Set it behind NAT, where the forwarded UDP
 	// port differs from the TCP one and cannot be derived from Port. Only the two
@@ -175,8 +177,8 @@ type AMSEndpoint struct {
 // resolve an incomplete remote.AMS over UDP -- the port then follows the TC major
 // version, so several runtimes means setting it explicitly. Local NetID and AMS
 // port default so sessions cannot collide on the PLC's handle table.
-func NewSession(ctx context.Context, remote AMSEndpoint, opts ...SessionOption) (sess *Session, err error) {
-	if remote.IP == "" {
+func NewSession(ctx context.Context, remote Endpoint, opts ...Option) (sess *Session, err error) {
+	if remote.Host == "" {
 		return nil, fmt.Errorf("ads: NewSession: remote.IP must be set")
 	}
 	if remote.Port <= 0 {
@@ -190,10 +192,10 @@ func NewSession(ctx context.Context, remote AMSEndpoint, opts ...SessionOption) 
 	}
 	sessCtx, cancel := context.WithCancel(ctx) //nolint:gosec // cancel stored in lifecycle.shutdown, called from Close + tearDownAndReset
 	sess = &Session{
-		ip:             remote.IP,
+		ip:             remote.Host,
 		port:           remote.Port,
 		routerPort:     remote.RouterPort,
-		target:         remote.AMS,
+		target:         remote.Target,
 		requestTimeout: 5 * time.Second,
 		route:          &routeManager{},
 		notifications: &notificationManager{
@@ -229,7 +231,7 @@ func NewSession(ctx context.Context, remote AMSEndpoint, opts ...SessionOption) 
 	sess.targetCheck = TargetCheckWarn
 	// Default local AMS port: random in IANA dynamic range so each process /
 	// each session presents a distinct AMS source identity to the PLC. See
-	// RandomSourcePort doc for the rationale. WithLocalAMS overrides for stable-
+	// RandomSourcePort doc for the rationale. WithLocalAddress overrides for stable-
 	// port deployments (firewalled environments, container port allow-lists).
 	sess.localAddr.Port = adsconn.RandomSourcePort()
 	for _, opt := range opts {

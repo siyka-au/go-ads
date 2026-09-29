@@ -53,6 +53,8 @@ type sessionLifecycle struct {
 
 	closedCh   chan struct{}
 	closedOnce sync.Once
+	// closeErr is why the session ended, for Session.Err; set once, before closedCh.
+	closeErr atomic.Pointer[error]
 	// shutdownOnce guards the terminal teardown, which has two entry points. Gating
 	// it on winning the FSM transition instead meant whichever lost did nothing: a
 	// give-up left the socket, listener and workers up, and the later Close returned
@@ -61,7 +63,7 @@ type sessionLifecycle struct {
 	// spawnMu makes "is the session closed" and "register a goroutine" one decision.
 	// A bare isClosed() before waitGroup.Add is a TOCTOU that panics the process with
 	// "Add called concurrently with Wait". Reachable from user goroutines too, via
-	// AddSymbolNotification -> ... -> tryOrphanDelete.
+	// Subscribe -> ... -> tryOrphanDelete.
 	spawnMu sync.Mutex // guards close(closedCh) so Close() and Reconnect-exhaustion can both fire safely
 
 	// The FSM state plus the unified epoch counter, which is the source of truth for

@@ -61,9 +61,9 @@ func TestHeartbeat_ResubscribesWhenBeatsStop(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.beat", 0xF300)
 
 	ch := make(chan *Update, 16)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.beat", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.beat", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	afterSetup := adds.Load()
 	if afterSetup < 2 {
@@ -122,9 +122,9 @@ func TestHeartbeat_NotDeliveredToTheCaller(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.quiet", 0xF400)
 	ch := make(chan *Update, 8)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.quiet", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.quiet", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	hb := sess.notifications.heartbeatHandle.Load()
 	if hb == 0 {
@@ -194,9 +194,9 @@ func TestHeartbeat_OptOut(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.nohb", 0xF500)
 	ch := make(chan *Update, 4)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.nohb", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.nohb", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	if got := adds.Load(); got != 1 {
 		t.Errorf("Add calls = %d with the heartbeat disabled, want 1 (the caller's subscription only)", got)
@@ -227,9 +227,9 @@ func TestHeartbeat_CarriesSymbolVersionChange(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.ver", 0xF600)
 	ch := make(chan *Update, 4)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.ver", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.ver", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	sess.cache.lock.Lock()
 	sess.cache.symbolVersion = 7
@@ -290,9 +290,9 @@ func TestHeartbeat_RecoverySurvivesAnUnavailablePLC(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.survive", 0xF700)
 
 	ch := make(chan *Update, 8)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.survive", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.survive", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 
 	// The PLC goes to CONFIG: beats stop AND re-subscribes are refused. Several
@@ -411,9 +411,9 @@ func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
 
 	preSeedTypedSymbol(sess, "MAIN.beat", 0xF300)
 	ch := make(chan *Update, 16)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.beat", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.beat", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	oldHB := sess.notifications.heartbeatHandle.Load()
 	if oldHB == 0 {
@@ -474,15 +474,15 @@ func TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.gone", 0xF600)
 	ch := make(chan *Update, 4)
-	handle, err := sess.AddSymbolNotification(context.Background(), "MAIN.gone", 0, 0,
+	handle, err := sess.Subscribe(context.Background(), "MAIN.gone", 0, 0,
 		ams.TransModeServerOnChange, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 
 	// The error is still reported — the caller asked for a delete and it did not
 	// happen the way they asked — but the state must not be stranded.
-	_ = sess.DeleteDeviceNotification(context.Background(), handle)
+	_ = sess.Unsubscribe(context.Background(), handle)
 
 	sess.notifications.lock.Lock()
 	_, stillActive := sess.notifications.activeNotifications[handle]
@@ -522,10 +522,10 @@ func TestDeleteNotification_ForeignHandleKeepsTheSubscriptionChannel(t *testing.
 	ch := make(chan *Update, 4)
 	sess.notifications.lock.Lock()
 	sess.notifications.notificationChannel = ch
-	sess.notifications.addConfig(NotificationConfig{SymbolName: "MAIN.keepme"})
+	sess.notifications.addConfig(NotificationConfig{Symbol: "MAIN.keepme"})
 	sess.notifications.lock.Unlock()
 
-	if err := sess.DeleteDeviceNotification(context.Background(), 0xDEAD); err != nil {
+	if err := sess.Unsubscribe(context.Background(), 0xDEAD); err != nil {
 		t.Fatalf("delete of a foreign handle: %v", err)
 	}
 
@@ -574,9 +574,9 @@ func TestHeartbeat_SymbolVersionChangeDetectedOnce(t *testing.T) {
 
 	preSeedTypedSymbol(sess, "MAIN.ver", 0xF700)
 	ch := make(chan *Update, 16)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.ver", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.ver", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	hb := sess.notifications.heartbeatHandle.Load()
 	if hb == 0 {
@@ -657,9 +657,9 @@ func TestHeartbeat_RecoveryDoesNothingAfterClose(t *testing.T) {
 	}
 	preSeedTypedSymbol(sess, "MAIN.afterclose", 0xF800)
 	ch := make(chan *Update, 4)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.afterclose", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.afterclose", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 
 	// The window that matters is INSIDE Close: it marks the session closed and
@@ -752,9 +752,9 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.spin", 0xF900)
 	ch := make(chan *Update, 4)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.spin", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.spin", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 
 	// The transport dies without the session being closed — the state the reconnect
@@ -806,14 +806,14 @@ func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
 
 	// No reading yet: the gate must permit, or every device that does not serve the
 	// system service port would stop working.
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.cfg", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.cfg", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("subscribe refused with no runtime-state reading: %v", err)
 	}
 
 	// Now the system service reports CONFIG.
 	sess.recordRuntimeState(ams.StateConfig)
-	_, err := sess.AddSymbolNotification(context.Background(), "MAIN.cfg2", 0, 0,
+	_, err := sess.Subscribe(context.Background(), "MAIN.cfg2", 0, 0,
 		ams.TransModeServerOnChange, ch)
 	if err == nil {
 		t.Error("subscribe succeeded although the runtime is in CONFIG: the runtime port does not exist in that state, so this " +
@@ -831,7 +831,7 @@ func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
 
 	// Back to RUN: work is allowed again without rebuilding anything.
 	sess.recordRuntimeState(ams.StateRun)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.cfg3", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.cfg3", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
 		t.Errorf("subscribe still refused after the runtime returned to RUN: %v", err)
 	}
@@ -922,9 +922,9 @@ func TestHeartbeat_DetectionSurvivesABackwardClockStep(t *testing.T) {
 	}
 	preSeedTypedSymbol(sess, "MAIN.clock", 0xFD10)
 	ch := make(chan *Update, 8)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.clock", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.clock", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	afterSetup := adds.Load()
 
@@ -1028,9 +1028,9 @@ func TestHeartbeat_RetriesAfterAFailedEstablish(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.nobeat", 0xFF10)
 	ch := make(chan *Update, 4)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.nobeat", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.nobeat", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	if sess.notifications.heartbeatHandle.Load() != 0 {
 		t.Fatal("the stub was supposed to refuse the cyclic subscribe")
@@ -1107,12 +1107,12 @@ func TestHeartbeat_RecoveryKeepsALargeConfigSet(t *testing.T) {
 	for i := 0; i < symbols; i++ {
 		name := fmt.Sprintf("MAIN.bulk%02d", i)
 		preSeedTypedSymbol(sess, name, uint32(0x3000+i))
-		configs = append(configs, NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange})
+		configs = append(configs, NotificationConfig{Symbol: name, Mode: ams.TransModeServerOnChange})
 	}
 	ch := make(chan *Update, 256)
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	bound := 0
 	for _, r := range results {
@@ -1234,9 +1234,9 @@ func TestHeartbeat_DeferralsKeepAConstantRate(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.deferred", 0x5100)
 	ch := make(chan *Update, 8)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.deferred", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.deferred", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 
 	// The runtime is in CONFIG for 1.5s. At a 100ms cycle and 2 missed ticks the
@@ -1288,9 +1288,9 @@ func TestHeartbeat_ReconnectDoesNotInheritStaleQuietTicks(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.beat", 0xF300)
 
 	ch := make(chan *Update, 16)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.beat", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.beat", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	hb := sess.notifications.heartbeatHandle.Load()
 	if hb == 0 {
@@ -1533,9 +1533,9 @@ func TestHeartbeat_RetriesAfterAHandleCollision(t *testing.T) {
 	// caller's own handle reaches activeNotifications, so a first subscribe can
 	// never collide with itself.
 	seedLiveNotification(sess, "MAIN.already", collidingHandle, ch)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.collide", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.collide", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	if got := sess.notifications.heartbeatHandle.Load(); got != 0 {
 		t.Fatalf("heartbeatHandle = 0x%X, want 0: the colliding handle was supposed to be refused", got)
@@ -1735,9 +1735,9 @@ func TestHeartbeat_RecoversSubscriptionsWhileTheBeatIsHealthy(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.gap", 0xF800)
 
 	ch := make(chan *Update, 8)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.gap", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.gap", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	want, have := sess.notifications.subscriptionGap()
 	if want == 0 || want != have {
@@ -1824,9 +1824,9 @@ func TestHeartbeat_RecoversWhenTheBeatIsSlowerThanTheTick(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.slowbeat", 0xF900)
 
 	ch := make(chan *Update, 8)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.slowbeat", 0, 0,
+	if _, err := sess.Subscribe(context.Background(), "MAIN.slowbeat", 0, 0,
 		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	if want, have := sess.notifications.subscriptionGap(); want == 0 || want != have {
 		t.Fatalf("baseline not established: want=%d have=%d", want, have)

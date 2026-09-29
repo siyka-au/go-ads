@@ -23,12 +23,12 @@ func TestBrowseSymbols_VirtualRootGroupingPreservesCase(t *testing.T) {
 	}
 	sess.cache.symbolListLoaded = true
 
-	entries, err := sess.BrowseSymbols("")
+	entries, err := sess.Browse("")
 	if err != nil {
-		t.Fatalf("BrowseSymbols: %v", err)
+		t.Fatalf("Browse: %v", err)
 	}
 
-	var found *SymbolBrowseEntry
+	var found *BrowseEntry
 	for i := range entries {
 		if entries[i].FullName == "MAIN_DP1" {
 			found = &entries[i]
@@ -65,12 +65,12 @@ func TestBrowseSymbols_VirtualChildGroupingPreservesCase(t *testing.T) {
 	}
 	sess.cache.symbolListLoaded = true
 
-	entries, err := sess.BrowseSymbols("MAIN_DP1")
+	entries, err := sess.Browse("MAIN_DP1")
 	if err != nil {
-		t.Fatalf("BrowseSymbols: %v", err)
+		t.Fatalf("Browse: %v", err)
 	}
 
-	var found *SymbolBrowseEntry
+	var found *BrowseEntry
 	for i := range entries {
 		if entries[i].FullName == "MAIN_DP1.stStruct" {
 			found = &entries[i]

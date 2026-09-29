@@ -23,6 +23,10 @@ import (
 type activeNotification struct {
 	Sym *symtab.Symbol
 	Ch  chan<- *Update
+	// Name is the symbol as the caller spelled it when subscribing, which Update
+	// reports back: TC2 upper-cases names, and a consumer matching on its own
+	// configuration should not have to fold case to find its updates.
+	Name string
 }
 
 type notificationManager struct {
@@ -161,10 +165,10 @@ func (m *notificationManager) addPending(p pendingNotification) {
 // reaches this with the key already present is a legal re-declaration of a symbol
 // that is on file but not live — see hasLiveNotification.
 func (m *notificationManager) setPending(p pendingNotification) {
-	key := symtab.Key(p.Config.SymbolName)
+	key := symtab.Key(p.Config.Symbol)
 	if _, onFile := m.configsByKey[key]; onFile {
 		for i := range m.pending {
-			if symtab.Key(m.pending[i].Config.SymbolName) == key {
+			if symtab.Key(m.pending[i].Config.Symbol) == key {
 				m.pending[i] = p
 				return
 			}
@@ -261,7 +265,7 @@ func (m *notificationManager) resetConfigs(p []pendingNotification) {
 	m.pending = p
 	m.configsByKey = make(map[string]struct{}, len(p))
 	for _, entry := range p {
-		m.configsByKey[symtab.Key(entry.Config.SymbolName)] = struct{}{}
+		m.configsByKey[symtab.Key(entry.Config.Symbol)] = struct{}{}
 	}
 }
 
@@ -276,7 +280,7 @@ func (m *notificationManager) resetConfigs(p []pendingNotification) {
 // than the snapshot by construction.
 func (m *notificationManager) restoreConfigs(snapshot []pendingNotification) {
 	for _, entry := range snapshot {
-		if _, present := m.configsByKey[symtab.Key(entry.Config.SymbolName)]; present {
+		if _, present := m.configsByKey[symtab.Key(entry.Config.Symbol)]; present {
 			continue
 		}
 		m.addPending(entry)
@@ -321,11 +325,11 @@ type StaleInfo struct {
 // "this sample may be stale" signal with the reason in a single check —
 // callers do `if u.Stale != nil { /* handle stale */ }`.
 type Update struct {
-	Variable string
+	Symbol string
 	// Value is the sample as its Go type, as ReadValue returns it.
-	Value     any
-	TimeStamp time.Time
-	Stale     *StaleInfo
+	Value any
+	Time  time.Time
+	Stale *StaleInfo
 }
 
 // NotificationConfig holds configuration for a symbol notification, used for
@@ -333,10 +337,10 @@ type Update struct {
 // time.Duration for consistency with SumNotificationRequest and the rest of
 // the standard library.
 type NotificationConfig struct {
-	SymbolName       string
-	MaxDelay         time.Duration
-	CycleTime        time.Duration
-	TransmissionMode ams.TransMode
+	Symbol    string
+	MaxDelay  time.Duration
+	CycleTime time.Duration
+	Mode      ams.TransMode
 }
 
 // pendingNotification wraps a user-supplied NotificationConfig with internal
@@ -353,7 +357,7 @@ type pendingNotification struct {
 // resubscribeMaxAttempts caps Skipped-config retries across reconnect cycles
 // to prevent infinite churn on persistently-flapping symbols. After the cap
 // the config is dropped with a Warn log; the user must re-subscribe via
-// AddSymbolNotification to re-establish.
+// Subscribe to re-establish.
 const resubscribeMaxAttempts = 3
 
 // newestOpenSubscribe returns the start time of the most recently opened

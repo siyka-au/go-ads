@@ -72,9 +72,9 @@ func TestSeedStructPackingLayout(t *testing.T) {
 	sess := seedSession(t)
 	for _, p := range packStructs {
 		for _, target := range []string{p.name, p.name + "Write"} {
-			v, err := sess.GetSymbol(context.Background(), structFB+target)
+			v, err := sess.Symbol(context.Background(), structFB+target)
 			if err != nil {
-				t.Errorf("GetSymbol %s: %v", target, err)
+				t.Errorf("Symbol %s: %v", target, err)
 				continue
 			}
 			if v.Length != p.size {

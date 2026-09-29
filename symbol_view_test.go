@@ -21,7 +21,7 @@ import (
 //   - R-VIEW-002 (IsValid distinguishes zero from live)
 //   - R-VIEW-003 (Children returns fresh map)
 //   - R-VIEW-004 (ChildrenWalk no deadlock — fn may take cache.lock)
-//   - R-VIEW-005 (ListSymbols error before LoadSymbols)
+//   - R-VIEW-005 (Symbols error before LoadSymbols)
 //   - R-VIEW-007 (SymbolView field-read after Close)
 
 // newViewTestSession constructs a Session minimal enough for SymbolView
@@ -50,7 +50,7 @@ func captureSymbol(sess *Session, name string, value any, parsed bool) (SymbolVi
 	sess.cache.lock.Lock()
 	sess.cache.symbols[symtab.Key(name)] = sym
 	sess.cache.lock.Unlock()
-	v, _ := sess.GetSymbol(context.Background(), name) // takes cache.lock internally for view()
+	v, _ := sess.Symbol(context.Background(), name) // takes cache.lock internally for view()
 	return v, sym
 }
 
@@ -127,9 +127,9 @@ func TestSymbolView_ChildrenReturnsFreshMap(t *testing.T) {
 	sess.cache.symbols[symtab.Key(child.FullName)] = child
 	sess.cache.lock.Unlock()
 
-	pv, err := sess.GetSymbol(context.Background(), parent.FullName)
+	pv, err := sess.Symbol(context.Background(), parent.FullName)
 	if err != nil {
-		t.Fatalf("GetSymbol: %v", err)
+		t.Fatalf("Symbol: %v", err)
 	}
 
 	first := pv.Children()
@@ -154,7 +154,7 @@ func TestSymbolView_ChildrenReturnsFreshMap(t *testing.T) {
 
 // TestSymbolView_ChildrenWalk_FnMayTakeCacheLock asserts ChildrenWalk
 // snapshots the subtree, releases cache.lock, then invokes fn. fn may
-// safely call any Session method (e.g. GetSymbol which itself takes
+// safely call any Session method (e.g. Symbol which itself takes
 // cache.lock) without deadlock.
 //
 // Validates: R-VIEW-004 (ChildrenWalk collect-then-iterate, no deadlock).
@@ -172,9 +172,9 @@ func TestSymbolView_ChildrenWalk_FnMayTakeCacheLock(t *testing.T) {
 	sess.cache.symbols[symtab.Key(leaf.FullName)] = leaf
 	sess.cache.lock.Unlock()
 
-	pv, err := sess.GetSymbol(context.Background(), parent.FullName)
+	pv, err := sess.Symbol(context.Background(), parent.FullName)
 	if err != nil {
-		t.Fatalf("GetSymbol: %v", err)
+		t.Fatalf("Symbol: %v", err)
 	}
 
 	// Run with a deadline-bound goroutine; deadlock would hang.
@@ -182,9 +182,9 @@ func TestSymbolView_ChildrenWalk_FnMayTakeCacheLock(t *testing.T) {
 	go func() {
 		defer close(done)
 		pv.ChildrenWalk(func(v SymbolView) bool {
-			// fn calls GetSymbol, which takes cache.lock. A retained
+			// fn calls Symbol, which takes cache.lock. A retained
 			// cache.lock around fn would deadlock here.
-			_, _ = sess.GetSymbol(context.Background(), v.FullName)
+			_, _ = sess.Symbol(context.Background(), v.FullName)
 			return true
 		})
 	}()
@@ -196,17 +196,17 @@ func TestSymbolView_ChildrenWalk_FnMayTakeCacheLock(t *testing.T) {
 	}
 }
 
-// TestListSymbols_ErrorBeforeLoadSymbols asserts ListSymbols returns an
+// TestListSymbols_ErrorBeforeLoadSymbols asserts Symbols returns an
 // error when full discovery has not been performed (cache.symbolsFullyLoaded
 // is false).
 //
-// Validates: R-VIEW-005 (ListSymbols requires full discovery).
+// Validates: R-VIEW-005 (Symbols requires full discovery).
 func TestListSymbols_ErrorBeforeLoadSymbols(t *testing.T) {
 	sess := newViewTestSession()
-	// cache.symbolsFullyLoaded is false; ListSymbols must fail.
-	_, err := sess.ListSymbols()
+	// cache.symbolsFullyLoaded is false; Symbols must fail.
+	_, err := sess.Symbols()
 	if err == nil {
-		t.Error("ListSymbols on un-discovered cache: err = nil, want error")
+		t.Error("Symbols on un-discovered cache: err = nil, want error")
 	}
 }
 

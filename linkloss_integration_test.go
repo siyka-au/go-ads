@@ -35,7 +35,7 @@ import (
 // TCP source, so that route matches.
 func linkLossSession(t *testing.T, p *tcpProxy, target ams.Address) *Session {
 	t.Helper()
-	opts := []SessionOption{
+	opts := []Option{
 		WithRequestTimeout(3 * time.Second),
 		WithAutoReconnect(true),
 		WithMaxReconnectAttempts(0), // unbounded: giving up would close the session
@@ -55,11 +55,11 @@ func linkLossSession(t *testing.T, p *tcpProxy, target ams.Address) *Session {
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, err)
 		}
-		opts = append(opts, WithLocalAMS(local))
+		opts = append(opts, WithLocalAddress(local))
 	}
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: p.host(), Port: p.port(), AMS: target}, opts...)
+		Endpoint{Host: p.host(), Port: p.port(), Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession via %s: %v", p, err)
 	}
@@ -100,15 +100,15 @@ func subscribeLinkLossSymbols(t *testing.T, sess *Session, ch chan *Update) int 
 	configs := make([]NotificationConfig, 0, len(names))
 	for _, n := range names {
 		configs = append(configs, NotificationConfig{
-			SymbolName:       n,
-			TransmissionMode: ams.TransModeServerOnChange,
+			Symbol:       n,
+			Mode: ams.TransModeServerOnChange,
 			MaxDelay:         200 * time.Millisecond,
 			CycleTime:        200 * time.Millisecond,
 		})
 	}
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	bound := 0
 	for i, r := range results {
@@ -346,7 +346,7 @@ func assertHealthyAfterRecovery(t *testing.T, sess *Session, ch <-chan *Update, 
 	for len(seen) < want {
 		select {
 		case u := <-ch:
-			seen[strings.ToLower(u.Variable)] = true
+			seen[strings.ToLower(u.Symbol)] = true
 		case <-deadline:
 			t.Errorf("only %d/%d symbols streamed after recovery: %v", len(seen), want, keysOf(seen))
 			return

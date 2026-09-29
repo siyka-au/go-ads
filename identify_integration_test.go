@@ -65,7 +65,7 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 	// belongs to Connect.
 	t.Run("NewSession does not verify", func(t *testing.T) {
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: host, AMS: wrong},
+			Endpoint{Host: host, Target: wrong},
 			WithTargetCheck(TargetCheckError))
 		if err != nil {
 			t.Fatalf("NewSession must not verify a supplied target: %v", err)
@@ -78,7 +78,7 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 
 	t.Run("Connect refuses in error mode", func(t *testing.T) {
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: host, AMS: wrong},
+			Endpoint{Host: host, Target: wrong},
 			WithTargetCheck(TargetCheckError))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
@@ -100,7 +100,7 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 
 	t.Run("warn mode passes verification", func(t *testing.T) {
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: host, AMS: wrong},
+			Endpoint{Host: host, Target: wrong},
 			WithTargetCheck(TargetCheckWarn))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
@@ -123,7 +123,7 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 			t.Fatalf("real address: %v", err)
 		}
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: host, AMS: right},
+			Endpoint{Host: host, Target: right},
 			WithTargetCheck(TargetCheckError))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
@@ -141,7 +141,7 @@ func TestIntegrationSessionDiscoversTarget(t *testing.T) {
 	host := getEnvOrDefault("ADS_PLC_IP", "192.168.3.224")
 	wantNetID := os.Getenv("ADS_TARGET_AMS")
 
-	var opts []SessionOption
+	var opts []Option
 	if hostIP := os.Getenv("ADS_HOST_IP"); hostIP != "" {
 		opts = append(opts, WithHostIP(hostIP))
 	}
@@ -154,11 +154,11 @@ func TestIntegrationSessionDiscoversTarget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS: %v", err)
 		}
-		opts = append(opts, WithLocalAMS(local))
+		opts = append(opts, WithLocalAddress(local))
 	}
 
 	// No AMS field at all: NetID and port both come from the device.
-	sess, err := NewSession(context.Background(), AMSEndpoint{IP: host}, opts...)
+	sess, err := NewSession(context.Background(), Endpoint{Host: host}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession without a target AMS address: %v", err)
 	}

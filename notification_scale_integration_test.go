@@ -20,7 +20,7 @@ import (
 //
 // The existing hardware notification tests subscribe 3 symbols one at a time,
 // which is why the v2.2.0 subscribe-race regression shipped unnoticed: it only
-// bites on the BATCH path (AddSymbolNotifications), on a PLC that answers
+// bites on the BATCH path (SubscribeAll), on a PLC that answers
 // 0x0701 to the sum command so the batch degrades to one Add per symbol, and
 // only once the batch runs longer than the race window. Measured on TC2 before
 // the fix: 3→3, 10→10, 11→11, 12→10, 40→10 tags delivered.
@@ -55,9 +55,9 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 	if err := conn.LoadSymbols(context.Background()); err != nil {
 		t.Fatalf("LoadSymbols failed: %v", err)
 	}
-	symbols, err := conn.ListSymbols()
+	symbols, err := conn.Symbols()
 	if err != nil {
-		t.Fatalf("ListSymbols failed: %v", err)
+		t.Fatalf("Symbols failed: %v", err)
 	}
 	names := pickParseableSymbols(symbols, want)
 	if len(names) < 2 {
@@ -70,18 +70,18 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 	configs := make([]NotificationConfig, len(names))
 	for i, name := range names {
 		configs[i] = NotificationConfig{
-			SymbolName:       name,
+			Symbol:       name,
 			MaxDelay:         100 * time.Millisecond,
 			CycleTime:        100 * time.Millisecond,
-			TransmissionMode: ams.TransModeServerOnChange,
+			Mode: ams.TransModeServerOnChange,
 		}
 	}
 
 	// Buffer generously: a dropped Update would look like a reaped handle.
 	ch := make(chan *Update, 16*len(configs))
-	results, err := conn.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := conn.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications(%d symbols) failed: %v", len(configs), err)
+		t.Fatalf("SubscribeAll(%d symbols) failed: %v", len(configs), err)
 	}
 	subscribed := make(map[string]bool, len(results))
 	for i, r := range results {
@@ -109,8 +109,8 @@ collect:
 	for len(seen) < len(subscribed) {
 		select {
 		case u := <-ch:
-			if _, first := seen[u.Variable]; !first {
-				seen[u.Variable] = u.Value
+			if _, first := seen[u.Symbol]; !first {
+				seen[u.Symbol] = u.Value
 			}
 		case <-deadline:
 			break collect

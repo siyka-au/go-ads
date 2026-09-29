@@ -9,8 +9,8 @@ import (
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 )
 
-// SymbolBrowseEntry represents a browsable symbol or child.
-type SymbolBrowseEntry struct {
+// BrowseEntry represents a browsable symbol or child.
+type BrowseEntry struct {
 	Name        string // short name (e.g., "motor")
 	FullName    string // full path (e.g., "MAIN.motor")
 	DataType    string // type name (e.g., "ST_Motor", "INT")
@@ -19,11 +19,11 @@ type SymbolBrowseEntry struct {
 	Comment     string
 }
 
-// BrowseSymbols returns browsable entries at the given path in the symbol hierarchy.
+// Browse returns browsable entries at the given path in the symbol hierarchy.
 // If path is empty, returns root-level groupings (first path segments).
 // If path is specified, returns children of that symbol or prefix.
 // Requires LoadSymbolList() or LoadSymbols() to have been called first.
-func (sess *Session) BrowseSymbols(path string) ([]SymbolBrowseEntry, error) {
+func (sess *Session) Browse(path string) ([]BrowseEntry, error) {
 	sess.cache.lock.Lock()
 	defer sess.cache.lock.Unlock()
 
@@ -40,13 +40,13 @@ func (sess *Session) BrowseSymbols(path string) ([]SymbolBrowseEntry, error) {
 
 // browseRoot returns unique root-level entries (first segment of each symbol name).
 // Must be called with cache.lock held.
-func (sess *Session) browseRoot() []SymbolBrowseEntry {
+func (sess *Session) browseRoot() []BrowseEntry {
 	// Two-pass to preserve original PLC casing for virtual groupings.
 	// symbolKey() lowercases for cache lookup, but symbol.FullName retains
 	// original case — derive display from any child symbol's FullName.
 	// Map key = lowercased prefix, value = original-case prefix.
 	roots := make(map[string]string)
-	var entries []SymbolBrowseEntry
+	var entries []BrowseEntry
 
 	for name, sym := range sess.cache.symbols {
 		// Skip children (only top-level symbols from the upload have no Parent)
@@ -60,7 +60,7 @@ func (sess *Session) browseRoot() []SymbolBrowseEntry {
 			// No dot — this is a root symbol itself
 			if _, seen := roots[name]; !seen {
 				roots[name] = sym.FullName
-				entries = append(entries, SymbolBrowseEntry{
+				entries = append(entries, BrowseEntry{
 					Name:        sym.Name,
 					FullName:    sym.FullName,
 					DataType:    sym.DataType,
@@ -85,7 +85,7 @@ func (sess *Session) browseRoot() []SymbolBrowseEntry {
 		roots[root] = origRoot
 		// Check if the root itself is a symbol
 		if rootSym, ok := sess.cache.symbols[symtab.Key(root)]; ok {
-			entries = append(entries, SymbolBrowseEntry{
+			entries = append(entries, BrowseEntry{
 				Name:        rootSym.Name,
 				FullName:    rootSym.FullName,
 				DataType:    rootSym.DataType,
@@ -96,7 +96,7 @@ func (sess *Session) browseRoot() []SymbolBrowseEntry {
 		} else {
 			// Virtual grouping (e.g., "MAIN" prefix with no symbol for "MAIN" itself).
 			// Use original case derived from child symbol's FullName.
-			entries = append(entries, SymbolBrowseEntry{
+			entries = append(entries, BrowseEntry{
 				Name:        origRoot,
 				FullName:    origRoot,
 				HasChildren: true,
@@ -104,7 +104,7 @@ func (sess *Session) browseRoot() []SymbolBrowseEntry {
 		}
 	}
 
-	slices.SortFunc(entries, func(a, b SymbolBrowseEntry) int {
+	slices.SortFunc(entries, func(a, b BrowseEntry) int {
 		return cmp.Compare(a.FullName, b.FullName)
 	})
 	return entries
@@ -112,12 +112,12 @@ func (sess *Session) browseRoot() []SymbolBrowseEntry {
 
 // browseChildren returns children of a given path.
 // Must be called with cache.lock held.
-func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
+func (sess *Session) browseChildren(path string) []BrowseEntry {
 	// First: check if the exact symbol exists and has Children
 	if sym, ok := sess.cache.symbols[symtab.Key(path)]; ok && len(sym.Children) > 0 {
-		entries := make([]SymbolBrowseEntry, 0, len(sym.Children))
+		entries := make([]BrowseEntry, 0, len(sym.Children))
 		for _, child := range sym.Children {
-			entries = append(entries, SymbolBrowseEntry{
+			entries = append(entries, BrowseEntry{
 				Name:        child.Name,
 				FullName:    child.FullName,
 				DataType:    child.DataType,
@@ -126,7 +126,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 				Comment:     child.Comment,
 			})
 		}
-		slices.SortFunc(entries, func(a, b SymbolBrowseEntry) int {
+		slices.SortFunc(entries, func(a, b BrowseEntry) int {
 			return cmp.Compare(a.FullName, b.FullName)
 		})
 		return entries
@@ -135,7 +135,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 	// Fallback: scan for symbols with the prefix "path."
 	prefix := symtab.Key(path) + "."
 	seen := make(map[string]bool)
-	var entries []SymbolBrowseEntry
+	var entries []BrowseEntry
 
 	for name, sym := range sess.cache.symbols {
 		if !strings.HasPrefix(name, prefix) {
@@ -159,7 +159,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 		seen[childFullName] = true
 
 		if childSym, ok := sess.cache.symbols[symtab.Key(childFullName)]; ok {
-			entries = append(entries, SymbolBrowseEntry{
+			entries = append(entries, BrowseEntry{
 				Name:        childSym.Name,
 				FullName:    childSym.FullName,
 				DataType:    childSym.DataType,
@@ -178,7 +178,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 				origSegment = sym.FullName[len(prefix) : len(prefix)+len(segment)]
 				origFullName = sym.FullName[:len(prefix)+len(segment)]
 			}
-			entries = append(entries, SymbolBrowseEntry{
+			entries = append(entries, BrowseEntry{
 				Name:        origSegment,
 				FullName:    origFullName,
 				HasChildren: true,
@@ -188,7 +188,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 
 	// Also check for the exact symbol with no deeper children
 	if sym, ok := sess.cache.symbols[symtab.Key(path)]; ok && len(entries) == 0 {
-		entries = append(entries, SymbolBrowseEntry{
+		entries = append(entries, BrowseEntry{
 			Name:        sym.Name,
 			FullName:    sym.FullName,
 			DataType:    sym.DataType,
@@ -198,7 +198,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 		})
 	}
 
-	slices.SortFunc(entries, func(a, b SymbolBrowseEntry) int {
+	slices.SortFunc(entries, func(a, b BrowseEntry) int {
 		return cmp.Compare(a.FullName, b.FullName)
 	})
 	return entries

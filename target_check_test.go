@@ -136,7 +136,7 @@ func TestWithTargetCheck(t *testing.T) {
 func TestNewSession_LocalModeSkipsDiscovery(t *testing.T) {
 	start := time.Now()
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: "192.0.2.1"}, // RFC 5737 TEST-NET-1: guaranteed unroutable
+		Endpoint{Host: "192.0.2.1"}, // RFC 5737 TEST-NET-1: guaranteed unroutable
 		WithLocalMode())
 	if err != nil {
 		t.Fatalf("NewSession in local mode with no target AMS: %v", err)

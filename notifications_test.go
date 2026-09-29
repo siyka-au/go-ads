@@ -21,7 +21,7 @@ import (
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
-// notifications_test.go — Session.AddSymbolNotification(s) + DeleteDeviceNotification
+// notifications_test.go — Session.Subscribe(s) + DeleteDeviceNotification
 // + bestEffortDelete unit tests.
 //
 // Covers:
@@ -74,12 +74,12 @@ func seedLiveNotification(sess *Session, name string, handle uint32, ch chan *Up
 	sess.notifications.lock.Lock()
 	defer sess.notifications.lock.Unlock()
 	sess.notifications.activeNotifications[handle] = activeNotification{Sym: sym, Ch: ch}
-	sess.notifications.addConfig(NotificationConfig{SymbolName: name})
+	sess.notifications.addConfig(NotificationConfig{Symbol: name})
 }
 
 // TestAddSymbolNotification_ChannelMismatchRejected pre-seeds a notifications
-// channel, then calls AddSymbolNotification with a DIFFERENT channel. The
-// pre-check inside AddSymbolNotification (under notifications.lock, BEFORE
+// channel, then calls Subscribe with a DIFFERENT channel. The
+// pre-check inside Subscribe (under notifications.lock, BEFORE
 // any PLC roundtrip) rejects with an error.
 //
 // Validates: R-NOT-001 (single channel per Connection).
@@ -94,11 +94,11 @@ func TestAddSymbolNotification_ChannelMismatchRejected(t *testing.T) {
 	sess.notifications.notificationChannel = chA
 	sess.notifications.lock.Unlock()
 
-	// Attempt AddSymbolNotification with chB ≠ chA.
+	// Attempt Subscribe with chB ≠ chA.
 	chB := make(chan *Update, 1)
-	_, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, chB)
+	_, err := sess.Subscribe(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, chB)
 	if err == nil {
-		t.Fatal("AddSymbolNotification with mismatched channel: err = nil, want error")
+		t.Fatal("Subscribe with mismatched channel: err = nil, want error")
 	}
 	if !strings.Contains(err.Error(), "same updateReceiver channel") {
 		t.Errorf("err = %v, want channel-mismatch message", err)
@@ -112,10 +112,10 @@ func TestAddSymbolNotification_ChannelMismatchRejected(t *testing.T) {
 //
 // (a) Cross-batch — pre-existing config rejects the second.
 // (b) In-batch — same name twice in one configs[] slice.
-// (c) Single-call — direct AddSymbolNotification after a prior one is
+// (c) Single-call — direct Subscribe after a prior one is
 //
 //	covered by R-NOT-001 (channel-mismatch) elsewhere; here we use
-//	the pre-existing-config pre-check inside AddSymbolNotifications.
+//	the pre-existing-config pre-check inside SubscribeAll.
 //
 // Validates: R-NOT-002 (duplicate-symbol rejected).
 func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
@@ -126,11 +126,11 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 		// Pre-stage one LIVE subscription so the pre-check rejects the second batch.
 		seedLiveNotification(sess, "MAIN.x", 0x1001, ch)
 
-		results, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
+		results, err := sess.subscribeAll(context.Background(), []NotificationConfig{
+			{Symbol: "MAIN.x", Mode: ams.TransModeServerOnChange},
 		}, ch)
 		if err != nil {
-			t.Fatalf("AddSymbolNotifications: %v", err)
+			t.Fatalf("SubscribeAll: %v", err)
 		}
 		if len(results) != 1 {
 			t.Fatalf("results len = %d, want 1", len(results))
@@ -153,12 +153,12 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 		// (nil client would panic).
 		seedLiveNotification(sess, "MAIN.dup", 0x1002, ch)
 
-		results, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.dup", TransmissionMode: ams.TransModeServerOnChange},
-			{SymbolName: "MAIN.dup", TransmissionMode: ams.TransModeServerOnChange},
+		results, err := sess.subscribeAll(context.Background(), []NotificationConfig{
+			{Symbol: "MAIN.dup", Mode: ams.TransModeServerOnChange},
+			{Symbol: "MAIN.dup", Mode: ams.TransModeServerOnChange},
 		}, ch)
 		if err != nil {
-			t.Fatalf("AddSymbolNotifications: %v", err)
+			t.Fatalf("SubscribeAll: %v", err)
 		}
 		if len(results) != 2 {
 			t.Fatalf("results len = %d, want 2", len(results))
@@ -187,17 +187,17 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 		sess.notifications.lock.Unlock()
 
 		chB := make(chan *Update, 1)
-		_, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
+		_, err := sess.subscribeAll(context.Background(), []NotificationConfig{
+			{Symbol: "MAIN.x", Mode: ams.TransModeServerOnChange},
 		}, chB)
 		if err == nil {
-			t.Errorf("AddSymbolNotifications with mismatched channel: err = nil, want error")
+			t.Errorf("SubscribeAll with mismatched channel: err = nil, want error")
 		}
 	})
 }
 
 // TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch drives the
-// post-roundtrip stranded-symbol detection in AddSymbolNotification
+// post-roundtrip stranded-symbol detection in Subscribe
 // (notification_api.go). Two production branches detect strands:
 //
 //	(a) fresh == nil: cache.symbols no longer contains the key after roundtrip.
@@ -210,7 +210,7 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 //	    during subscribe" and releases the handle.
 //
 // This test exercises (a), the deterministic vanish path: pre-seed cache,
-// kick off AddSymbolNotification, and during the in-flight roundtrip
+// kick off Subscribe, and during the in-flight roundtrip
 // delete the symbol from cache + bumpEpoch (mimicking loadSymbols). After
 // the network roundtrip, fresh is nil → branch (a) fires.
 //
@@ -247,7 +247,7 @@ func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
 	ch := make(chan *Update, 1)
 	addErr := make(chan error, 1)
 	go func() {
-		_, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
+		_, err := sess.Subscribe(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 		addErr <- err
 	}()
 
@@ -263,15 +263,15 @@ func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
 	select {
 	case err := <-addErr:
 		if err == nil {
-			t.Fatal("AddSymbolNotification: err = nil, want vanished-cache error")
+			t.Fatal("Subscribe: err = nil, want vanished-cache error")
 		}
 		// Accept either branch's wording; both are valid R-NOT-004 outcomes.
 		if !strings.Contains(err.Error(), "removed from cache") &&
 			!strings.Contains(err.Error(), "stranded by concurrent cache reload") {
-			t.Errorf("AddSymbolNotification err = %v, want 'removed from cache' OR 'stranded by concurrent cache reload'", err)
+			t.Errorf("Subscribe err = %v, want 'removed from cache' OR 'stranded by concurrent cache reload'", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("AddSymbolNotification: timeout (>5s)")
+		t.Fatal("Subscribe: timeout (>5s)")
 	}
 
 	// Production releases the orphaned PLC handle. Wait briefly for the
@@ -294,7 +294,7 @@ func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
 }
 
 // TestAddSymbolNotification_TOCTOURecheck drives the post-roundtrip duplicate
-// re-check (R-NOT-003) in AddSymbolNotification. Two concurrent calls for the
+// re-check (R-NOT-003) in Subscribe. Two concurrent calls for the
 // same symbol must both pass the pre-check but only one can commit; the loser
 // observes the duplicate-already-subscribed re-check and returns an error
 // after releasing the just-acquired PLC handle.
@@ -334,7 +334,7 @@ func TestAddSymbolNotification_TOCTOURecheck(t *testing.T) {
 	resCh := make(chan result, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
-			h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
+			h, err := sess.Subscribe(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 			resCh <- result{handle: h, err: err}
 		}()
 	}
@@ -345,7 +345,7 @@ func TestAddSymbolNotification_TOCTOURecheck(t *testing.T) {
 		case r := <-resCh:
 			res[i] = r
 		case <-time.After(5 * time.Second):
-			t.Fatalf("AddSymbolNotification[%d] timeout", i)
+			t.Fatalf("Subscribe[%d] timeout", i)
 		}
 	}
 
@@ -412,9 +412,9 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 		preSeedSymbol(sess, "MAIN.x")
 
 		ch := make(chan *Update, 1)
-		h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
+		h, err := sess.Subscribe(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 		if err != nil {
-			t.Fatalf("AddSymbolNotification: %v", err)
+			t.Fatalf("Subscribe: %v", err)
 		}
 		if h != fakeHandle {
 			t.Fatalf("handle = 0x%X, want 0x%X", h, fakeHandle)
@@ -429,7 +429,7 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 			t.Fatalf("post-add: hasNotif=%v configs=%d chanSet=%v", hasNotif, nConfigs, hasChan)
 		}
 
-		if err := sess.DeleteDeviceNotification(context.Background(), h); err != nil {
+		if err := sess.Unsubscribe(context.Background(), h); err != nil {
 			t.Fatalf("DeleteDeviceNotification: %v", err)
 		}
 
@@ -472,11 +472,11 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 		preSeedSymbol(sess, "MAIN.x")
 
 		ch := make(chan *Update, 1)
-		h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
+		h, err := sess.Subscribe(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 		if err != nil {
-			t.Fatalf("AddSymbolNotification: %v", err)
+			t.Fatalf("Subscribe: %v", err)
 		}
-		err = sess.DeleteDeviceNotification(context.Background(), h)
+		err = sess.Unsubscribe(context.Background(), h)
 		if err == nil {
 			t.Errorf("DeleteDeviceNotification with 0x714: err = nil, want non-nil (Session wrapper surfaces RPC error)")
 		}
@@ -498,9 +498,9 @@ func TestNotificationChannel_SetOnFirstSuccess(t *testing.T) {
 		sess := newNotifTestSession()
 		ch := make(chan *Update, 1)
 
-		_, err := sess.AddSymbolNotifications(context.Background(), nil, ch)
+		_, err := sess.subscribeAll(context.Background(), nil, ch)
 		if err != nil {
-			t.Fatalf("AddSymbolNotifications nil configs: %v", err)
+			t.Fatalf("SubscribeAll nil configs: %v", err)
 		}
 		sess.notifications.lock.Lock()
 		got := sess.notifications.notificationChannel
@@ -518,10 +518,10 @@ func TestNotificationChannel_SetOnFirstSuccess(t *testing.T) {
 		seedLiveNotification(sess, "MAIN.dup", 0x1003, make(chan *Update, 1))
 		ch := make(chan *Update, 1)
 
-		_, _ = sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.dup", TransmissionMode: ams.TransModeServerOnChange},
+		_, _ = sess.subscribeAll(context.Background(), []NotificationConfig{
+			{Symbol: "MAIN.dup", Mode: ams.TransModeServerOnChange},
 		}, ch)
-		// Channel was never set by AddSymbolNotifications since all entries
+		// Channel was never set by SubscribeAll since all entries
 		// were Skipped pre-flight (no roundtrip even occurred — len(requests)==0
 		// short-circuits). Confirm nil.
 		sess.notifications.lock.Lock()
@@ -536,7 +536,7 @@ func TestNotificationChannel_SetOnFirstSuccess(t *testing.T) {
 		sess := newNotifTestSession()
 
 		// Pre-set channel + pre-stage a LIVE subscription so every
-		// concurrent AddSymbolNotifications call results in all-Skipped
+		// concurrent SubscribeAll call results in all-Skipped
 		// (no PLC roundtrip needed). The race detector watches the
 		// notificationChannel field for torn writes during the
 		// concurrent pre-checks.
@@ -551,8 +551,8 @@ func TestNotificationChannel_SetOnFirstSuccess(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, _ = sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-					{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
+				_, _ = sess.subscribeAll(context.Background(), []NotificationConfig{
+					{Symbol: "MAIN.x", Mode: ams.TransModeServerOnChange},
 				}, ch)
 			}()
 		}
@@ -594,7 +594,7 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 	ch := make(chan *Update, 1)
 	sess.notifications.lock.Lock()
 	sess.notifications.pending = []pendingNotification{
-		{Config: NotificationConfig{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange}},
+		{Config: NotificationConfig{Symbol: "MAIN.x", Mode: ams.TransModeServerOnChange}},
 	}
 	sess.notifications.configsByKey[symtab.Key("MAIN.x")] = struct{}{}
 	sess.notifications.notificationChannel = ch
@@ -718,7 +718,7 @@ var (
 )
 
 // TestSumNotificationResultTriState drives the production
-// Session.AddSymbolNotifications path through the scriptable PLC stub
+// Session.SubscribeAll path through the scriptable PLC stub
 // and asserts the three+TOCTOU classification of the
 // SumNotificationResult struct returned to the caller:
 //
@@ -776,16 +776,16 @@ func TestSumNotificationResultTriState(t *testing.T) {
 
 	ch := make(chan *Update, 4)
 	configs := []NotificationConfig{
-		{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
+		{Symbol: "MAIN.x", Mode: ams.TransModeServerOnChange},
 		// Library-skip case: duplicate name within the batch.
-		{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
-		{SymbolName: "MAIN.y", TransmissionMode: ams.TransModeServerOnChange},
-		{SymbolName: "MAIN.z", TransmissionMode: ams.TransModeServerOnChange},
+		{Symbol: "MAIN.x", Mode: ams.TransModeServerOnChange},
+		{Symbol: "MAIN.y", Mode: ams.TransModeServerOnChange},
+		{Symbol: "MAIN.z", Mode: ams.TransModeServerOnChange},
 	}
 
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	if len(results) != len(configs) {
 		t.Fatalf("got %d results, want %d", len(results), len(configs))
@@ -818,7 +818,7 @@ func TestSumNotificationResultTriState(t *testing.T) {
 }
 
 // TestResubscribeNotifications_RollbackOnError verifies that when
-// AddSymbolNotifications returns an outer error mid-resubscribe, the rollback
+// SubscribeAll returns an outer error mid-resubscribe, the rollback
 // path restores notificationConfigs and notificationChannel from the
 // pre-call snapshot. Without rollback, the configs would be left empty
 // after a failed retry and subsequent reconnects would have nothing to
@@ -826,7 +826,7 @@ func TestSumNotificationResultTriState(t *testing.T) {
 //
 // Drives the error by registering a SumAddDeviceNotification handler that
 // returns a too-short response so executeSumCommand's length validation
-// fails — surfaces as outer err to AddSymbolNotifications.
+// fails — surfaces as outer err to SubscribeAll.
 //
 // Validates: resubscribeNotifications save/restore via resetConfigs.
 func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
@@ -843,7 +843,7 @@ func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
 	preSeedSymbol(sess, "MAIN.x")
 	ch := make(chan *Update, 1)
 	saved := []pendingNotification{
-		{Config: NotificationConfig{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange, MaxDelay: 0, CycleTime: 0}},
+		{Config: NotificationConfig{Symbol: "MAIN.x", Mode: ams.TransModeServerOnChange, MaxDelay: 0, CycleTime: 0}},
 	}
 
 	sess.notifications.lock.Lock()
@@ -851,7 +851,7 @@ func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
 	sess.notifications.notificationChannel = ch
 	sess.notifications.lock.Unlock()
 
-	// resubscribeNotifications runs the AddSymbolNotifications path. With the
+	// resubscribeNotifications runs the SubscribeAll path. With the
 	// truncated-response handler installed, the call errors out and rollback
 	// must restore both fields.
 	err := sess.resubscribeNotifications()
@@ -862,7 +862,7 @@ func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
 	gotChannel := sess.notifications.notificationChannel
 	sess.notifications.lock.Unlock()
 
-	if len(got) != 1 || got[0].Config.SymbolName != "MAIN.x" {
+	if len(got) != 1 || got[0].Config.Symbol != "MAIN.x" {
 		t.Errorf("pending after rollback = %+v, want 1 entry for MAIN.x", got)
 	}
 	if gotChannel != ch {
@@ -871,7 +871,7 @@ func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
 	if !sess.notifications.hasConfig("MAIN.x") {
 		t.Errorf("configsByKey mirror not rebuilt by resetConfigs on rollback")
 	}
-	// AddSymbolNotifications may return err or nil depending on whether the
+	// SubscribeAll may return err or nil depending on whether the
 	// SumAddNotifState CAS landed on unsupported (triggering fallback). Either
 	// is acceptable for the rollback contract — we care about the restoration.
 	_ = err
@@ -896,7 +896,7 @@ func TestResubscribe_NilChannelKeepsTheDeclaredIntent(t *testing.T) {
 	// Declared intent with no channel bound and nothing live — exactly the state a
 	// re-queued entry plus a full user teardown leaves behind.
 	sess.notifications.lock.Lock()
-	sess.notifications.addPending(pendingNotification{Config: NotificationConfig{SymbolName: "MAIN.stranded"}})
+	sess.notifications.addPending(pendingNotification{Config: NotificationConfig{Symbol: "MAIN.stranded"}})
 	sess.notifications.notificationChannel = nil
 	sess.notifications.lock.Unlock()
 
@@ -943,13 +943,13 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 
 	// On file, nothing live, no channel: the state a re-queued entry leaves.
 	sess.notifications.lock.Lock()
-	sess.notifications.addPending(pendingNotification{Config: NotificationConfig{SymbolName: "MAIN.stranded"}})
+	sess.notifications.addPending(pendingNotification{Config: NotificationConfig{Symbol: "MAIN.stranded"}})
 	sess.notifications.lock.Unlock()
 
 	ch := make(chan *Update, 1)
-	h, err := sess.AddSymbolNotification(context.Background(), "MAIN.stranded", 0, 0, ams.TransModeServerOnChange, ch)
+	h, err := sess.Subscribe(context.Background(), "MAIN.stranded", 0, 0, ams.TransModeServerOnChange, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotification on a declared-but-not-live symbol: %v — the caller cannot clear a pending-only entry, so this is a permanently dead symbol", err)
+		t.Fatalf("Subscribe on a declared-but-not-live symbol: %v — the caller cannot clear a pending-only entry, so this is a permanently dead symbol", err)
 	}
 	if h != fakeHandle {
 		t.Fatalf("handle = 0x%X, want 0x%X", h, fakeHandle)
@@ -975,7 +975,7 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 
 	// And a genuine duplicate — the symbol now HAS a live handle — must still be
 	// refused, or this fix has simply deleted the duplicate check.
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.stranded", 0, 0, ams.TransModeServerOnChange, ch); err == nil {
+	if _, err := sess.Subscribe(context.Background(), "MAIN.stranded", 0, 0, ams.TransModeServerOnChange, ch); err == nil {
 		t.Error("a second subscribe of a LIVE symbol succeeded; duplicate detection is gone")
 	}
 }
@@ -988,7 +988,7 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 // REFUSES the symbol upload so a reload can never be what rescues the session —
 // recovery has to come from the on-demand re-resolve. uploadInfoReads therefore
 // counts reload attempts, which is how the no-storm assertions are made.
-func seedStaleSymbol(t *testing.T, srv *fakeplc.PLC, handleLookups, staleAdds, uploadInfoReads *atomic.Int32, opts ...SessionOption) (*Session, *symtab.Symbol) {
+func seedStaleSymbol(t *testing.T, srv *fakeplc.PLC, handleLookups, staleAdds, uploadInfoReads *atomic.Int32, opts ...Option) (*Session, *symtab.Symbol) {
 	t.Helper()
 	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		handleLookups.Add(1)
@@ -1009,7 +1009,7 @@ func seedStaleSymbol(t *testing.T, srv *fakeplc.PLC, handleLookups, staleAdds, u
 	// The heartbeat is off so the only AddDeviceNotification traffic in the test is
 	// the caller's: the internal beat subscribes on GroupSymbolVersion, which would
 	// add a second registration and a second failure path to reason about here.
-	sess, _ := newWiredTestSession(t, srv, append([]SessionOption{WithoutNotificationHeartbeat()}, opts...)...)
+	sess, _ := newWiredTestSession(t, srv, append([]Option{WithoutNotificationHeartbeat()}, opts...)...)
 	// Mirrors NewSession's defaults (session.go): the helper leaves them zero, and
 	// maxReloadAttempts=0 means the cap is exhausted on the first attempt, which
 	// would skip the invalidation for a reason that never happens in production.
@@ -1059,11 +1059,11 @@ func awaitHandleZeroed(t *testing.T, sess *Session, sym *symtab.Symbol) {
 // handle with 0x710 (symbol not found) and does NOT bump the symbol version. So
 // nothing version-driven can save the session — not checkSymbolVersion, not the
 // heartbeat watcher. The 0x710 on the subscribe itself is the only signal there
-// is, and if it does not invalidate the handle, every later AddSymbolNotification
+// is, and if it does not invalidate the handle, every later Subscribe
 // repeats the same doomed request forever, with no callback and no Update.
 //
 // The wiring under test: AddDeviceNotification gets 0x710 → handleStaleDetection
-// → AutoReload zeroes the cached handles → the next AddSymbolNotification sees
+// → AutoReload zeroes the cached handles → the next Subscribe sees
 // Handle==0 and re-resolves via GetHandleByName.
 //
 // Detection only, no retry: subscribe is not idempotent, so the first caller
@@ -1080,7 +1080,7 @@ func TestAddSymbolNotification_SymbolNotFoundInvalidatesTheCachedHandle(t *testi
 	ctx := context.Background()
 	ch := make(chan *Update, 1)
 
-	_, err := sess.AddSymbolNotification(ctx, "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch)
+	_, err := sess.Subscribe(ctx, "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch)
 	if err == nil {
 		t.Fatal("subscribe against the stale handle succeeded; the stub was supposed to refuse it with 0x710")
 	}
@@ -1095,7 +1095,7 @@ func TestAddSymbolNotification_SymbolNotFoundInvalidatesTheCachedHandle(t *testi
 	awaitHandleZeroed(t, sess, sym)
 
 	// And the recovery has to be real: the next subscribe re-resolves and succeeds.
-	handle, err := sess.AddSymbolNotification(ctx, "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch)
+	handle, err := sess.Subscribe(ctx, "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("subscribe after invalidation: %v", err)
 	}
@@ -1138,9 +1138,9 @@ func TestAddSymbolNotifications_SymbolNotFoundInvalidatesTheCachedHandle(t *test
 
 	ctx := context.Background()
 	ch := make(chan *Update, 1)
-	cfg := NotificationConfig{SymbolName: "MAIN.a", CycleTime: time.Second, TransmissionMode: ams.TransModeServerOnChange}
+	cfg := NotificationConfig{Symbol: "MAIN.a", CycleTime: time.Second, Mode: ams.TransModeServerOnChange}
 
-	results, err := sess.AddSymbolNotifications(ctx, []NotificationConfig{cfg}, ch)
+	results, err := sess.subscribeAll(ctx, []NotificationConfig{cfg}, ch)
 	if err != nil {
 		t.Fatalf("batch subscribe: %v", err)
 	}
@@ -1150,7 +1150,7 @@ func TestAddSymbolNotifications_SymbolNotFoundInvalidatesTheCachedHandle(t *test
 
 	awaitHandleZeroed(t, sess, sym)
 
-	results, err = sess.AddSymbolNotifications(ctx, []NotificationConfig{cfg}, ch)
+	results, err = sess.subscribeAll(ctx, []NotificationConfig{cfg}, ch)
 	if err != nil {
 		t.Fatalf("batch subscribe after invalidation: %v", err)
 	}
@@ -1183,7 +1183,7 @@ func TestAddSymbolNotification_SymbolNotFoundIgnoreKeepsTheCachedHandle(t *testi
 		WithOnSymbolVersionChanged(func(r Reason) { reasons <- r }))
 
 	ch := make(chan *Update, 1)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch); err == nil {
+	if _, err := sess.Subscribe(context.Background(), "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch); err == nil {
 		t.Fatal("subscribe against the stale handle succeeded; the stub was supposed to refuse it with 0x710")
 	}
 
@@ -1288,8 +1288,8 @@ func TestAddSymbolNotifications_StaleItemLogsAtWarnNotError(t *testing.T) {
 			})
 
 			ch := make(chan *Update, 1)
-			cfg := NotificationConfig{SymbolName: "MAIN.a", CycleTime: time.Second, TransmissionMode: ams.TransModeServerOnChange}
-			if _, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{cfg}, ch); err != nil {
+			cfg := NotificationConfig{Symbol: "MAIN.a", CycleTime: time.Second, Mode: ams.TransModeServerOnChange}
+			if _, err := sess.subscribeAll(context.Background(), []NotificationConfig{cfg}, ch); err != nil {
 				t.Fatalf("batch subscribe: %v", err)
 			}
 

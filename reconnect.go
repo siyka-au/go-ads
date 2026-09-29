@@ -126,6 +126,7 @@ func (sess *Session) coolDownAfterUnserved(ctx context.Context, attempts int, ca
 // than parking in Reconnecting is the point -- a consumer's only liveness signal is
 // IsClosed(), so "gave up but still alive" is unobservable.
 func (sess *Session) giveUpReconnecting(cause error) error {
+	sess.setCloseErr(fmt.Errorf("ads: gave up reconnecting: %w", cause))
 	sess.lifecycle.state.transitionToOnce(SessionStateClosed)
 	// Idempotent via closedOnce, whichever of Close() and this ran first.
 	sess.markClosed()
@@ -507,7 +508,7 @@ func (sess *Session) filterValidPending(entries []pendingNotification) []pending
 
 	valid := make([]pendingNotification, 0, len(entries))
 	for _, entry := range entries {
-		name := entry.Config.SymbolName
+		name := entry.Config.Symbol
 		if _, exists := sess.cache.symbols[symtab.Key(name)]; exists {
 			valid = append(valid, entry)
 		} else if _, onDemand := sess.cache.onDemandSymbols[symtab.Key(name)]; onDemand {

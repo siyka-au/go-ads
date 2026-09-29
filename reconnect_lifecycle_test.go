@@ -257,7 +257,7 @@ func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
 	sess.notifications.lock.Lock()
 	sess.notifications.activeNotifications[handle] = activeNotification{Sym: sym, Ch: ch}
 	sess.notifications.notificationChannel = ch
-	sess.notifications.addConfig(NotificationConfig{SymbolName: "MAIN.keepchan", TransmissionMode: ams.TransModeServerOnChange})
+	sess.notifications.addConfig(NotificationConfig{Symbol: "MAIN.keepchan", Mode: ams.TransModeServerOnChange})
 	sess.notifications.lock.Unlock()
 
 	// Exactly what Reconnect does: snapshot the handles, wipe the map, then
@@ -568,7 +568,7 @@ func TestConnect_VerifiesTheLinkAnswersEvenWithoutRouteRegistration(t *testing.T
 	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(300*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -962,7 +962,7 @@ func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 	})
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(150*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithRoute("go-ads-test", "Administrator", "1"),
@@ -1005,7 +1005,7 @@ func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 // completion in the gap — its Wait returns with the counter at 0 — and the late Add
 // is then exactly what sync.WaitGroup reports as "Add called concurrently with
 // Wait", which panics the process rather than failing anything gracefully. The
-// orphan-delete path reaches this from a USER goroutine (AddSymbolNotification ->
+// orphan-delete path reaches this from a USER goroutine (Subscribe ->
 // endSubscribe -> replayEarlySamples -> dispatchSample -> tryOrphanDelete), so it
 // is not confined to internal timing.
 func TestTrackGoroutine_RefusesAfterClose(t *testing.T) {
@@ -1071,7 +1071,7 @@ func TestOrphanDelete_NotStartedAfterClose(t *testing.T) {
 // TestReconnect_RuntimeNotRunningDoesNotBurnAttempts: a PLC in CONFIG must not walk
 // the session through its reconnect budget.
 //
-// The RUN gate on AddSymbolNotifications fires inside the reconnect loop's
+// The RUN gate on SubscribeAll fires inside the reconnect loop's
 // resubscribe, and an instant refusal costs no network time — so the whole attempt
 // budget burns at the backoff rate and giveUpReconnecting CLOSES a session whose
 // only problem is a runtime that is not running. That is the opposite of the
@@ -1111,7 +1111,7 @@ func TestReconnect_RuntimeNotRunningDoesNotBurnAttempts(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.waiting", 0x4100)
 	sess.notifications.lock.Lock()
 	sess.notifications.notificationChannel = ch
-	sess.notifications.addConfig(NotificationConfig{SymbolName: "MAIN.waiting", TransmissionMode: ams.TransModeServerOnChange})
+	sess.notifications.addConfig(NotificationConfig{Symbol: "MAIN.waiting", Mode: ams.TransModeServerOnChange})
 	sess.notifications.lock.Unlock()
 	sess.recordRuntimeState(ams.StateConfig)
 
@@ -1325,7 +1325,7 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 
 	var disconnects atomic.Int64
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(500*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		// No WithRoute: that is what routes Connect through the armed liveness

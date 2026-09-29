@@ -9,12 +9,12 @@ import (
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
-// SessionOption configures optional parameters for NewSession.
-type SessionOption func(*Session)
+// Option configures optional parameters for NewSession.
+type Option func(*Session)
 
 // WithLogger sets the logger for the Session and the underlying Client.
 // If not provided, slog.Default() is used.
-func WithLogger(logger *slog.Logger) SessionOption {
+func WithLogger(logger *slog.Logger) Option {
 	return func(s *Session) {
 		if logger != nil {
 			s.logger = logger
@@ -22,11 +22,15 @@ func WithLogger(logger *slog.Logger) SessionOption {
 	}
 }
 
-// WithHostIP sets the IP address the PLC should use to reach this client.
-// Required in Docker/VPN/NAT scenarios where the local TCP socket address
-// differs from the externally routable IP. When set, AddRoute uses this IP
-// as the callback address instead of deriving it from the AMS NetID.
-func WithHostIP(ip string) SessionOption {
+// WithHostIP sets the IP address the PLC should use to reach this client, for
+// Docker/VPN/NAT setups where the local end of the TCP connection is not the
+// address the PLC sees. It becomes the route's callback address, and unless
+// WithLocalAddress says otherwise, the local NetID (ip + ".1.1").
+//
+// Without it the session uses its own outbound IP for both, which is right
+// whenever there is no address translation in between: there is no need to
+// work out the local IP yourself.
+func WithHostIP(ip string) Option {
 	return func(s *Session) {
 		s.callbackIP = ip
 	}
@@ -37,7 +41,7 @@ func WithHostIP(ip string) SessionOption {
 // own TCP slot -- TwinCAT allows one per source IP regardless of NetID (Beckhoff
 // #49/#72). The alias must exist before Connect. An invalid IP is rejected at
 // option time with a Warn, leaving OS-default routing.
-func WithLocalBindIP(ip string) SessionOption {
+func WithLocalBindIP(ip string) Option {
 	return func(s *Session) {
 		if ip == "" {
 			s.localBindIP = nil
@@ -55,7 +59,7 @@ func WithLocalBindIP(ip string) SessionOption {
 	}
 }
 
-// WithLocalAMS sets the local (source) Address in outgoing ADS headers. NetID
+// WithLocalAddress sets the local (source) Address in outgoing ADS headers. NetID
 // defaults to the local TCP source IP, Port to a random dynamic-range value. The
 // AMS port is a logical id in the header, not the TCP source or destination port.
 //
@@ -63,7 +67,7 @@ func WithLocalBindIP(ip string) SessionOption {
 // for one address take the router out of service for every client until it is
 // cleared by hand. Safe: a NetID matching the address, or
 // WithSkipRouteRegistration. Avoid two sessions from one host under different ones.
-func WithLocalAMS(local ams.Address) SessionOption {
+func WithLocalAddress(local ams.Address) Option {
 	return func(s *Session) {
 		if local.NetID != [6]byte{} {
 			s.localAddr.NetID = local.NetID
@@ -78,7 +82,7 @@ func WithLocalAMS(local ams.Address) SessionOption {
 // when the application runs on the same machine as the PLC runtime. Sets
 // the local-mode flag that Connect uses to short-circuit the route probe
 // and force the loopback target NetID 127.0.0.1.1.1.
-func WithLocalMode() SessionOption {
+func WithLocalMode() Option {
 	return func(s *Session) {
 		s.isLocal = true
 	}
@@ -87,10 +91,13 @@ func WithLocalMode() SessionOption {
 // WithRoute registers an AMS route during Connect, over UDP 48899 once the source
 // NetID is derived and before any ADS command. Connect and Reconnect probe first
 // and register only if that fails; WithForceRouteRegistration always registers.
+// The route points back at this host's outbound IP, or at WithHostIP. When the
+// process runs in a container the session logs that the address may not be one
+// the PLC can reach.
 //
 // Security: Beckhoff's protocol sends credentials in cleartext and offers no
 // encrypted alternative. Trusted networks only.
-func WithRoute(routeName, username, password string) SessionOption {
+func WithRoute(routeName, username, password string) Option {
 	return func(s *Session) {
 		s.route.name = routeName
 		s.route.username = username
@@ -102,7 +109,7 @@ func WithRoute(routeName, username, password string) SessionOption {
 // externally -- pre-registered on the PLC, or owned by a local AmsRouterDaemon.
 // Equivalent to omitting WithRoute but explicit, so a caller can keep WithRoute for
 // documentation and override here. Bypasses probe and AddRoute, so no UDP at all.
-func WithSkipRouteRegistration() SessionOption {
+func WithSkipRouteRegistration() Option {
 	return func(s *Session) {
 		s.route.skipRegistration = true
 	}
@@ -183,7 +190,7 @@ func (c BackoffConfig) Validate() error {
 // rejected at option-application time: a Warn is logged and the default is
 // kept. Callers wanting hard validation can call cfg.Validate() before
 // passing.
-func WithBackoff(cfg BackoffConfig) SessionOption {
+func WithBackoff(cfg BackoffConfig) Option {
 	return func(s *Session) {
 		if err := cfg.Validate(); err != nil {
 			if s.logger != nil {
@@ -199,7 +206,7 @@ func WithBackoff(cfg BackoffConfig) SessionOption {
 // WithMaxReconnectAttempts limits total TCP reconnection attempts before giving up.
 // Default is 0 (infinite retries). When the limit is reached, the reconnect
 // goroutine returns an error and the connection stays in disconnected state.
-func WithMaxReconnectAttempts(n int) SessionOption {
+func WithMaxReconnectAttempts(n int) Option {
 	return func(s *Session) {
 		s.lifecycle.maxReconnectAttempts = n
 	}
@@ -213,7 +220,7 @@ func WithMaxReconnectAttempts(n int) SessionOption {
 // Note: this option is also used as the net.DialTimeout for initial Connect
 // and reconnect dial. A single value covers both ADS request and TCP dial
 // semantics — split if you need different deadlines.
-func WithRequestTimeout(d time.Duration) SessionOption {
+func WithRequestTimeout(d time.Duration) Option {
 	return func(s *Session) {
 		if d > 0 {
 			s.requestTimeout = d
@@ -246,7 +253,7 @@ const (
 // and only for a caller-supplied target -- an incomplete one is resolved from the
 // device, which is authoritative. A device that does not answer identify is never
 // a mismatch in any mode: a firewalled UDP port says nothing about the address.
-func WithTargetCheck(c TargetCheck) SessionOption {
+func WithTargetCheck(c TargetCheck) Option {
 	return func(s *Session) {
 		if c != 0 {
 			s.targetCheck = c
@@ -259,7 +266,7 @@ func WithTargetCheck(c TargetCheck) SessionOption {
 // is live, and until then requests are dropped with no reply. Default 10s covers
 // every PLC observed. Values <= 0 are ignored, and a deadline on Connect's context
 // also bounds the wait, so this is only needed to wait longer.
-func WithRouteActivationTimeout(d time.Duration) SessionOption {
+func WithRouteActivationTimeout(d time.Duration) Option {
 	return func(s *Session) {
 		if d > 0 {
 			s.route.activationTimeout = d
@@ -276,7 +283,7 @@ func WithRouteActivationTimeout(d time.Duration) SessionOption {
 // port is normally 48898, parameterised for tests and hosts already running a
 // TwinCAT router. Off by default, since binding is not a client library's business
 // unless asked; binding failures surface from Connect rather than silently.
-func WithAmsPeerListen(port int) SessionOption {
+func WithAmsPeerListen(port int) Option {
 	return func(s *Session) {
 		s.peerListenPort = port
 	}
@@ -287,7 +294,7 @@ func WithAmsPeerListen(port int) SessionOption {
 // all (see WithAmsPeerListen). The fallback only binds for a session that would
 // be dead anyway. Use this where a TwinCAT router already owns the port, or where
 // a client process may not listen.
-func WithoutAmsPeerFallback() SessionOption {
+func WithoutAmsPeerFallback() Option {
 	return func(s *Session) {
 		s.peerFallbackDisabled = true
 	}
@@ -298,7 +305,7 @@ func WithoutAmsPeerFallback() SessionOption {
 // registration per attempt on a flapping link, against a router this library has
 // seen go mute under duplicate entries -- freshness traded for route-table safety.
 // Without it a session registers once, plus one healing registration per cooldown.
-func WithForceRouteRegistration() SessionOption {
+func WithForceRouteRegistration() Option {
 	return func(s *Session) {
 		s.route.forceRouteRegistration = true
 	}
@@ -310,7 +317,7 @@ func WithForceRouteRegistration() SessionOption {
 // maxAttempts controls how many reconnect attempts are allowed before giving up:
 //   - 0 = fail immediately on first missing symbol
 //   - N > 0 = retry up to N times, then return error (connection closes)
-func WithStrictReconnect(maxAttempts int) SessionOption {
+func WithStrictReconnect(maxAttempts int) Option {
 	return func(s *Session) {
 		s.lifecycle.strictReconnect = true
 		s.lifecycle.strictReconnectMaxAttempts = maxAttempts
@@ -322,7 +329,7 @@ func WithStrictReconnect(maxAttempts int) SessionOption {
 // When disabled, triggerReconnect sets the transport-down flag but does not launch
 // a reconnect goroutine. Pending and subsequent RPCs return ErrDisconnected.
 // The caller must call Reconnect() manually to re-establish the connection.
-func WithAutoReconnect(enabled bool) SessionOption {
+func WithAutoReconnect(enabled bool) Option {
 	return func(s *Session) {
 		s.lifecycle.autoReconnect = enabled
 	}
@@ -330,7 +337,7 @@ func WithAutoReconnect(enabled bool) SessionOption {
 
 // WithOnDisconnect registers a callback invoked when a disconnect is detected.
 // The callback runs in a separate goroutine and must not block.
-func WithOnDisconnect(fn func()) SessionOption {
+func WithOnDisconnect(fn func()) Option {
 	return func(s *Session) {
 		s.onDisconnect = fn
 	}
@@ -338,7 +345,7 @@ func WithOnDisconnect(fn func()) SessionOption {
 
 // WithOnReconnect registers a callback invoked after a successful reconnect.
 // The callback runs in a separate goroutine and must not block.
-func WithOnReconnect(fn func()) SessionOption {
+func WithOnReconnect(fn func()) Option {
 	return func(s *Session) {
 		s.onReconnect = fn
 	}
@@ -352,7 +359,7 @@ func WithOnReconnect(fn func()) SessionOption {
 // falls back to AutoReload. The strategy controls what handleStaleDetection
 // does when a stale-cache return code (0x711, 0x705, 0x710, 0x704, 0x703,
 // 0x702) is observed.
-func WithSymbolVersionStrategy(s SymbolVersionStrategy) SessionOption {
+func WithSymbolVersionStrategy(s SymbolVersionStrategy) Option {
 	return func(sess *Session) {
 		switch s {
 		case SymbolVersionAutoReload, SymbolVersionClose, SymbolVersionIgnore:
@@ -374,7 +381,7 @@ func WithSymbolVersionStrategy(s SymbolVersionStrategy) SessionOption {
 // Note: unlike WithMaxReconnectAttempts (where n=0 means infinite), reload
 // attempts are intentionally bounded — runaway reload loops would hammer
 // the PLC under recurring online-change conditions.
-func WithMaxSymbolVersionReloadAttempts(n int) SessionOption {
+func WithMaxSymbolVersionReloadAttempts(n int) Option {
 	return func(sess *Session) {
 		if n < 1 {
 			if sess.logger != nil {
@@ -388,7 +395,7 @@ func WithMaxSymbolVersionReloadAttempts(n int) SessionOption {
 
 // WithSymbolVersionReloadWindow sets the sliding window for reload-attempt
 // counting. Default: 60s. d<=0 is rejected (logged Warn, default kept).
-func WithSymbolVersionReloadWindow(d time.Duration) SessionOption {
+func WithSymbolVersionReloadWindow(d time.Duration) Option {
 	return func(sess *Session) {
 		if d <= 0 {
 			if sess.logger != nil {
@@ -409,7 +416,7 @@ func WithSymbolVersionReloadWindow(d time.Duration) SessionOption {
 // symbol-removed events: the dead handle's user channel goes silent (no
 // terminal Update). Surviving sibling handles still receive a one-shot
 // Stale=true Update; only the removed symbol's channel is mute.
-func WithOnSymbolVersionChanged(fn func(reason Reason)) SessionOption {
+func WithOnSymbolVersionChanged(fn func(reason Reason)) Option {
 	return func(sess *Session) {
 		sess.versionCallback = fn
 	}
@@ -423,7 +430,7 @@ func WithOnSymbolVersionChanged(fn func(reason Reason)) SessionOption {
 // interval is the cycle time, missed how many beats may be lost before
 // re-subscribing. Defaults 2s and 5; missed < 2 is raised to 2. See
 // WithNotificationSilenceTimeout, WithHeartbeatRecovery and WithRuntimeStateWatch.
-func WithNotificationHeartbeat(interval time.Duration, missed int) SessionOption {
+func WithNotificationHeartbeat(interval time.Duration, missed int) Option {
 	return func(s *Session) {
 		if interval > 0 {
 			// ADS carries cycle times as 32-bit 100ns ticks, so anything beyond
@@ -456,7 +463,7 @@ func WithNotificationHeartbeat(interval time.Duration, missed int) SessionOption
 // WithNotificationHeartbeat's missed argument, in the unit an operator thinks in.
 // missed is derived from it at construction (rounded up, floored at 2), and
 // whichever of the two options is applied later wins.
-func WithNotificationSilenceTimeout(d time.Duration) SessionOption {
+func WithNotificationSilenceTimeout(d time.Duration) Option {
 	return func(s *Session) {
 		if d <= 0 {
 			return
@@ -472,7 +479,7 @@ func WithNotificationSilenceTimeout(d time.Duration) SessionOption {
 // Confirm waits for a second silent window, doubling the time to notice but
 // halving needless churn. Observe never re-subscribes and reports it instead. An
 // unrecognised value keeps the default: a typo must not turn recovery off.
-func WithHeartbeatRecovery(mode HeartbeatRecovery) SessionOption {
+func WithHeartbeatRecovery(mode HeartbeatRecovery) Option {
 	return func(s *Session) {
 		switch mode {
 		case HeartbeatRecoveryImmediate, HeartbeatRecoveryConfirm, HeartbeatRecoveryObserve:
@@ -491,7 +498,7 @@ func WithHeartbeatRecovery(mode HeartbeatRecovery) SessionOption {
 // refuse with "the runtime is not running" instead of failing obscurely, and lets
 // a session starting in CONFIG come up and wait. Default 5s, independent of the
 // heartbeat interval.
-func WithRuntimeStateWatch(d time.Duration) SessionOption {
+func WithRuntimeStateWatch(d time.Duration) Option {
 	return func(s *Session) {
 		if d <= 0 {
 			return
@@ -506,7 +513,7 @@ func WithRuntimeStateWatch(d time.Duration) SessionOption {
 // CONFIG fails the old obscure way instead of saying the runtime is not running,
 // and a session starting in CONFIG will not notice the return to RUN. Connect
 // still does one synchronous read.
-func WithoutRuntimeStateWatch() SessionOption {
+func WithoutRuntimeStateWatch() Option {
 	return func(s *Session) {
 		s.stateWatchDisabled = true
 	}
@@ -520,8 +527,15 @@ func WithoutRuntimeStateWatch() SessionOption {
 // CONFIG toggle leaves this session's subscriptions dead permanently, with no
 // error and nothing in the session's state to show it — the consumer has to notice
 // the absence of data and rebuild the session itself.
-func WithoutNotificationHeartbeat() SessionOption {
+func WithoutNotificationHeartbeat() Option {
 	return func(s *Session) {
 		s.heartbeatDisabled = true
 	}
+}
+
+// WithoutSumCommands makes the session read, write and subscribe one request
+// per item, as it does automatically on devices that lack sum commands. For a
+// device that claims support and misbehaves.
+func WithoutSumCommands() Option {
+	return func(s *Session) { s.disableSum = true }
 }

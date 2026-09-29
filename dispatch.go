@@ -73,6 +73,10 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 	}
 	notification := entry.Ch
 	fullName := entry.Sym.FullName
+	name := entry.Name
+	if name == "" {
+		name = fullName
+	}
 	sess.notifications.lock.Unlock()
 
 	var notificationTime time.Time
@@ -125,9 +129,9 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 
 	sess.logger.Log(context.Background(), LevelTrace, "update received", "update", value)
 	updateStruct := &Update{
-		Variable:  fullName,
-		Value:     value,
-		TimeStamp: notificationTime,
+		Symbol: name,
+		Value:  value,
+		Time:   notificationTime,
 	}
 	// One-shot Stale flag (R-NOT-017): consume on first delivered sample.
 	if reason, ok := sess.consumeStaleFlag(handle); ok {
@@ -142,7 +146,7 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 // Recovers and logs an Error instead of crashing the listen goroutine.
 //
 // Caller must NOT close the update channel while subscriptions exist on this
-// connection; see AddSymbolNotification(s) godoc for the ownership rule.
+// connection; see Subscribe(s) godoc for the ownership rule.
 func (sess *Session) deliverNotification(ctx context.Context, ch chan<- *Update, update *Update, handle uint32, fullName string) {
 	defer func() {
 		if r := recover(); r != nil {

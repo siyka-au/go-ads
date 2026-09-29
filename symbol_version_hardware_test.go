@@ -72,11 +72,11 @@ func waitForOperator(t *testing.T, prompt string) {
 }
 
 // symbolVersionSession builds a Session against TC3 (the symbol-version hardware target)
-// with the requested online-change strategy wired via SessionOption variadic.
+// with the requested online-change strategy wired via Option variadic.
 //
 // strategy: "auto" | "close" | "ignore"
 // extraOpts: appended after defaults — used by Close strategy test to wire OnDisconnect.
-func symbolVersionSession(t *testing.T, strategy string, extraOpts ...SessionOption) *Session {
+func symbolVersionSession(t *testing.T, strategy string, extraOpts ...Option) *Session {
 	t.Helper()
 	ip := symVerEnv("ADS_PLC_IP", "192.168.3.224")
 	targetAMS := symVerEnv("ADS_TARGET_AMS", "5.154.236.19.1.1")
@@ -87,7 +87,7 @@ func symbolVersionSession(t *testing.T, strategy string, extraOpts ...SessionOpt
 	}
 	localAMS := symVerEnv("ADS_LOCAL_AMS", "auto")
 
-	var opts []SessionOption
+	var opts []Option
 	switch strategy {
 	case "auto":
 		opts = append(opts, WithSymbolVersionStrategy(SymbolVersionAutoReload))
@@ -105,17 +105,17 @@ func symbolVersionSession(t *testing.T, strategy string, extraOpts ...SessionOpt
 	if err != nil {
 		t.Fatalf("invalid target AMS: %v", err)
 	}
-	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAMS(Address{Port: 11000}))
+	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAddress(Address{Port: 11000}))
 	if localAMS != "auto" && localAMS != "" {
 		local, err := NewAddress(localAMS, 11000)
 		if err != nil {
 			t.Fatalf("invalid local AMS: %v", err)
 		}
-		opts = append(opts, WithLocalAMS(local))
+		opts = append(opts, WithLocalAddress(local))
 	}
 	opts = append(opts, extraOpts...)
 
-	sess, err := NewSession(context.Background(), AMSEndpoint{IP: ip, Port: 48898, AMS: target}, opts...)
+	sess, err := NewSession(context.Background(), Endpoint{IP: ip, Port: 48898, AMS: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -133,7 +133,7 @@ func symbolVersionSession(t *testing.T, strategy string, extraOpts ...SessionOpt
 // assertSymbolPresent fails the test fast if PLC project lacks the online-change test POU.
 func assertSymbolPresent(t *testing.T, sess *Session, name string) {
 	t.Helper()
-	syms, _ := sess.ListSymbols()
+	syms, _ := sess.Symbols()
 	if _, ok := syms[name]; !ok {
 		t.Skipf("PLC missing %q — load MAIN_DP1 + ST_DP1 into TC3 project first", name)
 	}
@@ -229,8 +229,8 @@ func TestSymbolVersionAutoReload_TypeChange(t *testing.T) {
 	// change. Required because nProbeA may not be written to by PLC code,
 	// so ServerOnChange would yield 0 samples.
 	ch := make(chan *Update, 256)
-	if _, err := sess.AddSymbolNotification(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+	if _, err := sess.Subscribe(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
 	defer col.stopAndWait()
@@ -270,8 +270,8 @@ func TestSymbolVersionAutoReload_SymbolRemoved(t *testing.T) {
 	assertSymbolPresent(t, sess, symProbeB)
 
 	ch := make(chan *Update, 16)
-	if _, err := sess.AddSymbolNotification(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+	if _, err := sess.Subscribe(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 
 	// Confirm baseline read works.
@@ -301,8 +301,8 @@ func TestSymbolVersionAutoReload_StructMemberOffsetShift(t *testing.T) {
 	assertSymbolPresent(t, sess, symStructC)
 
 	ch := make(chan *Update, 256)
-	if _, err := sess.AddSymbolNotification(context.Background(), symStructC, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+	if _, err := sess.Subscribe(context.Background(), symStructC, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
 	defer col.stopAndWait()
@@ -354,8 +354,8 @@ func TestSymbolVersionClose_OnDetection(t *testing.T) {
 	assertSymbolPresent(t, sess, symProbeA)
 
 	ch := make(chan *Update, 256)
-	if _, err := sess.AddSymbolNotification(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+	if _, err := sess.Subscribe(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
 	defer col.stopAndWait()
@@ -403,8 +403,8 @@ func TestSymbolVersionIgnore_StaleFlag(t *testing.T) {
 	// Counter increments every PLC scan (10ms = 100Hz). Use big buffer +
 	// active drainer goroutine so the channel never blocks the listen loop.
 	ch := make(chan *Update, 1024)
-	if _, err := sess.AddSymbolNotification(context.Background(), symCounter, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+	if _, err := sess.Subscribe(context.Background(), symCounter, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
 	defer col.stopAndWait()
@@ -480,8 +480,8 @@ func TestSymbolVersionIgnore_RemovedSymbolStops(t *testing.T) {
 	// ServerCycle so we get steady-state samples pre-deletion (proves
 	// subscription alive); silence post-deletion is the assertion target.
 	ch := make(chan *Update, 256)
-	if _, err := sess.AddSymbolNotification(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
-		t.Fatalf("AddSymbolNotification: %v", err)
+	if _, err := sess.Subscribe(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
 	defer col.stopAndWait()

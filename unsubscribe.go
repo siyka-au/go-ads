@@ -13,7 +13,7 @@ import (
 // the cached notificationConfig, and clears notificationChannel when the
 // last subscription dies. Callers that want raw delete behavior use
 // the Client method directly.
-func (sess *Session) DeleteDeviceNotification(ctx context.Context, handle uint32) error {
+func (sess *Session) Unsubscribe(ctx context.Context, handle uint32) error {
 	// Snapshot symbol name BEFORE PLC RPC so a concurrent Reconnect clearing
 	// activeNotifications mid-flight doesn't strand notificationConfigs (which
 	// would cause resubscribeNotifications to re-subscribe a deleted symbol).
@@ -43,7 +43,7 @@ func (sess *Session) DeleteDeviceNotification(ctx context.Context, handle uint32
 	// The caller asked for this one to go, so a healthy session holds one fewer.
 	sess.notifications.registered.Store(int64(len(sess.notifications.activeNotifications)))
 	// Gated on the handle having actually been ours, not merely on the map being
-	// empty. A raw-handle caller — or one of AddSymbolNotification's own refusal
+	// empty. A raw-handle caller — or one of Subscribe's own refusal
 	// paths releasing a handle it never committed — would otherwise clear the
 	// channel whenever the map happened to be empty, which is exactly the state a
 	// sweep leaves behind. resubscribeNotifications then returns early on the nil
@@ -74,7 +74,7 @@ func (sess *Session) DeleteDeviceNotification(ctx context.Context, handle uint32
 // are still flushed and both the partial slice and the error are returned, so
 // in-memory state matches what the PLC saw rather than leaving phantom entries for
 // the next reconnect to re-clean.
-func (sess *Session) SumDeleteDeviceNotification(ctx context.Context, handles []uint32) ([]ams.ReturnCode, error) {
+func (sess *Session) UnsubscribeAll(ctx context.Context, handles []uint32) ([]ams.ReturnCode, error) {
 	return sess.sumDeleteDeviceNotification(ctx, handles, true)
 }
 

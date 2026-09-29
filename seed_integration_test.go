@@ -93,13 +93,13 @@ func openSeedSession(t *testing.T, loadSymbols bool) *Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var opts []SessionOption
+	var opts []Option
 	if local, _ := strconv.ParseBool(os.Getenv("ADS_LOCAL_MODE")); local {
 		opts = append(opts, WithLocalMode())
 	}
 	// NewSession's context bounds the session's lifetime, so it must outlive
 	// this function; the timeout applies to connecting only.
-	sess, err := NewSession(context.Background(), AMSEndpoint{IP: getEnvOrDefault("ADS_PLC_IP", "127.0.0.1"), Port: 48898, AMS: target}, opts...)
+	sess, err := NewSession(context.Background(), Endpoint{Host: getEnvOrDefault("ADS_PLC_IP", "127.0.0.1"), Port: 48898, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -482,9 +482,9 @@ func TestSeedSymbolMetadata(t *testing.T) {
 		{"stStructVar", "ST_TypeTestStruct", 0}, // size logged, not fixed here
 	}
 	for _, tt := range tests {
-		v, err := sess.GetSymbol(context.Background(), seedFB+tt.name)
+		v, err := sess.Symbol(context.Background(), seedFB+tt.name)
 		if err != nil {
-			t.Errorf("GetSymbol %s: %v", tt.name, err)
+			t.Errorf("Symbol %s: %v", tt.name, err)
 			continue
 		}
 		if v.DataType != tt.dataType {

@@ -17,14 +17,14 @@ import (
 // to srv. The FSM is transitioned to Connected so isClosed/isReconnecting
 // short-circuits behave like a live session.
 //
-// Optional SessionOptions are applied after construction so tests can
+// Optional Options are applied after construction so tests can
 // override defaults (e.g. WithSymbolVersionStrategy, WithOnDisconnect).
 // lifecycle.ctx + lifecycle.shutdown are pre-initialised so sess.Close()
 // is safe to call from tests; autoReconnect defaults to false to avoid
 // spawning the Reconnect goroutine on disconnect.
 //
 // Caller is responsible for c.Close() at end of test (typically via t.Cleanup).
-func newWiredTestSession(t *testing.T, srv *fakeplc.PLC, opts ...SessionOption) (*Session, *adsconn.Conn) {
+func newWiredTestSession(t *testing.T, srv *fakeplc.PLC, opts ...Option) (*Session, *adsconn.Conn) {
 	t.Helper()
 	c, err := adsconn.DialContext(context.Background(), adsconn.DialConfig{Host: srv.Host, Port: srv.Port, RequestTimeout: 5 * time.Second})
 	if err != nil {

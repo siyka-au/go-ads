@@ -202,9 +202,9 @@ func setBitSeed(t *testing.T, sess *Session, seed uint64) {
 func TestSeedBitPackingLayout(t *testing.T) {
 	sess := seedSession(t)
 	for _, target := range []string{"stBitPacking", "stBitPackingWrite"} {
-		v, err := sess.GetSymbol(context.Background(), bitsFB+target)
+		v, err := sess.Symbol(context.Background(), bitsFB+target)
 		if err != nil {
-			t.Fatalf("GetSymbol %s: %v", target, err)
+			t.Fatalf("Symbol %s: %v", target, err)
 		}
 		if v.DataType != "ST_BitPacking" || v.Length != 8 {
 			t.Errorf("%s: %s of %d bytes, want ST_BitPacking of 8", target, v.DataType, v.Length)

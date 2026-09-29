@@ -9,7 +9,7 @@ import (
 	"github.com/siyka-au/go-ads/v3/router"
 )
 
-// router_port_test.go — AMSEndpoint.RouterPort.
+// router_port_test.go — Endpoint.RouterPort.
 //
 // A PLC behind NAT is reached on forwarded ports, and NAT maps one external
 // port per internal port: the forwarded UDP port is a different number than the
@@ -20,9 +20,9 @@ import (
 // TestNewSession_RouterPortDefaultsToProtocolPort: leaving it unset keeps the
 // TwinCAT default, so nothing changes for a directly-reachable PLC.
 func TestNewSession_RouterPortDefaultsToProtocolPort(t *testing.T) {
-	sess, err := NewSession(context.Background(), AMSEndpoint{
-		IP:  "127.0.0.1",
-		AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
+	sess, err := NewSession(context.Background(), Endpoint{
+		Host:  "127.0.0.1",
+		Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 	}, WithTargetCheck(TargetCheckOff))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -39,11 +39,11 @@ func TestNewSession_RouterPortDefaultsToProtocolPort(t *testing.T) {
 // TestNewSession_RouterPortIndependentOfTCPPort is the NAT shape: two unrelated
 // forwarded numbers, neither derived from the other.
 func TestNewSession_RouterPortIndependentOfTCPPort(t *testing.T) {
-	sess, err := NewSession(context.Background(), AMSEndpoint{
-		IP:         "127.0.0.1",
+	sess, err := NewSession(context.Background(), Endpoint{
+		Host:         "127.0.0.1",
 		Port:       5534, // external TCP -> 48898 on the PLC
 		RouterPort: 6499, // external UDP -> 48899 on the PLC
-		AMS:        ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
+		Target:        ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 	}, WithTargetCheck(TargetCheckOff))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -73,8 +73,8 @@ func TestSessionUsesRouterPortForIdentify(t *testing.T) {
 	})
 
 	// No target AMS at all, so NewSession must discover it — over RouterPort.
-	sess, err := NewSession(context.Background(), AMSEndpoint{
-		IP:         r.Host,
+	sess, err := NewSession(context.Background(), Endpoint{
+		Host:         r.Host,
 		Port:       5534, // nothing listens here; discovery is UDP-only
 		RouterPort: r.Port,
 	})

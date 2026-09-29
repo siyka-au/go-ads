@@ -36,7 +36,7 @@ func TestDeliverNotification_ClosedChannelDoesNotPanic(t *testing.T) {
 
 	conn := &Session{logger: slog.Default()}
 	ctx := context.Background()
-	update := &Update{Variable: "x", Value: "1", TimeStamp: time.Now()}
+	update := &Update{Symbol: "x", Value: "1", Time: time.Now()}
 
 	conn.deliverNotification(ctx, ch, update, 42, "x")
 }
@@ -47,7 +47,7 @@ func TestDeliverNotification_DeliversOnOpenChannel(t *testing.T) {
 	ch := make(chan *Update, 1)
 	conn := &Session{logger: slog.Default()}
 	ctx := context.Background()
-	update := &Update{Variable: "x", Value: "1", TimeStamp: time.Now()}
+	update := &Update{Symbol: "x", Value: "1", Time: time.Now()}
 
 	conn.deliverNotification(ctx, ch, update, 42, "x")
 
@@ -65,7 +65,7 @@ func TestDeliverNotification_DeliversOnOpenChannel(t *testing.T) {
 // Validates: R-NOT-006.
 func TestDeliverNotification_DropsWhenChannelFull(t *testing.T) {
 	ch := make(chan *Update, 1)
-	ch <- &Update{Variable: "filler"} // fill buffer
+	ch <- &Update{Symbol: "filler"} // fill buffer
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -75,7 +75,7 @@ func TestDeliverNotification_DropsWhenChannelFull(t *testing.T) {
 
 	conn := &Session{logger: slog.Default()}
 	ctx := context.Background()
-	update := &Update{Variable: "x", Value: "1", TimeStamp: time.Now()}
+	update := &Update{Symbol: "x", Value: "1", Time: time.Now()}
 
 	conn.deliverNotification(ctx, ch, update, 42, "x")
 	// Should drop without panic; channel still has only the filler.
@@ -120,16 +120,16 @@ func TestDeviceNotification_SingleSample(t *testing.T) {
 
 	select {
 	case update := <-ch:
-		if update.Variable != "MAIN.testVar" {
-			t.Errorf("variable = %q, want %q", update.Variable, "MAIN.testVar")
+		if update.Symbol != "MAIN.testVar" {
+			t.Errorf("variable = %q, want %q", update.Symbol, "MAIN.testVar")
 		}
 		if update.Value != int16(1234) {
 			t.Errorf("value = %#v, want int16(1234)", update.Value)
 		}
 		// Verify timestamp is approximately correct (within a second)
 		expectedTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-		if update.TimeStamp.Sub(expectedTime).Abs() > time.Second {
-			t.Errorf("timestamp = %v, want ~%v", update.TimeStamp, expectedTime)
+		if update.Time.Sub(expectedTime).Abs() > time.Second {
+			t.Errorf("timestamp = %v, want ~%v", update.Time, expectedTime)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for notification")
@@ -432,8 +432,8 @@ func TestWindowsFiletimeConversion(t *testing.T) {
 
 			select {
 			case update := <-ch:
-				if !update.TimeStamp.Equal(tt.want) {
-					t.Errorf("TimeStamp = %v, want %v", update.TimeStamp.UTC(), tt.want)
+				if !update.Time.Equal(tt.want) {
+					t.Errorf("TimeStamp = %v, want %v", update.Time.UTC(), tt.want)
 				}
 			case <-time.After(time.Second):
 				t.Fatal("no update received")
@@ -863,7 +863,7 @@ func TestOrphanDelete_SuppressedDuringReconnect(t *testing.T) {
 
 // TestOrphanDelete_AbortsWhenHandleReappearsInActiveNotifications guards
 // against the critical race: between scheduling and firing the Delete RPC,
-// a concurrent AddSymbolNotification receives the same handle ID back from
+// a concurrent Subscribe receives the same handle ID back from
 // the PLC (PLC reuses freed slot IDs). The orphan-Delete must re-check
 // activeNotifications under lock and abort if the handle is now present.
 func TestOrphanDelete_AbortsWhenHandleReappearsInActiveNotifications(t *testing.T) {

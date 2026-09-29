@@ -109,6 +109,7 @@ func (sess *Session) Close() error {
 	// and workers up. Only Close can wait for those workers, since
 	// giveUpReconnecting runs inside the goroutine it waits for.
 	sess.lifecycle.state.transitionToOnce(SessionStateClosed)
+	sess.setCloseErr(ErrClosed)
 	sess.markClosed()
 	sess.logger.Info("Close called, shutting down")
 	sess.shutdownTransport(wasDisconnected)

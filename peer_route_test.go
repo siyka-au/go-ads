@@ -54,7 +54,7 @@ func TestPeerRoute_ResponsesOnInboundConnection(t *testing.T) {
 	srv.AnswerViaPeerConnection(localAddr(port))
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(2*time.Second),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -99,7 +99,7 @@ func TestPeerRoute_DisabledStillFailsClearly(t *testing.T) {
 	fallbackPort := freeLocalPort(t)
 	logs := &testlog.Handler{}
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(300*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -151,7 +151,7 @@ func TestPeerRoute_CloseDoesNotHangWithAdoptedConnection(t *testing.T) {
 	srv.AnswerViaPeerConnection(localAddr(port))
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(2*time.Second),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -260,7 +260,7 @@ func TestPeerRoute_HealthyDeviceDropsTheRememberedHost(t *testing.T) {
 		t.Helper()
 		logs := &testlog.Handler{}
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+			Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 			WithRequestTimeout(500*time.Millisecond),
 			WithTargetCheck(TargetCheckOff),
 			WithAutoReconnect(false),
@@ -363,7 +363,7 @@ func TestPeerRoute_AutomaticFallback(t *testing.T) {
 
 	logs := &testlog.Handler{}
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(500*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -424,15 +424,15 @@ func TestPeerRoute_FallbackCanBeDisabled(t *testing.T) {
 		srv.AnswerViaPeerConnection(localAddr(amsPeerListenPort))
 		return srv
 	}
-	connect := func(t *testing.T, srv *fakeplc.PLC, extra ...SessionOption) (*Session, error) {
+	connect := func(t *testing.T, srv *fakeplc.PLC, extra ...Option) (*Session, error) {
 		t.Helper()
-		opts := append([]SessionOption{
+		opts := append([]Option{
 			WithRequestTimeout(500 * time.Millisecond),
 			WithTargetCheck(TargetCheckOff),
 			WithAutoReconnect(false),
 		}, extra...)
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+			Endpoint{Host: srv.Host, Port: srv.Port, Target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 			opts...)
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)

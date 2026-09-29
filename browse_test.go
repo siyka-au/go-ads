@@ -34,9 +34,9 @@ func TestBrowseAllSymbols(t *testing.T) {
 		t.Fatalf("LoadSymbolsSlow failed: %v", err)
 	}
 
-	symbols, err := conn.ListSymbols()
+	symbols, err := conn.Symbols()
 	if err != nil {
-		t.Fatalf("ListSymbols failed: %v", err)
+		t.Fatalf("Symbols failed: %v", err)
 	}
 
 	t.Logf("Loaded %d symbols from %s", len(symbols), ip)

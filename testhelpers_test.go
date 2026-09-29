@@ -73,15 +73,15 @@ func buildNotificationPacketMultiSample(stamps []struct {
 	return buf.Bytes()
 }
 
-// testEndpoint returns the conventional AMSEndpoint used by unit tests:
+// testEndpoint returns the conventional Endpoint used by unit tests:
 // loopback IP, TwinCAT TCP default port, fixed AMS NetID 1.2.3.4.1.1,
 // AMS port 851 (PortR0PlcTc3). Tests that need a different target should
-// build their own AMSEndpoint inline.
-func testEndpoint() AMSEndpoint {
-	return AMSEndpoint{
-		IP:   "127.0.0.1",
+// build their own Endpoint inline.
+func testEndpoint() Endpoint {
+	return Endpoint{
+		Host:   "127.0.0.1",
 		Port: 48898,
-		AMS:  ams.Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
+		Target:  ams.Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
 	}
 }
 

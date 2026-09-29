@@ -8,7 +8,7 @@ import (
 
 // Validates: R-NOT-016.
 func TestUpdate_StaleReasonFields(t *testing.T) {
-	u := Update{Variable: "x", Value: "1", Stale: &StaleInfo{Reason: ReasonSymbolVersionInvalid}}
+	u := Update{Symbol: "x", Value: "1", Stale: &StaleInfo{Reason: ReasonSymbolVersionInvalid}}
 	if u.Stale == nil {
 		t.Error("Stale field missing")
 	}

@@ -22,9 +22,9 @@ type connDefaults struct {
 }
 
 // setupConnectionWithDefaults creates a PLC connection using env vars with
-// provided fallbacks. extra SessionOptions are appended last, so a test can
+// provided fallbacks. extra Options are appended last, so a test can
 // override anything derived from the environment (e.g. WithLogger).
-func setupConnectionWithDefaults(t *testing.T, d connDefaults, extra ...SessionOption) *Session {
+func setupConnectionWithDefaults(t *testing.T, d connDefaults, extra ...Option) *Session {
 	t.Helper()
 
 	ip := getEnvOrDefault("ADS_PLC_IP", d.ip)
@@ -36,7 +36,7 @@ func setupConnectionWithDefaults(t *testing.T, d connDefaults, extra ...SessionO
 	}
 	localAMS := getEnvOrDefault("ADS_LOCAL_AMS", "auto")
 
-	var opts []SessionOption
+	var opts []Option
 	hostIP := os.Getenv("ADS_HOST_IP")
 	if hostIP != "" {
 		opts = append(opts, WithHostIP(hostIP))
@@ -82,16 +82,16 @@ func setupConnectionWithDefaults(t *testing.T, d connDefaults, extra ...SessionO
 	if err != nil {
 		t.Fatalf("invalid target AMS: %v", err)
 	}
-	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAMS(ams.Address{Port: 10500}))
+	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAddress(ams.Address{Port: 10500}))
 	if localAMS != "auto" && localAMS != "" {
 		local, err := ams.NewAddress(localAMS, 10500)
 		if err != nil {
 			t.Fatalf("invalid local AMS: %v", err)
 		}
-		opts = append(opts, WithLocalAMS(local))
+		opts = append(opts, WithLocalAddress(local))
 	}
 	opts = append(opts, extra...)
-	conn, err := NewSession(context.Background(), AMSEndpoint{IP: ip, Port: 48898, AMS: target}, opts...)
+	conn, err := NewSession(context.Background(), Endpoint{Host: ip, Port: 48898, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewConnection failed: %v", err)
 	}

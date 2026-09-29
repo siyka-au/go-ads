@@ -22,11 +22,11 @@ func subscribe(t *testing.T, sess *Session, names []string, mode ams.TransMode, 
 	ch := make(chan *Update, 4096)
 	configs := make([]NotificationConfig, len(names))
 	for i, n := range names {
-		configs[i] = NotificationConfig{SymbolName: n, CycleTime: cycle, TransmissionMode: mode}
+		configs[i] = NotificationConfig{Symbol: n, CycleTime: cycle, Mode: mode}
 	}
-	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
+	results, err := sess.subscribeAll(context.Background(), configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	for i, r := range results {
 		if r.Skipped != nil || r.Error != ams.ReturnCodeNoErrors {
@@ -47,13 +47,13 @@ func awaitValues(t *testing.T, ch chan *Update, want map[string]any, timeout tim
 	for pending > 0 {
 		select {
 		case u := <-ch:
-			w, ok := want[u.Variable]
-			if !ok || matched[u.Variable] {
+			w, ok := want[u.Symbol]
+			if !ok || matched[u.Symbol] {
 				continue
 			}
-			last[u.Variable] = u.Value
+			last[u.Symbol] = u.Value
 			if sameValue(u.Value, w) {
-				matched[u.Variable] = true
+				matched[u.Symbol] = true
 				pending--
 			}
 		case <-deadline:
@@ -109,7 +109,7 @@ func TestSeedNotifyEveryType(t *testing.T) {
 			for {
 				select {
 				case u := <-ch:
-					f := strings.TrimPrefix(u.Variable, seedFB)
+					f := strings.TrimPrefix(u.Symbol, seedFB)
 					if f != "sStringVar" && sameValue(seedScalars(pair[1])[f], before[f]) {
 						t.Errorf("%s: notified although its value did not change (%#v)", f, u.Value)
 					}
@@ -139,7 +139,7 @@ func TestSeedNotifyComposite(t *testing.T) {
 		for !gotStruct || !gotArray {
 			select {
 			case u := <-ch:
-				switch u.Variable {
+				switch u.Symbol {
 				case seedFB + "stStructVar":
 					m, ok := u.Value.(map[string]any)
 					if !ok {
@@ -182,7 +182,7 @@ collect:
 	for {
 		select {
 		case u := <-ch:
-			switch u.Variable {
+			switch u.Symbol {
 			case seedFB + "nUdintVar":
 				counts = append(counts, u.Value.(uint32))
 			case seedFB + "tTimeVar":
@@ -241,19 +241,19 @@ func TestSeedNotifyUnsubscribe(t *testing.T) {
 	sess := seedSession(t)
 	setSeed(t, sess, 1)
 	ch := make(chan *Update, 64)
-	h, err := sess.AddSymbolNotification(context.Background(), seedFB+"nUdintVar", 0, 10*time.Millisecond, ams.TransModeServerOnChange, ch)
+	h, err := sess.Subscribe(context.Background(), seedFB+"nUdintVar", 0, 10*time.Millisecond, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatal(err)
 	}
 	awaitValues(t, ch, map[string]any{seedFB + "nUdintVar": uint32(1)}, 5*time.Second)
-	if err := sess.DeleteDeviceNotification(context.Background(), h); err != nil {
+	if err := sess.Unsubscribe(context.Background(), h); err != nil {
 		t.Fatalf("DeleteDeviceNotification: %v", err)
 	}
 	setSeed(t, sess, 2)
 	select {
 	case u := <-ch:
-		if !strings.HasSuffix(u.Variable, "nUdintVar") || u.Value == uint32(2) {
-			t.Errorf("update after unsubscribe: %s = %#v", u.Variable, u.Value)
+		if !strings.HasSuffix(u.Symbol, "nUdintVar") || u.Value == uint32(2) {
+			t.Errorf("update after unsubscribe: %s = %#v", u.Symbol, u.Value)
 		}
 	case <-time.After(500 * time.Millisecond):
 	}

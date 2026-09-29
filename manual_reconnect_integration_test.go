@@ -158,7 +158,7 @@ func TestManualRestartRecovery(t *testing.T) {
 		t.Fatalf("target AMS: %v", err)
 	}
 
-	opts := []SessionOption{
+	opts := []Option{
 		WithRequestTimeout(5 * time.Second),
 		WithAutoReconnect(true),
 		// Unbounded: giving up would close the session, and a PLC that takes two
@@ -177,14 +177,14 @@ func TestManualRestartRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, err)
 		}
-		opts = append(opts, WithLocalAMS(local))
+		opts = append(opts, WithLocalAddress(local))
 	}
 	if bindIP := os.Getenv("ADS_LOCAL_BIND_IP"); bindIP != "" {
 		opts = append(opts, WithLocalBindIP(bindIP))
 	}
 
 	ctx := context.Background()
-	sess, err := NewSession(ctx, AMSEndpoint{IP: host, AMS: target}, opts...)
+	sess, err := NewSession(ctx, Endpoint{Host: host, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -224,16 +224,16 @@ func TestManualRestartRecovery(t *testing.T) {
 			mode = ams.TransModeServerOnChange
 		}
 		configs = append(configs, NotificationConfig{
-			SymbolName:       n,
-			TransmissionMode: mode,
+			Symbol:       n,
+			Mode: mode,
 			MaxDelay:         200 * time.Millisecond,
 			CycleTime:        200 * time.Millisecond,
 		})
 	}
 	ch := make(chan *Update, 256)
-	results, err := sess.AddSymbolNotifications(ctx, configs, ch)
+	results, err := sess.subscribeAll(ctx, configs, ch)
 	if err != nil {
-		t.Fatalf("AddSymbolNotifications: %v", err)
+		t.Fatalf("SubscribeAll: %v", err)
 	}
 	subscribed := 0
 	for i, r := range results {
@@ -369,7 +369,7 @@ func TestManualRestartRecovery(t *testing.T) {
 	for len(seen) < subscribed {
 		select {
 		case u := <-ch:
-			seen[strings.ToLower(u.Variable)] = true
+			seen[strings.ToLower(u.Symbol)] = true
 		case <-deadline:
 			t.Errorf("after recovery only %d/%d symbols streamed: %v", len(seen), subscribed, seen)
 			return
@@ -482,7 +482,7 @@ func TestManualConfigToRun(t *testing.T) {
 		t.Fatalf("target AMS: %v", err)
 	}
 
-	opts := []SessionOption{
+	opts := []Option{
 		WithRequestTimeout(5 * time.Second),
 		WithAutoReconnect(true),
 		WithMaxReconnectAttempts(0),
@@ -500,11 +500,11 @@ func TestManualConfigToRun(t *testing.T) {
 		if lerr != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, lerr)
 		}
-		opts = append(opts, WithLocalAMS(local))
+		opts = append(opts, WithLocalAddress(local))
 	}
 
 	ctx := context.Background()
-	sess, err := NewSession(ctx, AMSEndpoint{IP: host, AMS: target}, opts...)
+	sess, err := NewSession(ctx, Endpoint{Host: host, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -537,12 +537,12 @@ func TestManualConfigToRun(t *testing.T) {
 		timeline("LoadSymbols refused as expected: %v", lerr)
 	}
 	ch := make(chan *Update, 256)
-	_, serr := sess.AddSymbolNotifications(ctx, []NotificationConfig{{
-		SymbolName:       symbol,
-		TransmissionMode: ams.TransModeServerOnChange,
+	_, serr := sess.subscribeAll(ctx, []NotificationConfig{{
+		Symbol:       symbol,
+		Mode: ams.TransModeServerOnChange,
 	}}, ch)
 	if !errors.Is(serr, ErrRuntimeNotRunning) {
-		t.Errorf("AddSymbolNotifications error = %v, want ErrRuntimeNotRunning", serr)
+		t.Errorf("SubscribeAll error = %v, want ErrRuntimeNotRunning", serr)
 	} else {
 		timeline("subscribe refused as expected")
 	}
@@ -573,9 +573,9 @@ func TestManualConfigToRun(t *testing.T) {
 	if err := sess.LoadSymbols(ctx); err != nil {
 		t.Fatalf("LoadSymbols after RUN: %v", err)
 	}
-	results, err := sess.AddSymbolNotifications(ctx, []NotificationConfig{{
-		SymbolName:       symbol,
-		TransmissionMode: ams.TransModeServerOnChange,
+	results, err := sess.subscribeAll(ctx, []NotificationConfig{{
+		Symbol:       symbol,
+		Mode: ams.TransModeServerOnChange,
 		MaxDelay:         200 * time.Millisecond,
 		CycleTime:        200 * time.Millisecond,
 	}}, ch)
@@ -589,7 +589,7 @@ func TestManualConfigToRun(t *testing.T) {
 
 	select {
 	case u := <-ch:
-		timeline("updates flowing again: %s = %s", u.Variable, u.Value)
+		timeline("updates flowing again: %s = %s", u.Symbol, u.Value)
 	case <-time.After(30 * time.Second):
 		t.Error("no updates within 30s of subscribing after RUN")
 	}
