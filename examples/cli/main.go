@@ -4,9 +4,9 @@
 //     auto-reconnect, online-change handling, persistent notifications,
 //     live Stale-flag observation.
 //
-//  2. Client demo: raw Client (no cache, no reconnect) — single-shot
+//  2. Client demo: raw adsclient.Client (no cache, no reconnect) — single-shot
 //     protocol-level inspection. Demonstrates ReadDeviceInfo, ReadState,
-//     GetSymbolInfoByName, raw Read by handle.
+//     SymbolInfo, and a raw Read by handle.
 //
 // Connection parameters are read from environment variables — same set
 // for both demos:
@@ -25,7 +25,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,6 +36,8 @@ import (
 	"time"
 
 	ads "github.com/siyka-au/go-ads/v3"
+	"github.com/siyka-au/go-ads/v3/adsclient"
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 func main() {
@@ -106,7 +107,6 @@ type repl struct {
 	ctx     context.Context
 	logger  *slog.Logger
 	updates chan *ads.Update
-	subs    map[uint32]string // handle -> symbol name (for unsub + state output)
 }
 
 func runSessionDemo(ctx context.Context, logger *slog.Logger) error {
@@ -115,7 +115,7 @@ func runSessionDemo(ctx context.Context, logger *slog.Logger) error {
 	// Buffer chosen large enough to absorb bursts when REPL is mid-input.
 	updates := make(chan *ads.Update, 128)
 
-	opts := []ads.SessionOption{
+	opts := []ads.Option{
 		ads.WithLogger(logger),
 		ads.WithAutoReconnect(true),
 		ads.WithOnDisconnect(func() {
@@ -134,20 +134,20 @@ func runSessionDemo(ctx context.Context, logger *slog.Logger) error {
 	if routeUser != "" {
 		opts = append(opts, ads.WithRoute(routeName, routeUser, routePass))
 	}
-	target, err := ads.NewAMSAddress(targetAMS, uint16(targetPort))
+	target, err := ams.NewAddress(targetAMS, ams.Port(targetPort))
 	if err != nil {
 		return fmt.Errorf("invalid target AMS: %w", err)
 	}
-	opts = append(opts, ads.WithLocalAMS(ads.AMSAddress{Port: uint16(localPort)}))
+	opts = append(opts, ads.WithLocalAddress(ams.Address{Port: ams.Port(localPort)}))
 	if localAMS != "auto" && localAMS != "" {
-		local, err := ads.NewAMSAddress(localAMS, uint16(localPort))
+		local, err := ams.NewAddress(localAMS, ams.Port(localPort))
 		if err != nil {
 			return fmt.Errorf("invalid local AMS: %w", err)
 		}
-		opts = append(opts, ads.WithLocalAMS(local))
+		opts = append(opts, ads.WithLocalAddress(local))
 	}
 
-	sess, err := ads.NewSession(ctx, ads.AMSEndpoint{IP: ip, Port: 48898, AMS: target}, opts...)
+	sess, err := ads.NewSession(ctx, ads.Endpoint{Host: ip, Target: target}, opts...)
 	if err != nil {
 		return fmt.Errorf("NewSession: %w", err)
 	}
@@ -162,7 +162,7 @@ func runSessionDemo(ctx context.Context, logger *slog.Logger) error {
 		// Non-fatal: REPL can still operate via on-demand handle resolve.
 		fmt.Printf("[session] LoadSymbols failed: %v (continuing — on-demand resolve still works)\n", err)
 	} else {
-		syms, _ := sess.ListSymbols()
+		syms, _ := sess.Symbols()
 		fmt.Printf("[session] symbol cache loaded (%d symbols)\n", len(syms))
 	}
 
@@ -171,7 +171,6 @@ func runSessionDemo(ctx context.Context, logger *slog.Logger) error {
 		ctx:     ctx,
 		logger:  logger,
 		updates: updates,
-		subs:    make(map[uint32]string),
 	}
 
 	// Notification printer — single goroutine drains the shared channel and
@@ -179,10 +178,15 @@ func runSessionDemo(ctx context.Context, logger *slog.Logger) error {
 	notifyDone := make(chan struct{})
 	go r.notifyLoop(notifyDone)
 
-	// Graceful shutdown on SIGINT/SIGTERM: close stdin to unblock ReadString.
+	// Graceful shutdown on SIGINT/SIGTERM, or when the session gives up for
+	// good: close stdin to unblock ReadString.
 	go func() {
-		<-ctx.Done()
-		fmt.Println("\n[session] shutdown signal received")
+		select {
+		case <-ctx.Done():
+			fmt.Println("\n[session] shutdown signal received")
+		case <-sess.Done():
+			fmt.Printf("\n[session] ended: %v\n", sess.Err())
+		}
 		_ = os.Stdin.Close()
 	}()
 
@@ -198,10 +202,10 @@ func (r *repl) notifyLoop(done chan struct{}) {
 	for u := range r.updates {
 		if u.Stale != nil {
 			fmt.Printf("\n[notify] *STALE* symbol=%s value=%s reason=%s ts=%s\n",
-				u.Variable, formatValue(u.Value), u.Stale.Reason, u.TimeStamp.Format(time.RFC3339Nano))
+				u.Symbol, formatValue(u.Value), u.Stale.Reason, u.Time.Format(time.RFC3339Nano))
 		} else {
 			fmt.Printf("\n[notify] %s = %s (ts=%s)\n",
-				u.Variable, formatValue(u.Value), u.TimeStamp.Format("15:04:05.000"))
+				u.Symbol, formatValue(u.Value), u.Time.Format("15:04:05.000"))
 		}
 	}
 }
@@ -267,33 +271,31 @@ func printHelp() {
 	fmt.Println("  unsub <handle>             Delete notification by handle")
 	fmt.Println("  reload                     RefreshSymbols (manual reload if version changed)")
 	fmt.Println("  slow-load [chunk] [delay]  Reload via chunked download (default: 4096 bytes, 100ms)")
-	fmt.Println("  state                      Show session state + cache + subscription counts")
+	fmt.Println("  state                      Show session state, addresses and subscriptions")
 	fmt.Println("  help / ?                   Show this help")
 	fmt.Println("  quit / exit                Graceful shutdown")
 	fmt.Println()
 }
 
 func (r *repl) cmdState() {
-	syms, _ := r.sess.ListSymbols()
-	fmt.Printf("  IsClosed:       %v\n", r.sess.IsClosed())
-	fmt.Printf("  IsDisconnected: %v\n", r.sess.IsDisconnected())
+	syms, _ := r.sess.Symbols()
+	info := r.sess.Info()
+	fmt.Printf("  state:          %v\n", info.State)
+	fmt.Printf("  target:         %s\n", info.Target)
+	fmt.Printf("  local:          %s (tcp %s)\n", info.Local, info.LocalTCP)
+	if info.RuntimeKnown {
+		fmt.Printf("  runtime:        %v\n", info.Runtime)
+	}
 	fmt.Printf("  cached symbols: %d\n", len(syms))
-	fmt.Printf("  active subs:    %d\n", len(r.subs))
-	if len(r.subs) > 0 {
-		// Stable order for readable output.
-		handles := make([]uint32, 0, len(r.subs))
-		for h := range r.subs {
-			handles = append(handles, h)
-		}
-		sort.Slice(handles, func(i, j int) bool { return handles[i] < handles[j] })
-		for _, h := range handles {
-			fmt.Printf("    handle=%d symbol=%s\n", h, r.subs[h])
-		}
+	subs := r.sess.Subscriptions()
+	fmt.Printf("  subscriptions:  %d\n", len(subs))
+	for _, s := range subs {
+		fmt.Printf("    handle=%d symbol=%s active=%v\n", s.Handle, s.Config.Symbol, s.Active)
 	}
 }
 
 func (r *repl) cmdList(args []string) {
-	syms, err := r.sess.ListSymbols()
+	syms, err := r.sess.Symbols()
 	if err != nil {
 		fmt.Printf("  error: %v\n", err)
 		return
@@ -321,7 +323,7 @@ func (r *repl) cmdBrowse(args []string) {
 	if len(args) > 0 {
 		path = args[0]
 	}
-	entries, err := r.sess.BrowseSymbols(path)
+	entries, err := r.sess.Browse(path)
 	if err != nil {
 		fmt.Printf("  error: %v\n", err)
 		return
@@ -390,7 +392,7 @@ func (r *repl) cmdInfo(args []string) {
 		return
 	}
 	name := args[0]
-	v, err := r.sess.GetSymbol(r.ctx, name)
+	v, err := r.sess.Symbol(r.ctx, name)
 	if err != nil {
 		fmt.Printf("  error: %v\n", err)
 		return
@@ -401,7 +403,7 @@ func (r *repl) cmdInfo(args []string) {
 	fmt.Printf("  Group:    0x%X\n", v.Group)
 	fmt.Printf("  Offset:   0x%X\n", v.Offset)
 	fmt.Printf("  Handle:   %d\n", v.Handle)
-	fmt.Printf("  BaseType: %d (%s)\n", uint32(v.BaseType), baseTypeName(uint32(v.BaseType)))
+	fmt.Printf("  BaseType: %s\n", v.BaseTypeName())
 	if v.Comment != "" {
 		fmt.Printf("  Comment:  %s\n", v.Comment)
 	}
@@ -413,19 +415,18 @@ func (r *repl) cmdSub(args []string) {
 		return
 	}
 	name := args[0]
-	h, err := r.sess.AddSymbolNotification(
+	h, err := r.sess.Subscribe(
 		r.ctx,
 		name,
 		100*time.Millisecond,
 		100*time.Millisecond,
-		ads.TransModeServerOnChange,
+		ams.TransModeServerOnChange,
 		r.updates,
 	)
 	if err != nil {
 		fmt.Printf("  error: %v\n", err)
 		return
 	}
-	r.subs[h] = name
 	fmt.Printf("  subscribed: symbol=%s handle=%d\n", name, h)
 }
 
@@ -439,14 +440,11 @@ func (r *repl) cmdUnsub(args []string) {
 		fmt.Printf("  invalid handle: %v\n", err)
 		return
 	}
-	handle := uint32(h)
-	if err := r.sess.DeleteDeviceNotification(r.ctx, handle); err != nil {
+	if err := r.sess.Unsubscribe(r.ctx, uint32(h)); err != nil {
 		fmt.Printf("  error: %v\n", err)
 		return
 	}
-	name := r.subs[handle]
-	delete(r.subs, handle)
-	fmt.Printf("  unsubscribed: handle=%d symbol=%s\n", handle, name)
+	fmt.Printf("  unsubscribed: handle=%d\n", h)
 }
 
 func (r *repl) cmdReload() {
@@ -454,7 +452,7 @@ func (r *repl) cmdReload() {
 		fmt.Printf("  error: %v\n", err)
 		return
 	}
-	syms, _ := r.sess.ListSymbols()
+	syms, _ := r.sess.Symbols()
 	fmt.Printf("  reload complete (%d symbols)\n", len(syms))
 }
 
@@ -491,63 +489,32 @@ func (r *repl) cmdSlowLoad(args []string) {
 		fmt.Printf("  slow-load failed: %v\n", err)
 		return
 	}
-	syms, _ := r.sess.ListSymbols()
+	syms, _ := r.sess.Symbols()
 	fmt.Printf("  slow-load complete (%d symbols)\n", len(syms))
 }
 
-// baseTypeName maps an ADST_ code to its IEC name for the info command.
-// Returns "" for composite/unknown — caller's printf hides the label cleanly.
-func baseTypeName(code uint32) string {
-	switch code {
-	case 33:
-		return "BOOL"
-	case 16:
-		return "SINT"
-	case 17:
-		return "USINT/BYTE"
-	case 2:
-		return "INT"
-	case 18:
-		return "UINT/WORD"
-	case 3:
-		return "DINT"
-	case 19:
-		return "UDINT/DWORD"
-	case 4:
-		return "REAL"
-	case 5:
-		return "LREAL"
-	case 20:
-		return "LINT"
-	case 21:
-		return "ULINT"
-	case 30:
-		return "STRING"
-	case 31:
-		return "WSTRING"
-	default:
-		return "composite/unknown"
-	}
-}
-
-// ----- Client demo (single-shot, unchanged) ---------------------------------
+// ----- Client demo (single-shot) --------------------------------------------
 
 func runClientDemo(ctx context.Context, logger *slog.Logger) error {
 	ip, targetAMS, targetPort, localAMS, localPort, symbolName, _, _, _ := readEnv()
 
-	target, err := parseAMS(targetAMS, uint16(targetPort))
+	target, err := ams.NewAddress(targetAMS, ams.Port(targetPort))
 	if err != nil {
 		return fmt.Errorf("parse target AMS: %w", err)
 	}
-	source, err := parseAMS(localAMS, uint16(localPort))
-	if err != nil {
-		// "auto" / "" → leave NetID zero; caller is responsible for a sane source.
-		source = ads.AMSAddress{Port: uint16(localPort)}
+	// "auto" / "" leaves the NetID zero, which Dial derives from the local IP.
+	source := ams.Address{Port: ams.Port(localPort)}
+	if localAMS != "auto" && localAMS != "" {
+		if source, err = ams.NewAddress(localAMS, ams.Port(localPort)); err != nil {
+			return fmt.Errorf("parse local AMS: %w", err)
+		}
 	}
 
-	c, err := ads.Dial(ip, 48898, target, source, 5*time.Second,
-		ads.WithClientLogger(logger),
-		ads.WithOnDrop(func() {
+	c, err := adsclient.Dial(ctx, ip, target,
+		adsclient.WithSource(source),
+		adsclient.WithRequestTimeout(5*time.Second),
+		adsclient.WithLogger(logger),
+		adsclient.WithOnDrop(func() {
 			logger.Warn("client: transport dropped (no auto-reconnect — Session does that)")
 		}),
 	)
@@ -560,46 +527,36 @@ func runClientDemo(ctx context.Context, logger *slog.Logger) error {
 	if info, err := c.ReadDeviceInfo(ctx); err != nil {
 		logger.Warn("ReadDeviceInfo failed", "error", err)
 	} else {
-		name := strings.TrimRight(string(info.DeviceName[:]), "\x00")
-		logger.Info("client: device info",
-			"name", name,
-			"version", fmt.Sprintf("%d.%d.%d", info.Major, info.Minor, info.Version))
+		logger.Info("client: device info", "name", info.Name, "version", info.Version())
 	}
 
 	if state, err := c.ReadState(ctx); err != nil {
 		logger.Warn("ReadState failed", "error", err)
 	} else {
-		logger.Info("client: ads state", "ads", state.ADSState, "device", state.DeviceState)
+		logger.Info("client: ads state", "ads", state.State, "device", state.DeviceState)
 	}
 
-	sym, err := c.GetSymbolInfoByName(ctx, symbolName)
+	sym, err := c.SymbolInfo(ctx, symbolName)
 	if err != nil {
-		logger.Warn("GetSymbolInfoByName failed", "symbol", symbolName, "error", err)
+		logger.Warn("SymbolInfo failed", "symbol", symbolName, "error", err)
 		return nil
 	}
 	logger.Info("client: symbol info",
 		"symbol", sym.Name,
-		"group", fmt.Sprintf("0x%X", sym.Group),
+		"group", fmt.Sprintf("0x%X", uint32(sym.Group)),
 		"offset", fmt.Sprintf("0x%X", sym.Offset),
 		"length", sym.Length,
-		"type", sym.DataType)
+		"type", sym.DataType,
+		"base", sym.BaseType.IECName())
 
-	handleBytes, err := c.WriteRead(ctx, uint32(ads.GroupSymbolHandleByName), 0, 4, []byte(symbolName))
+	handle, err := c.Handle(ctx, symbolName)
 	if err != nil {
 		logger.Warn("resolve handle failed", "symbol", symbolName, "error", err)
 		return nil
 	}
-	if len(handleBytes) != 4 {
-		return fmt.Errorf("unexpected handle length: %d", len(handleBytes))
-	}
-	handle := binary.LittleEndian.Uint32(handleBytes)
-	defer func() {
-		hb := make([]byte, 4)
-		binary.LittleEndian.PutUint32(hb, handle)
-		_ = c.Write(ctx, uint32(ads.GroupSymbolReleaseHandle), 0, hb)
-	}()
+	defer func() { _ = c.ReleaseHandle(ctx, handle) }()
 
-	data, err := c.Read(ctx, uint32(ads.GroupSymbolValueByHandle), handle, sym.Length)
+	data, err := c.Read(ctx, ams.GroupSymbolValueByHandle, handle, sym.Length)
 	if err != nil {
 		logger.Warn("raw Read failed", "symbol", symbolName, "error", err)
 		return nil
@@ -641,22 +598,4 @@ func getEnvIntOrDefault(key string, def int) int {
 		}
 	}
 	return def
-}
-
-// parseAMS converts "a.b.c.d.e.f" + port into an AMSAddress.
-func parseAMS(s string, port uint16) (ads.AMSAddress, error) {
-	var a ads.AMSAddress
-	parts := strings.Split(s, ".")
-	if len(parts) != 6 {
-		return a, fmt.Errorf("AMS NetID %q: expected 6 octets", s)
-	}
-	for i, p := range parts {
-		v, err := strconv.ParseUint(p, 10, 8)
-		if err != nil {
-			return a, fmt.Errorf("AMS NetID octet %q: %w", p, err)
-		}
-		a.NetID[i] = byte(v)
-	}
-	a.Port = port
-	return a, nil
 }
