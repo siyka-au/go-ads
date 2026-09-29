@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -82,11 +84,11 @@ func TestTransportFaultLevel_ClampsOverRelease(t *testing.T) {
 // the socket and then resets it, which is what a PLC does for a source NetID it
 // has no route for. With a handshake in flight that must not reach ERROR.
 func TestHandshakeDropLogsBelowError(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	logs := &testlog.Handler{}
-	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, time.Second,
+	c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, time.Second,
 		WithClientLogger(slog.New(logs)))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -96,7 +98,7 @@ func TestHandshakeDropLogsBelowError(t *testing.T) {
 	c.beginHandshake()
 	// Answer nothing and drop the connection on the first request, the shape of
 	// a PLC rejecting an unrouted NetID mid-probe.
-	srv.dropConnAfter(ams.CommandRead, 1)
+	srv.DropConnAfter(ams.CommandRead, 1)
 	if _, err := c.GetSymbolVersion(t.Context()); err == nil {
 		t.Fatal("probe unexpectedly succeeded against a server that drops the connection")
 	}
@@ -127,7 +129,7 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 
 	cases := []struct {
 		name string
-		arm  func(srv *scriptableServer)
+		arm  func(srv *fakeplc.PLC)
 		// provoke must fail; the error itself is not what is under test.
 		provoke func(t *testing.T, c *Client) error
 		// wantMsg is the gated log line this case reaches.
@@ -135,25 +137,25 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 	}{
 		{
 			name:    "read request times out",
-			arm:     func(srv *scriptableServer) { srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), stall) },
+			arm:     func(srv *fakeplc.PLC) { srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), stall) },
 			provoke: func(t *testing.T, c *Client) error { _, err := c.GetSymbolVersion(t.Context()); return err },
 			wantMsg: "send request failed",
 		},
 		{
 			name:    "write request times out",
-			arm:     func(srv *scriptableServer) { srv.delayBefore(ams.CommandWrite, 0x4020, stall) },
+			arm:     func(srv *fakeplc.PLC) { srv.DelayBefore(ams.CommandWrite, 0x4020, stall) },
 			provoke: func(t *testing.T, c *Client) error { return c.Write(t.Context(), 0x4020, 0, []byte{1}) },
 			wantMsg: "error during send request for write",
 		},
 		{
 			name:    "read state times out",
-			arm:     func(srv *scriptableServer) { srv.delayBefore(ams.CommandReadState, 0, stall) },
+			arm:     func(srv *fakeplc.PLC) { srv.DelayBefore(ams.CommandReadState, 0, stall) },
 			provoke: func(t *testing.T, c *Client) error { _, err := c.ReadState(t.Context()); return err },
 			wantMsg: "error during read state",
 		},
 		{
 			name:    "connection dropped mid-request",
-			arm:     func(srv *scriptableServer) { srv.dropConnAfter(ams.CommandRead, 1) },
+			arm:     func(srv *fakeplc.PLC) { srv.DropConnAfter(ams.CommandRead, 1) },
 			provoke: func(t *testing.T, c *Client) error { _, err := c.GetSymbolVersion(t.Context()); return err },
 			wantMsg: "transport down",
 		},
@@ -168,11 +170,11 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 				wantLevel = slog.LevelDebug
 			}
 			t.Run(name, func(t *testing.T) {
-				srv := startScriptableServer(t)
-				defer srv.stop()
+				srv := fakeplc.StartPLC(t)
+				defer srv.Stop()
 
 				logs := &testlog.Handler{}
-				c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, clientTimeout,
+				c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, clientTimeout,
 					WithClientLogger(slog.New(logs)))
 				if err != nil {
 					t.Fatalf("Dial: %v", err)

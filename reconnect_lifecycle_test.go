@@ -237,8 +237,8 @@ func waitFor(t *testing.T, done <-chan struct{}, d time.Duration, what string) {
 // said Connected, IsClosed() stayed false, and not one notification ever arrived
 // again. A consumer polling IsClosed() has no way to notice.
 func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -247,10 +247,10 @@ func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
 	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		return buildSumDeleteNotifPayload(make([]ams.ReturnCode, len(req)/4))
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+		return fakeplc.SumDeleteNotifPayload(make([]ams.ReturnCode, len(req)/4))
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	// State as it stands when a reconnect begins: one subscription, and the
 	// config + channel that a resubscribe will need.
@@ -285,9 +285,9 @@ func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
 
 	// And the end-to-end consequence: a resubscribe must actually reach the PLC.
 	var adds atomic.Int32
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: 0xAB02}
+		return fakeplc.AddNotifResponse{Handle: 0xAB02}
 	})
 	if err := sess.resubscribeNotifications(); err != nil {
 		t.Fatalf("resubscribeNotifications: %v", err)
@@ -309,32 +309,32 @@ func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
 // accumulation this cleanup exists to prevent, reintroduced by moving the release
 // earlier.
 func TestReconnect_FailedHandleReleaseIsRetried(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const attempts = 3
-	sess := newDialableTestSession(t, srv.host, srv.port, attempts)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, attempts)
 
 	var releaseAttempts atomic.Int32
 	// Refuse every delete with a code that is NOT success-equivalent, so no
 	// attempt ever lands and the snapshot must survive for the next one.
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		releaseAttempts.Add(1)
 		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
 			codes[i] = ams.ReturnCodeDeviceError
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		releaseAttempts.Add(1)
 		return ams.ReturnCodeDeviceError
 	})
 	// Route probe fine, reload always fails: the loop runs its full budget.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeDeviceError, nil
 	})
 
@@ -364,29 +364,29 @@ func TestReconnect_FailedHandleReleaseIsRetried(t *testing.T) {
 // the session. After a few rounds the handles are better left to the orphan
 // reaper, which deletes them if they ever stream again.
 func TestReconnect_HandleReleaseRetryIsBounded(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// More reconnect attempts than release attempts, so the cap is what limits it.
-	sess := newDialableTestSession(t, srv.host, srv.port, preReconnectReleaseAttempts+4)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, preReconnectReleaseAttempts+4)
 
 	var releaseAttempts atomic.Int32
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		releaseAttempts.Add(1)
 		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
 			codes[i] = ams.ReturnCodeDeviceError
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		releaseAttempts.Add(1)
 		return ams.ReturnCodeDeviceError
 	})
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeDeviceError, nil
 	})
 
@@ -425,25 +425,25 @@ func TestReconnect_HandleReleaseRetryIsBounded(t *testing.T) {
 // nothing can be deleted then. The fix is to release while the transport is
 // usable, not to keep trying afterwards.
 func TestReconnect_PreReconnectHandlesReleasedWhenTransportIsUp(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 2)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 2)
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
 	// The release goes out as a sum-delete; record the handles it carries.
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		deletedMu.Lock()
 		for i := 0; i+4 <= len(req); i += 4 {
 			deleted = append(deleted, binary.LittleEndian.Uint32(req[i:i+4]))
 		}
 		deletedMu.Unlock()
 		codes := make([]ams.ReturnCode, len(req)/4)
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
 	// Per-handle fallback, in case the sum path is unavailable.
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
@@ -451,10 +451,10 @@ func TestReconnect_PreReconnectHandlesReleasedWhenTransportIsUp(t *testing.T) {
 	})
 	// Route probe succeeds every attempt, so the transport is routed and usable;
 	// the symbol reload is what fails, so the loop exhausts.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeDeviceError, nil
 	})
 
@@ -492,17 +492,17 @@ func TestReconnect_PreReconnectHandlesReleasedWhenTransportIsUp(t *testing.T) {
 // unreachable hosts (refused dials) are a different failure and keep their fast
 // retries.
 func TestReconnect_UnservedPLCTriggersCooldown(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// Accept the connection, then answer nothing at all — the .224 shape. The
 	// silence has to land on a step AFTER the dial, so route registration is
 	// skipped (it is UDP and there is no responder here, which would be a
 	// different failure) and the symbol reload is what goes unanswered.
-	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolUploadInfo), time.Hour)
-	srv.delayBefore(ams.CommandReadWrite, uint32(ams.GroupSymbolUploadInfo), time.Hour)
+	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolUploadInfo), time.Hour)
+	srv.DelayBefore(ams.CommandReadWrite, uint32(ams.GroupSymbolUploadInfo), time.Hour)
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 0) // unbounded attempts
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0) // unbounded attempts
 	sess.route = &routeManager{skipRegistration: true}
 	sess.requestTimeout = 200 * time.Millisecond
 	sess.cache.symbolsFullyLoaded = true
@@ -515,9 +515,9 @@ func TestReconnect_UnservedPLCTriggersCooldown(t *testing.T) {
 
 	// Let it burn through the unserved-attempt allowance, then watch it hold off.
 	time.Sleep(3 * time.Second)
-	duringCooldown := srv.accepts()
+	duringCooldown := srv.Accepts()
 	time.Sleep(1500 * time.Millisecond)
-	afterQuiet := srv.accepts()
+	afterQuiet := srv.Accepts()
 
 	t.Logf("dials: %d by the time the cooldown started, %d after a further 1.5s", duringCooldown, afterQuiet)
 	if afterQuiet-duringCooldown > 2 {
@@ -564,14 +564,14 @@ func TestReconnect_RefusedDialKeepsFastRetries(t *testing.T) {
 // request timed out. That is the invisible-stuck state a consumer polling
 // IsClosed() cannot detect.
 func TestConnect_VerifiesTheLinkAnswersEvenWithoutRouteRegistration(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// Accepts the connection; answers nothing.
-	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
+	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(300*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -626,14 +626,14 @@ func TestConnect_VerifiesTheLinkAnswersEvenWithoutRouteRegistration(t *testing.T
 // entirely. Registering once is enough; if the route is registered and the PLC
 // still will not talk, more registrations cannot help.
 func TestReconnect_DoesNotReRegisterRouteEveryAttempt(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	router := fakeplc.NewRouter(t)
 
 	// The PLC accepts TCP and answers no ADS request, so every probe fails.
-	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
+	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 6)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 6)
 	sess.routerPort = router.Port
 	sess.route = &routeManager{
 		name:              "go-ads-test",
@@ -675,13 +675,13 @@ func TestReconnect_DoesNotReRegisterRouteEveryAttempt(t *testing.T) {
 // contested in the first place) nor "register once per session, ever" (which locks
 // out the recovery). It is once per unserved episode.
 func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	router := fakeplc.NewRouter(t)
 
 	// The device answers only once it has seen a SECOND registration: the first is
 	// the session establishing its route, the second is the healing one.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		if router.Registrations() < 2 {
 			// Outlast the client's request timeout without answering: silence, not
 			// a malformed reply, is what a router in this state produces — and only
@@ -691,7 +691,7 @@ func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
 		return ams.ReturnCodeNoErrors, []byte{12}
 	})
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 40)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 40)
 	sess.routerPort = router.Port
 	sess.route = &routeManager{
 		name:              "go-ads-test",
@@ -743,17 +743,17 @@ func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
 // The probe here always succeeds, so no unserved episode can occur and every
 // registration observed is the option's own doing.
 func TestReconnect_ForceRegistrationRegistersOnEveryReconnect(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	router := fakeplc.NewRouter(t)
 
 	// Always answered, so the probe and awaitRouteActive both succeed: this
 	// isolates the force flag from the probe-failure fallback path.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{12}
 	})
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 6)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 6)
 	sess.routerPort = router.Port
 	sess.route = &routeManager{
 		name:                   "go-ads-test",
@@ -862,13 +862,13 @@ func (g *gateOnLog) WithGroup(name string) slog.Handler {
 // unconditionally, so Close() hangs too — asserted here as well, since it is the
 // same root cause.
 func TestReconnect_DropWhileFinishingIsNotLost(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 40)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 40)
 	gate := newGateOnLog("reconnect successful", "reconnect already in progress")
 	sess.logger = slog.New(gate)
 	// The drop we inject is delivered the way the read loop delivers one, so the
@@ -953,19 +953,19 @@ func TestReconnect_DropWhileFinishingIsNotLost(t *testing.T) {
 // from, while a second Client publishes a second transmitWorker onto the same
 // shared tx.sendChannel and frames go to whichever socket wins.
 func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	router := fakeplc.NewRouter(t)
 
 	// The router ACKs the registration, but the device never serves the route:
 	// silence, which is what awaitRouteActive is there to catch.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		time.Sleep(400 * time.Millisecond)
 		return ams.ReturnCodeNoErrors, []byte{3}
 	})
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(150*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithRoute("go-ads-test", "Administrator", "1"),
@@ -993,9 +993,9 @@ func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 	// and Disconnected -> Connecting is a legal edge). It must not end up with two
 	// Clients on the shared transport: the first one's transmitWorker would still
 	// be competing for tx.sendChannel and writing to a socket that is gone.
-	before := srv.accepts()
+	before := srv.Accepts()
 	_ = sess.Connect(context.Background())
-	if got := srv.accepts() - before; got != 1 {
+	if got := srv.Accepts() - before; got != 1 {
 		t.Errorf("the retry produced %d new connections, want 1: the abandoned transport was never closed, "+
 			"so the route stage redialed on top of it", got)
 	}
@@ -1040,10 +1040,10 @@ func TestTrackGoroutine_RefusesAfterClose(t *testing.T) {
 // refusal releases what it reserved, or a genuinely leaked handle stays locked out
 // of the reaper for the whole throttle window.
 func TestOrphanDelete_NotStartedAfterClose(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var deletes atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -1080,9 +1080,9 @@ func TestOrphanDelete_NotStartedAfterClose(t *testing.T) {
 // only problem is a runtime that is not running. That is the opposite of the
 // contract: stay up, keep polling, resume when it returns.
 func TestReconnect_RuntimeNotRunningDoesNotBurnAttempts(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{4}
 	})
 	// The resubscribe uses the batch path, so this group has to answer or the second
@@ -1090,23 +1090,23 @@ func TestReconnect_RuntimeNotRunningDoesNotBurnAttempts(t *testing.T) {
 	// the same stub gap that made three earlier tests pass for the wrong reason.
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x4200)
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
-		items := make([]sumNotifResponse, len(req)/40)
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
+		items := make([]fakeplc.SumNotifResponse, len(req)/40)
 		for i := range items {
-			items[i] = sumNotifResponse{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
+			items[i] = fakeplc.SumNotifResponse{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
 		}
-		return buildSumAddNotifPayload(items)
+		return fakeplc.SumAddNotifPayload(items)
 	})
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
 			codes[i] = ams.ReturnCodeNoErrors
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
 
 	const attempts = 3
-	sess := newDialableTestSession(t, srv.host, srv.port, attempts)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, attempts)
 
 	// A subscription on file, and a runtime that is not running: the resubscribe
 	// inside the reconnect loop is refused by the gate every time.
@@ -1183,12 +1183,12 @@ func TestPeerListener_NotBoundAfterStop(t *testing.T) {
 // closed the Client's `dropped` channel on this path — the very signal `dropped`
 // exists to provide.
 func TestTearDownAndReset_ReleasesWaitersImmediately(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	// Answers nothing, so the request is still in flight when teardown happens.
-	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
+	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 1)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 1)
 	sess.requestTimeout = 30 * time.Second // far longer than this test may take
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
@@ -1225,8 +1225,8 @@ func TestTearDownAndReset_ReleasesWaitersImmediately(t *testing.T) {
 // recv worker stayed alive for the life of the process. Reachable from any
 // WithMaxReconnectAttempts session whose PLC does not come back.
 func TestGiveUpReconnecting_TearsDownTheTransport(t *testing.T) {
-	srv := startScriptableServer(t)
-	sess := newDialableTestSession(t, srv.host, srv.port, 1)
+	srv := fakeplc.StartPLC(t)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 1)
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
 	}
@@ -1243,7 +1243,7 @@ func TestGiveUpReconnecting_TearsDownTheTransport(t *testing.T) {
 	sess.peerMu.Unlock()
 
 	// Nothing to reconnect to: one attempt, one refusal, then give up.
-	srv.stop()
+	srv.Stop()
 	sess.transitionState(SessionStateDisconnected)
 	if rerr := sess.Reconnect(context.Background()); rerr == nil {
 		t.Fatalf("Reconnect = nil, want an error after exhausting attempts")
@@ -1309,17 +1309,17 @@ func TestGiveUpReconnecting_TearsDownTheTransport(t *testing.T) {
 // detector - so a suppression placed above it loses it permanently rather than
 // delaying it. Hence onDisconnect == 1 here.
 func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	// A rival reconnect has to be able to SUCCEED, or "no second dial" and "a
 	// second dial that failed" would look the same from the outside.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 	// Close without answering the very GetSymbolVersion the liveness probe issues:
 	// a real reset inside the armed window, not a timeout. Disarms afterwards, so
 	// the reconnect this used to spawn gets a working link.
-	srv.dropConnAfter(ams.CommandRead, 1)
+	srv.DropConnAfter(ams.CommandRead, 1)
 
 	// "attempting reconnect" is logged before the rival's tearDownAndReset, so
 	// gating on it parks the rival at the start of the damage instead of leaving
@@ -1328,7 +1328,7 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 
 	var disconnects atomic.Int64
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(500*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		// No WithRoute: that is what routes Connect through the armed liveness
@@ -1369,7 +1369,7 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 	if state := sess.lifecycle.state.load(); state == SessionStateConnected {
 		t.Errorf("state = %v after a Connect that returned an error: a rival Reconnect finished the job underneath it", state)
 	}
-	if got := srv.accepts(); got != 1 {
+	if got := srv.Accepts(); got != 1 {
 		t.Errorf("the server accepted %d connections, want 1: a second one was dialled while Connect still owned the transport", got)
 	}
 	if c := sess.client.Load(); c != nil && c.ctx != nil && c.ctx.Err() == nil {
@@ -1395,11 +1395,11 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 	// ever worked because the suppressed Reconnect's dialAndStart did it: with the
 	// spawn gone, the stale flag failed every request on the retry's perfectly
 	// good socket.
-	before := srv.accepts()
+	before := srv.Accepts()
 	if rerr := sess.Connect(context.Background()); rerr != nil {
 		t.Fatalf("retry after the failed Connect returned %v, want nil: the session is neither reconnectable nor retryable", rerr)
 	}
-	if got := srv.accepts() - before; got != 1 {
+	if got := srv.Accepts() - before; got != 1 {
 		t.Errorf("the retry produced %d new connections, want 1", got)
 	}
 }
@@ -1420,13 +1420,13 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 // sits Connected on a dead socket with IsClosed() false: no data, and no signal
 // the consumer can act on.
 func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 40)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 40)
 	sess.lifecycle.autoReconnect = true
 	// One saved handle, so takeNotificationHandles returns non-empty and the
 	// cleanup below logs from inside the window we need to pin.
@@ -1453,10 +1453,10 @@ func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
 	if sess.tx.disconnected.Load() {
 		t.Fatal("transport still marked disconnected at the cleanup log — the gate is in the wrong place")
 	}
-	before := srv.accepts()
+	before := srv.Accepts()
 
 	// A real drop, delivered the way the read loop delivers one.
-	srv.closeClientConns()
+	srv.CloseClientConns()
 
 	// Poll until the drop is RECORDED, not merely injected. This is what makes the
 	// ordering deterministic instead of hopeful: the erasing store is downstream of
@@ -1483,7 +1483,7 @@ func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
 	// The invariant, not the interleaving: a drop observed during a reconnect must
 	// be adopted and redialled.
 	deadline = time.Now().Add(15 * time.Second)
-	for srv.accepts() <= before {
+	for srv.Accepts() <= before {
 		if time.Now().After(deadline) {
 			t.Fatalf("no redial after a drop during the reconnect tail (accepts stayed at %d): "+
 				"state=%v IsClosed=%v disconnected=%v — the drop was erased on the way out",
@@ -1510,13 +1510,13 @@ func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
 // that surfaces err (which is what the Benthos plugin does) was back to guessing at
 // exactly the failure this library exists to make legible.
 func TestConnect_ResetNamesTheRouteAsALikelyCause(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	// Accept the TCP connection, then drop it on the first request — the wire
 	// signature of a PLC with no route for our NetID.
-	srv.dropConnAfter(ams.CommandRead, 1)
+	srv.DropConnAfter(ams.CommandRead, 1)
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 1)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 1)
 	t.Cleanup(func() { _ = sess.Close() })
 	sess.lifecycle.state.transitionTo(SessionStateDisconnected)
 

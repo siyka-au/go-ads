@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -65,14 +67,14 @@ func TestCurrentLifecycleCtx_TracksReplacement(t *testing.T) {
 // does. With the ctx supplied per attempt the second probe succeeds; with a
 // captured ctx (the bug) it is born cancelled and the call fails.
 func TestAwaitRouteActive_SurvivesCtxReplacement(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv)
 	sess.route = &routeManager{name: "go-ads-test", activationTimeout: 4 * time.Second}
 
 	var probes atomic.Int32
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		n := probes.Add(1)
 		if n == 1 {
 			// Fail the first probe, then replace lifecycle.ctx the way a redial
@@ -103,12 +105,12 @@ func TestAwaitRouteActive_SurvivesCtxReplacement(t *testing.T) {
 // transport fault is either ignored or logged at the wrong level for the rest
 // of the session.
 func TestAwaitRouteActive_RestoresClientState(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	sess.route = &routeManager{name: "go-ads-test", activationTimeout: time.Second}
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{3}
 	})
 
@@ -192,9 +194,9 @@ func TestRedialBackoff(t *testing.T) {
 // from Dial with a context of its own, so tearDownAndReset's wait for that
 // Client's workers never returns (the helper says as much). That is also why no
 // test reached awaitRouteActive's redial branch before this file.
-func activationTestSession(t *testing.T, srv *scriptableServer, budget time.Duration) *Session {
+func activationTestSession(t *testing.T, srv *fakeplc.PLC, budget time.Duration) *Session {
 	t.Helper()
-	sess := newDialableTestSession(t, srv.host, srv.port, 0)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
 	sess.route = &routeManager{name: "go-ads-test", activationTimeout: budget}
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
@@ -217,8 +219,8 @@ func activationTestSession(t *testing.T, srv *scriptableServer, budget time.Dura
 // path every time. What is asserted is the number of TCP connections the window
 // costs.
 func TestAwaitRouteActive_CapsTheRedialStorm(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// 3s: long enough that the old behaviour would redial ~12 times (3s / 250ms).
 	sess := activationTestSession(t, srv, 3*time.Second)
@@ -226,7 +228,7 @@ func TestAwaitRouteActive_CapsTheRedialStorm(t *testing.T) {
 	// Sticky, unlike dropConnAfter, which disarms itself after one firing: the
 	// probe has to keep failing at transport level or the loop never takes the
 	// branch under test.
-	srv.dropConnAlways(ams.CommandRead)
+	srv.DropConnAlways(ams.CommandRead)
 
 	if _, err := sess.awaitRouteActive(sess.currentLifecycleCtx); err == nil {
 		t.Fatal("awaitRouteActive returned nil for a route the PLC never served")
@@ -237,7 +239,7 @@ func TestAwaitRouteActive_CapsTheRedialStorm(t *testing.T) {
 	// already made, and a baseline read can miss it. The budget is therefore stated
 	// as "the one connection this session started with, plus the cap".
 	const want = maxRouteActivationRedials + 1
-	if dials := srv.accepts(); dials > want {
+	if dials := srv.Accepts(); dials > want {
 		t.Errorf("the session used %d TCP connections in total, want <= %d (1 initial + %d redials) — this is the redial storm",
 			dials, want, maxRouteActivationRedials)
 	}
@@ -252,12 +254,12 @@ func TestAwaitRouteActive_CapsTheRedialStorm(t *testing.T) {
 // must give up when there is nothing left to probe on, rather than sitting out the
 // full window.
 func TestAwaitRouteActive_DoesNotSpinAfterTheBudget(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const budget = 10 * time.Second
 	sess := activationTestSession(t, srv, budget)
-	srv.dropConnAlways(ams.CommandRead)
+	srv.DropConnAlways(ams.CommandRead)
 
 	start := time.Now()
 	if _, err := sess.awaitRouteActive(sess.currentLifecycleCtx); err == nil {
@@ -284,11 +286,11 @@ func TestAwaitRouteActive_DoesNotSpinAfterTheBudget(t *testing.T) {
 // socket and a stray ephemeral port in the one code path whose whole purpose is to
 // stop burning ephemeral ports.
 func TestAwaitRouteActive_CloseDuringTheWaitOpensNoSocket(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess := activationTestSession(t, srv, 5*time.Second)
-	srv.dropConnAlways(ams.CommandRead)
+	srv.DropConnAlways(ams.CommandRead)
 
 	// A context of its own that is never cancelled: this is Connect's caller ctx,
 	// the case where closedCh is the only signal that ever arrives.
@@ -304,7 +306,7 @@ func TestAwaitRouteActive_CloseDuringTheWaitOpensNoSocket(t *testing.T) {
 	// Let it fail a probe and enter the backoff wait, then close underneath it.
 	time.Sleep(150 * time.Millisecond)
 	sess.markClosed()
-	afterClose := srv.accepts()
+	afterClose := srv.Accepts()
 
 	select {
 	case <-done:
@@ -312,7 +314,7 @@ func TestAwaitRouteActive_CloseDuringTheWaitOpensNoSocket(t *testing.T) {
 		t.Fatal("awaitRouteActive did not return after the session was closed — the wait is not watching closedCh")
 	}
 
-	if extra := srv.accepts() - afterClose; extra > 0 {
+	if extra := srv.Accepts() - afterClose; extra > 0 {
 		t.Errorf("%d TCP connection(s) opened after the session was closed", extra)
 	}
 }
@@ -325,19 +327,19 @@ func TestAwaitRouteActive_CloseDuringTheWaitOpensNoSocket(t *testing.T) {
 //
 // The stub refuses at transport level until the route "comes live", then answers.
 func TestAwaitRouteActive_ProbesAgainAfterARedial(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess := activationTestSession(t, srv, 5*time.Second)
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.dropConnAlways(ams.CommandRead)
+	srv.DropConnAlways(ams.CommandRead)
 
 	// Let the loop take the retryable path at least once, then start serving.
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		srv.stopDroppingConn(ams.CommandRead)
+		srv.StopDroppingConn(ams.CommandRead)
 	}()
 
 	version, err := sess.awaitRouteActive(sess.currentLifecycleCtx)
@@ -347,7 +349,7 @@ func TestAwaitRouteActive_ProbesAgainAfterARedial(t *testing.T) {
 	if version != 9 {
 		t.Errorf("symbol version = %d, want 9 — the winning probe's value must be returned", version)
 	}
-	if srv.droppingAlways(ams.CommandRead) {
+	if srv.DroppingAlways(ams.CommandRead) {
 		t.Fatal("the stub was still refusing; this test proved nothing")
 	}
 }

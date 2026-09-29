@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -38,17 +40,17 @@ import (
 // TestHeartbeat_ResubscribesWhenBeatsStop is the requirement: data must come back
 // once the PLC serves again, with nobody rebuilding the session.
 func TestHeartbeat_ResubscribesWhenBeatsStop(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x700)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(150*time.Millisecond, 3))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -99,16 +101,16 @@ func TestHeartbeat_ResubscribesWhenBeatsStop(t *testing.T) {
 // TestHeartbeat_NotDeliveredToTheCaller: the heartbeat is the library's own
 // business. A consumer must not see samples for something it never subscribed to.
 func TestHeartbeat_NotDeliveredToTheCaller(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x800)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
@@ -178,14 +180,14 @@ func TestHeartbeat_NotDeliveredToTheCaller(t *testing.T) {
 // TestHeartbeat_OptOut: the heartbeat costs a handle in the PLC's table and a
 // cyclic sample per interval, so it has to be refusable.
 func TestHeartbeat_OptOut(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x900)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 
 	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
@@ -207,14 +209,14 @@ func TestHeartbeat_OptOut(t *testing.T) {
 // TestHeartbeat_CarriesSymbolVersionChange: the beat's payload IS the symbol
 // version, so an online change shows up without any extra request.
 func TestHeartbeat_CarriesSymbolVersionChange(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xA00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	// The reload cap defaults to 0 in this helper, which degrades AutoReload to
 	// Ignore — set it so the strategy can actually run.
@@ -262,22 +264,22 @@ func TestHeartbeat_CarriesSymbolVersionChange(t *testing.T) {
 // No data while the PLC is in CONFIG is expected. Losing the subscriptions
 // permanently is not.
 func TestHeartbeat_RecoverySurvivesAnUnavailablePLC(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var serving atomic.Bool // false = "PLC in CONFIG": Adds are refused
 	var adds, refusals atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xB00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if !serving.Load() {
 			refusals.Add(1)
-			return addNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
+			return fakeplc.AddNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 		}
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	serving.Store(true)
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
@@ -350,8 +352,8 @@ func TestHeartbeat_RecoverySurvivesAnUnavailablePLC(t *testing.T) {
 // stays armed in consumeHeartbeat, so a caller subscription that the PLC later
 // assigns that same number has every sample swallowed as a beat.
 func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x900)
@@ -359,28 +361,28 @@ func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
 	var heartbeatAdds []uint32 // handles issued for a cyclic add on the version group
 	var deleted []uint32
 
-	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(req fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		h := nextHandle.Add(1)
 		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			mu.Lock()
 			heartbeatAdds = append(heartbeatAdds, h)
 			mu.Unlock()
 		}
-		return addNotifResponse{Handle: h}
+		return fakeplc.AddNotifResponse{Handle: h}
 	})
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		mu.Lock()
 		deleted = append(deleted, h)
 		mu.Unlock()
 		return ams.ReturnCodeNoErrors
 	})
 	// The resubscribe goes through the batch path, which tries the sum command first.
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
-		return buildSumAddNotifPayload([]sumNotifResponse{{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+		return fakeplc.SumAddNotifPayload([]fakeplc.SumNotifResponse{{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
 	})
 	// Releases go through the sum group too, so record them there or the leak
 	// assertion below can never be satisfied by any implementation.
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		codes := make([]ams.ReturnCode, len(req)/4)
 		mu.Lock()
 		for i := range codes {
@@ -388,13 +390,13 @@ func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
 			codes[i] = ams.ReturnCodeNoErrors
 		}
 		mu.Unlock()
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{9}
 	})
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 5)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 5)
 	// Long enough that the watchdog never fires during the test: this is about the
 	// reconnect path re-establishing the beat, not about detection.
 	sess.heartbeatInterval = 30 * time.Second
@@ -456,15 +458,15 @@ func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
 // had explicitly deleted, creating a duplicate PLC registration. The batch sibling
 // has always treated these codes as success-equivalent.
 func TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xB00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	// The PLC no longer knows this registration.
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		return ams.ReturnCodeDeviceNotifyHandleInvalid
 	})
 
@@ -508,9 +510,9 @@ func TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping(t *testing.T) {
 // the single-symbol twin of the sum-path bug that hardware caught: a power cycle
 // left notifications never resuming.
 func TestDeleteNotification_ForeignHandleKeepsTheSubscriptionChannel(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
 	c.SetNotificationHandler(sess.handleNotification)
@@ -548,14 +550,14 @@ func TestDeleteNotification_ForeignHandleKeepsTheSubscriptionChannel(t *testing.
 // once-per-detection contract. Only AutoReload was accidentally safe, because
 // LoadSymbols rewrites the field on its way through.
 func TestHeartbeat_SymbolVersionChangeDetectedOnce(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xC00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	var detections atomic.Int32
 	// A long cycle so the watchdog cannot interfere; the beats here are driven by
@@ -612,42 +614,42 @@ func TestHeartbeat_SymbolVersionChangeDetectedOnce(t *testing.T) {
 // untracked — heartbeatWG was Add/Done'd but never waited — so Close returned while
 // all of that was still in flight.
 func TestHeartbeat_RecoveryDoesNothingAfterClose(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var adds, deletes atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xD00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
 	// The resubscribe uses the batch path, so this group has to answer or the test
 	// proves nothing: it would fail on a parse error long before reaching the
 	// behaviour under test.
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		adds.Add(1)
-		return buildSumAddNotifPayload([]sumNotifResponse{{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
+		return fakeplc.SumAddNotifPayload([]fakeplc.SumNotifResponse{{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
 	})
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
 			deletes.Add(1)
 			codes[i] = ams.ReturnCodeNoErrors
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
 
 	// newDialableTestSession, not newWiredTestSession: the latter's Client comes
 	// from Dial with a context of its own, so Session.Close() can never finish
 	// waiting for its workers (see that helper's comment).
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{5}
 	})
-	sess := newDialableTestSession(t, srv.host, srv.port, 5)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 5)
 	sess.heartbeatInterval = 5 * time.Second
 	sess.lifecycle.state.transitionTo(SessionStateDisconnected)
 	if err := sess.Reconnect(context.Background()); err != nil {
@@ -734,14 +736,14 @@ func TestHeartbeat_RecoveryDoesNothingAfterClose(t *testing.T) {
 // re-subscribe, and an exit once the session is closed. The latter is why the
 // flood in that run outlived its own test by 666 tests.
 func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xE00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	logs := &testlog.Handler{}
 	sess, c := newWiredTestSession(t, srv,
@@ -789,10 +791,10 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 // anyway, so a subscribe failed with "0xF008: unknown error code" — an index group
 // formatted as a return code. Asking the system service turns that into a fact.
 func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: 0x1234}
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: 0x1234}
 	})
 
 	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
@@ -843,9 +845,9 @@ func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
 // notification does not exist. One small request per heartbeat interval to a port
 // that is up whenever the device is.
 func TestRuntimeState_PollReportsTheState(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.setADSState(ams.StateConfig)
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.SetADSState(ams.StateConfig)
 
 	// WithRuntimeStateWatch, not WithNotificationHeartbeat: the state poll used to
 	// run at the heartbeat cycle, so this test tuned the heartbeat purely to make
@@ -874,7 +876,7 @@ func TestRuntimeState_PollReportsTheState(t *testing.T) {
 	}
 
 	// And it must notice the way back.
-	srv.setADSState(ams.StateRun)
+	srv.SetADSState(ams.StateRun)
 	deadline = time.Now().Add(3 * time.Second)
 	for {
 		if state, _ := sess.knownRuntimeState(); state == ams.StateRun {
@@ -902,16 +904,16 @@ func TestRuntimeState_PollReportsTheState(t *testing.T) {
 // A future timestamp is exactly what a backward step leaves behind, so setting one
 // reproduces it deterministically.
 func TestHeartbeat_DetectionSurvivesABackwardClockStep(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xFD00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -950,22 +952,22 @@ func TestHeartbeat_DetectionSurvivesABackwardClockStep(t *testing.T) {
 // registration the PLC keeps pushing that belongs to nothing, reclaimed only by the
 // orphan reaper.
 func TestHeartbeat_ConcurrentSubscribesEstablishOneBeat(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var cyclicAdds atomic.Int32
 	var deletes atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xFE00)
-	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(req fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			cyclicAdds.Add(1)
 			// Wide enough that both callers are inside the round-trip together.
 			time.Sleep(150 * time.Millisecond)
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -1003,24 +1005,24 @@ func TestHeartbeat_ConcurrentSubscribesEstablishOneBeat(t *testing.T) {
 // TC3.1.4026 all accept a cyclic subscribe on 0xF008 — so this is a hazard on
 // unobserved firmware, guarded because the failure is silent and the fix is small.
 func TestHeartbeat_RetriesAfterAFailedEstablish(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var refuse atomic.Bool
 	refuse.Store(true)
 	var cyclicAttempts atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xFF00)
-	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(req fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			cyclicAttempts.Add(1)
 			if refuse.Load() {
-				return addNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
+				return fakeplc.AddNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 			}
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -1065,37 +1067,37 @@ func TestHeartbeat_RetriesAfterAFailedEstablish(t *testing.T) {
 func TestHeartbeat_RecoveryKeepsALargeConfigSet(t *testing.T) {
 	const symbols = 40
 
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var serving atomic.Bool
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x2000)
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
-		items := make([]sumNotifResponse, len(req)/40)
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
+		items := make([]fakeplc.SumNotifResponse, len(req)/40)
 		for i := range items {
 			if !serving.Load() {
-				items[i] = sumNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
+				items[i] = fakeplc.SumNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 				continue
 			}
-			items[i] = sumNotifResponse{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
+			items[i] = fakeplc.SumNotifResponse{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
 		}
-		return buildSumAddNotifPayload(items)
+		return fakeplc.SumAddNotifPayload(items)
 	})
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
 			codes[i] = ams.ReturnCodeNoErrors
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if !serving.Load() {
-			return addNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
+			return fakeplc.AddNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	serving.Store(true)
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(80*time.Millisecond, 2))
@@ -1181,8 +1183,8 @@ func TestRuntimeState_RefusesOnlyMeasuredStates(t *testing.T) {
 // Failing OPEN is deliberate: the worst case is the behaviour that predates the
 // gate.
 func TestRuntimeState_ReadingExpires(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	sess, _ := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
 
 	sess.recordRuntimeState(ams.StateConfig)
@@ -1216,14 +1218,14 @@ func TestRuntimeState_ReadingExpires(t *testing.T) {
 // also satisfied by the return-to-RUN nudge, so it cannot tell the two fixes apart.
 // A deferral attempts nothing, so its interval must stay at the base window.
 func TestHeartbeat_DeferralsKeepAConstantRate(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x5000)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	logs := &testlog.Handler{}
 	sess, c := newWiredTestSession(t, srv,
@@ -1261,17 +1263,17 @@ func TestHeartbeat_DeferralsKeepAConstantRate(t *testing.T) {
 // TestHeartbeat_ReEstablishedAfterReconnect neutralises it with 30s, which is
 // exactly why it never saw this.
 func TestHeartbeat_ReconnectDoesNotInheritStaleQuietTicks(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xA00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	// allowed == 8 ticks of 100ms: wide enough that ±2 ticks of scheduler jitter
 	// under -race cannot flip either assertion below.
@@ -1496,8 +1498,8 @@ func TestHeartbeatAllowedTicks(t *testing.T) {
 // No real firmware issues duplicate handles, which is exactly why this needs a
 // test: the branch is unreachable on the bench and its consequence is permanent.
 func TestHeartbeat_RetriesAfterAHandleCollision(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// The NOTIFICATION handle the caller's subscription is given, which the stub
 	// then hands back for the beat. It has to be the notification handle, not the
@@ -1509,18 +1511,18 @@ func TestHeartbeat_RetriesAfterAHandleCollision(t *testing.T) {
 	var cyclicAttempts atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xCD00)
-	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(req fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			cyclicAttempts.Add(1)
 			if collide.Load() {
 				// The caller's own notification handle, handed back for the beat.
-				return addNotifResponse{Handle: collidingHandle}
+				return fakeplc.AddNotifResponse{Handle: collidingHandle}
 			}
-			return addNotifResponse{Handle: nextHandle.Add(1)}
+			return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -1672,9 +1674,9 @@ func TestRuntimeStateWatch_DefaultIsIndependentOfTheHeartbeat(t *testing.T) {
 // and with no reading the gates fall back to permitting, which is the behaviour
 // that predates the watch.
 func TestWithoutRuntimeStateWatch_StartsNoPollerAndKeepsTheOnce(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.setADSState(ams.StateConfig)
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.SetADSState(ams.StateConfig)
 
 	sess, _ := newWiredTestSession(t, srv, WithoutRuntimeStateWatch())
 	sess.startRuntimeStateWatch()
@@ -1712,17 +1714,17 @@ func TestWithoutRuntimeStateWatch_StartsNoPollerAndKeepsTheOnce(t *testing.T) {
 // The beat is deliberately kept alive throughout, so heartbeat silence cannot be
 // the trigger. Only the want/have gap can be.
 func TestHeartbeat_RecoversSubscriptionsWhileTheBeatIsHealthy(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xC00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -1802,17 +1804,17 @@ func TestHeartbeat_RecoversSubscriptionsWhileTheBeatIsHealthy(t *testing.T) {
 // recovers instead, which is what made a first attempt at this test vacuous: it
 // passed with the broken coupling restored.
 func TestHeartbeat_RecoversWhenTheBeatIsSlowerThanTheTick(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xD00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 10))
 	c.SetNotificationHandler(sess.handleNotification)

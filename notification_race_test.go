@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -76,11 +78,11 @@ func earlySampleCount(sess *Session) int {
 // only) sample while AddDeviceNotification is still in flight. The sample
 // must be buffered and replayed once the handle is committed, not dropped.
 func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -91,21 +93,21 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 
 	const plcHandle = 0x1234
 	var addSeen atomic.Int32
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		// Only the caller's subscription (the first Add) gets plcHandle and the
 		// early sample; anything else — the session's own cyclic heartbeat — must
 		// get a DIFFERENT handle, as a real PLC would. A stub handing the same
 		// handle to two subscriptions makes the heartbeat swallow the caller's
 		// samples, which no device can actually do.
 		if addSeen.Add(1) > 1 {
-			return addNotifResponse{Handle: plcHandle + uint32(addSeen.Load())}
+			return fakeplc.AddNotifResponse{Handle: plcHandle + uint32(addSeen.Load())}
 		}
 		// Fire the sample BEFORE the Add response goes back on the wire, so
 		// the commit into activeNotifications cannot have happened yet.
 		if err := sess.drivePacket(sess.lifecycle.ctx, buildNotificationPacket(plcHandle, 0, intSample(4242))); err != nil {
 			t.Errorf("drivePacket from Add handler: %v", err)
 		}
-		return addNotifResponse{Handle: plcHandle}
+		return fakeplc.AddNotifResponse{Handle: plcHandle}
 	})
 
 	ch := make(chan *Update, 4)
@@ -143,13 +145,13 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 // first symbol streams while the last is still registering. Every early sample
 // must survive and no handle may be reaped.
 func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
 	var deletedHandles []uint32
 	var delMu sync.Mutex
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		delMu.Lock()
 		deletedHandles = append(deletedHandles, h)
 		delMu.Unlock()
@@ -157,7 +159,7 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 		return ams.ReturnCodeNoErrors
 	})
 	// 40ms per Add over 5 symbols puts the batch well past the 100ms window.
-	srv.delayBefore(ams.CommandAddDeviceNotification, 0, 40*time.Millisecond)
+	srv.DelayBefore(ams.CommandAddDeviceNotification, 0, 40*time.Millisecond)
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -179,14 +181,14 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x100)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		h := nextHandle.Add(1)
 		// Every symbol emits its one sample immediately, before its own Add
 		// response is even sent — the worst case of the race.
 		if err := sess.drivePacket(sess.lifecycle.ctx, buildNotificationPacket(h, 0, intSample(uint16(h)))); err != nil {
 			t.Errorf("drivePacket from Add handler: %v", err)
 		}
-		return addNotifResponse{Handle: h}
+		return fakeplc.AddNotifResponse{Handle: h}
 	})
 
 	ch := make(chan *Update, 2*symbolCount)
@@ -235,8 +237,8 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 // the whole batch at the end instead leaves the early handles unrecognisable
 // for the rest of the batch, which is what the PLC is streaming into.
 func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -259,7 +261,7 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x200)
 
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		// Every handle handed out earlier in this batch must be bound by now.
 		mu.Lock()
 		prior := append([]uint32(nil), issued...)
@@ -276,7 +278,7 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 		mu.Lock()
 		issued = append(issued, h)
 		mu.Unlock()
-		return addNotifResponse{Handle: h}
+		return fakeplc.AddNotifResponse{Handle: h}
 	})
 
 	ch := make(chan *Update, 4*symbolCount)
@@ -311,8 +313,8 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 // The epoch is bumped from inside the Add handler, which is exactly where a
 // real reload lands: between two individual Adds of a sum-unsupported batch.
 func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -336,7 +338,7 @@ func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
 	// data race here would be reported as a failure of the code under test.
 	var reapedMu sync.Mutex
 	var reapedByReload []uint32
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		// After the second Add, do what autoReloadOnStaleDetection actually does
 		// to shared state, in its real order: bump the epoch FIRST, then
 		// snapshot activeNotifications and swap the map. The amendment's
@@ -353,7 +355,7 @@ func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
 			sess.notifications.activeNotifications = make(map[uint32]activeNotification)
 			sess.notifications.lock.Unlock()
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 
 	ch := make(chan *Update, symbolCount)
@@ -400,8 +402,8 @@ func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
 // Skipped, then deleted PLC-side — a working subscription destroyed by an
 // unrelated cache refresh. It must key on an actual notification sweep.
 func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -420,7 +422,7 @@ func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
@@ -430,13 +432,13 @@ func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x800)
 	var adds atomic.Int32
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		// A concurrent LoadSymbols lands after the first commit: epoch moves,
 		// activeNotifications is untouched.
 		if adds.Add(1) == 2 {
 			sess.bumpEpoch()
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 
 	ch := make(chan *Update, symbolCount)
@@ -480,8 +482,8 @@ func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
 // sweeps, so commitNotification refuses late commits; Reconnect does not, so the
 // late commit succeeds and only the sweep-vs-batch comparison can catch it.
 func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -503,7 +505,7 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
@@ -513,7 +515,7 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x900)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		// Between item 0's commit and item 1's, wipe the map the way Reconnect
 		// does — and, like Reconnect, WITHOUT bumping the epoch, so item 1's
 		// commit legitimately lands in the new map.
@@ -522,7 +524,7 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 			sess.notifications.activeNotifications = make(map[uint32]activeNotification)
 			sess.notifications.lock.Unlock()
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 
 	ch := make(chan *Update, symbolCount)
@@ -567,8 +569,8 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 // ErrNotificationDuplicate forever, rescued only if an unrelated reconnect
 // happened to reset the config table.
 func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -578,7 +580,7 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 	if !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumDeleteNotif into the unsupported state")
 	}
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	const symbolCount = 2
 	names := make([]string, symbolCount)
@@ -592,14 +594,14 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xA00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		// Sweep after item 0 is bound, so item 0 comes back stranded.
 		if adds.Add(1) == 2 {
 			sess.notifications.lock.Lock()
 			sess.notifications.activeNotifications = make(map[uint32]activeNotification)
 			sess.notifications.lock.Unlock()
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 
 	ch := make(chan *Update, symbolCount)
@@ -632,8 +634,8 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 // alive so the cleanup delete is observable. That is also why the release runs on
 // a fresh context: on the caller's expired one it would fail before being sent.
 func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -657,7 +659,7 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
@@ -667,7 +669,7 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x700)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if adds.Add(1) == 2 {
 			// Item 0 is bound by now, so the reload lands on a committed entry and
 			// the amendment — not commitNotification's own epoch check — is what has
@@ -679,7 +681,7 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 			sess.notifications.lock.Unlock()
 			time.Sleep(600 * time.Millisecond)
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
@@ -742,8 +744,8 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 // open: while the window is open an unknown handle is presumed to be ours and the
 // sample is buffered instead.
 func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -753,7 +755,7 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
@@ -771,14 +773,14 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 	var adds atomic.Int32
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xC00)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if adds.Add(1) == 2 {
 			// Answer late enough that the caller's deadline expires first: the PLC
 			// created a registration whose reply this side never used, which is the
 			// shape that leaves an unknown handle behind.
 			time.Sleep(600 * time.Millisecond)
 		}
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
@@ -826,8 +828,8 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 // a result set that lies about the transport being alive is the failure mode
 // this whole branch exists to eliminate.
 func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -848,11 +850,11 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x400)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	// Answer two Adds, then vanish mid-request on the third.
-	srv.dropConnAfter(ams.CommandAddDeviceNotification, 3)
+	srv.DropConnAfter(ams.CommandAddDeviceNotification, 3)
 
 	ch := make(chan *Update, symbolCount)
 	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
@@ -898,8 +900,8 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 // corpse. 40 symbols dropping early means the batch holds subscribeInFlight for
 // minutes, and the orphan reaper is disabled for every second of it.
 func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv, WithRequestTimeout(300*time.Millisecond))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -919,12 +921,12 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x500)
 	var adds atomic.Int32
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	// Die after the third Add: 37 requests still to go.
-	srv.dropConnAfter(ams.CommandAddDeviceNotification, 3)
+	srv.DropConnAfter(ams.CommandAddDeviceNotification, 3)
 
 	ch := make(chan *Update, symbolCount)
 	start := time.Now()
@@ -979,8 +981,8 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 // ErrNotificationTransportFailure retry signal that is the documented way to
 // know the batch is worth retrying.
 func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv, WithRequestTimeout(300*time.Millisecond))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -1000,13 +1002,13 @@ func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x500)
 	var adds atomic.Int32
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		adds.Add(1)
-		return addNotifResponse{Handle: nextHandle.Add(1)}
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	// Items 0-2 get handles; from item 3 on, the router refuses. Sticky, as
 	// CONFIG mode is.
-	srv.amsErrorAfter(ams.CommandAddDeviceNotification, 4, ams.ReturnCodeGlobalTargetPortNotFound)
+	srv.AMSErrorAfter(ams.CommandAddDeviceNotification, 4, ams.ReturnCodeGlobalTargetPortNotFound)
 
 	ch := make(chan *Update, symbolCount)
 	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
@@ -1114,11 +1116,11 @@ func TestOrphanDeleteAbortReason(t *testing.T) {
 // half of what the old test was really checking: with a subscribe in flight an
 // unknown sample is parked, so the reaper is never even consulted.
 func TestOrphanDelete_BuffersRatherThanReapsWhileSubscribing(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -1147,18 +1149,18 @@ func TestOrphanDelete_BuffersRatherThanReapsWhileSubscribing(t *testing.T) {
 // sample must be discarded rather than retained. A genuinely leaked handle
 // keeps firing and its next sample takes the orphan path normally.
 func TestSubscribeRace_UncommittedSamplesDiscarded(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.rejected", 0xC0DE)
 
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if err := sess.drivePacket(sess.lifecycle.ctx, buildNotificationPacket(0x555, 0, intSample(7))); err != nil {
 			t.Errorf("drivePacket from Add handler: %v", err)
 		}
-		return addNotifResponse{Error: ams.ReturnCodeDeviceInvalidParam}
+		return fakeplc.AddNotifResponse{Error: ams.ReturnCodeDeviceInvalidParam}
 	})
 
 	ch := make(chan *Update, 1)

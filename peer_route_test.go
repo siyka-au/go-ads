@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -41,19 +43,19 @@ import (
 // device that answers only on its own connection must work normally.
 func TestPeerRoute_ResponsesOnInboundConnection(t *testing.T) {
 	isolatePeerRouteCache(t)
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{42}
 	})
 
 	// Pick the port the "PLC" will dial back on, and point the stub at it.
 	port := freeLocalPort(t)
-	srv.answerViaPeerConnection(localAddr(port))
+	srv.AnswerViaPeerConnection(localAddr(port))
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(2*time.Second),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -84,21 +86,21 @@ func TestPeerRoute_ResponsesOnInboundConnection(t *testing.T) {
 // and must not leave a session reporting healthy.
 func TestPeerRoute_DisabledStillFailsClearly(t *testing.T) {
 	isolatePeerRouteCache(t)
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 	port := freeLocalPort(t)
-	srv.answerViaPeerConnection(localAddr(port)) // nothing listens there
+	srv.AnswerViaPeerConnection(localAddr(port)) // nothing listens there
 
 	// Its own port, not the protocol default: this test used to bind
 	// 0.0.0.0:48898 — the host's real AMS port — as a side effect.
 	fallbackPort := freeLocalPort(t)
 	logs := &testlog.Handler{}
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(300*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -140,17 +142,17 @@ func TestPeerRoute_DisabledStillFailsClearly(t *testing.T) {
 // session against .224 after the route-table probe finished.
 func TestPeerRoute_CloseDoesNotHangWithAdoptedConnection(t *testing.T) {
 	isolatePeerRouteCache(t)
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{5}
 	})
 
 	port := freeLocalPort(t)
-	srv.answerViaPeerConnection(localAddr(port))
+	srv.AnswerViaPeerConnection(localAddr(port))
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(2*time.Second),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -235,18 +237,18 @@ func isolatePeerRouteCache(t *testing.T) {
 // the NEXT session seize.
 func TestPeerRoute_HealthyDeviceDropsTheRememberedHost(t *testing.T) {
 	isolatePeerRouteCache(t)
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// A healthy device: it answers on the connection we opened, and never dials us.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{5}
 	})
 
 	// Seed the fact, as a genuine peer-route device (or a stub on a recycled port)
 	// would have. Deliberately no WithRoute anywhere in this test — that is the path
 	// that had no invalidation at all.
-	key := net.JoinHostPort(srv.host, strconv.Itoa(srv.port))
+	key := net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port))
 	rememberPeerRouteHost(key)
 
 	// Deliberately no WithAmsPeerListen: that option binds unconditionally, so it
@@ -259,7 +261,7 @@ func TestPeerRoute_HealthyDeviceDropsTheRememberedHost(t *testing.T) {
 		t.Helper()
 		logs := &testlog.Handler{}
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+			AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 			WithRequestTimeout(500*time.Millisecond),
 			WithTargetCheck(TargetCheckOff),
 			WithAutoReconnect(false),
@@ -353,16 +355,16 @@ func TestPeerRoute_AutomaticFallback(t *testing.T) {
 		t.Skipf("port %d unavailable on this host (%v); the fallback cannot be exercised", amsPeerListenPort, err)
 	}
 
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.answerViaPeerConnection(localAddr(amsPeerListenPort))
+	srv.AnswerViaPeerConnection(localAddr(amsPeerListenPort))
 
 	logs := &testlog.Handler{}
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(500*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -391,7 +393,7 @@ func TestPeerRoute_AutomaticFallback(t *testing.T) {
 	// answer on its own connection must stay remembered. Without this, invalidating
 	// on every successful Connect would look correct and quietly re-learn the same
 	// ~15s fact for every session.
-	if !isKnownPeerRouteHost(net.JoinHostPort(srv.host, strconv.Itoa(srv.port))) {
+	if !isKnownPeerRouteHost(net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port))) {
 		t.Error("the rescued device was not remembered, so every later session in this process pays the discovery cost again")
 	}
 }
@@ -412,18 +414,18 @@ func TestPeerRoute_FallbackCanBeDisabled(t *testing.T) {
 		t.Skipf("port %d unavailable on this host (%v); the contrast cannot be exercised", amsPeerListenPort, perr)
 	}
 
-	newSilentDevice := func(t *testing.T) *scriptableServer {
+	newSilentDevice := func(t *testing.T) *fakeplc.PLC {
 		t.Helper()
-		srv := startScriptableServer(t)
-		t.Cleanup(srv.stop)
-		srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		srv := fakeplc.StartPLC(t)
+		t.Cleanup(srv.Stop)
+		srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 			return ams.ReturnCodeNoErrors, []byte{9}
 		})
 		// Answers only on a connection it opens to us, on the protocol port.
-		srv.answerViaPeerConnection(localAddr(amsPeerListenPort))
+		srv.AnswerViaPeerConnection(localAddr(amsPeerListenPort))
 		return srv
 	}
-	connect := func(t *testing.T, srv *scriptableServer, extra ...SessionOption) (*Session, error) {
+	connect := func(t *testing.T, srv *fakeplc.PLC, extra ...SessionOption) (*Session, error) {
 		t.Helper()
 		opts := append([]SessionOption{
 			WithRequestTimeout(500 * time.Millisecond),
@@ -431,7 +433,7 @@ func TestPeerRoute_FallbackCanBeDisabled(t *testing.T) {
 			WithAutoReconnect(false),
 		}, extra...)
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+			AMSEndpoint{IP: srv.Host, Port: srv.Port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 			opts...)
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
@@ -491,10 +493,10 @@ func TestPeerRoute_FallbackCanBeDisabled(t *testing.T) {
 // returns, and the WaitGroup.Add races a Wait that may already be at zero, which
 // is documented misuse and panics the process.
 func TestPeerRoute_AdoptionAfterTeardownIsRefused(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
+	c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -504,7 +506,7 @@ func TestPeerRoute_AdoptionAfterTeardownIsRefused(t *testing.T) {
 	// about to wait for the readers.
 	c.closePeerConns()
 
-	inbound, err := net.Dial("tcp", localAddr(srv.port))
+	inbound, err := net.Dial("tcp", localAddr(srv.Port))
 	if err != nil {
 		t.Fatalf("dial inbound: %v", err)
 	}
@@ -542,10 +544,10 @@ func TestPeerRoute_AdoptionAfterTeardownIsRefused(t *testing.T) {
 // and a slice entry for the life of the Client. A device that re-dials on each of
 // its own drops accumulates them.
 func TestPeerRoute_AdoptedConnectionIsClosedWhenItsReaderExits(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
+	c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
@@ -217,20 +219,20 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 //
 // Validates: R-NOT-004 (post-roundtrip stranded-symbol detected; handle released).
 func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const fakeHandle uint32 = 0xBEEF0001
 
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 	})
 	// 100ms server-side delay gives the test goroutine time to bump epoch
 	// + delete the symbol before the response is sent.
-	srv.delayBefore(ams.CommandAddDeviceNotification, 0, 100*time.Millisecond)
+	srv.DelayBefore(ams.CommandAddDeviceNotification, 0, 100*time.Millisecond)
 
 	var deletes atomic.Int32
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		if h == fakeHandle {
 			deletes.Add(1)
 		}
@@ -302,19 +304,19 @@ func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
 //
 // Validates: R-NOT-003 (TOCTOU re-check after PLC roundtrip).
 func TestAddSymbolNotification_TOCTOURecheck(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xAB000001)
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		h := nextHandle.Add(1) - 1
-		return addNotifResponse{Handle: h, Error: ams.ReturnCodeNoErrors}
+		return fakeplc.AddNotifResponse{Handle: h, Error: ams.ReturnCodeNoErrors}
 	})
-	srv.delayBefore(ams.CommandAddDeviceNotification, 0, 100*time.Millisecond)
+	srv.DelayBefore(ams.CommandAddDeviceNotification, 0, 100*time.Millisecond)
 
 	var deletes atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -393,14 +395,14 @@ func TestAddSymbolNotification_TOCTOURecheck(t *testing.T) {
 // Validates: R-NOT-008 (DeleteDeviceNotification clears state on success).
 func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 	t.Run("success_clears_state", func(t *testing.T) {
-		srv := startScriptableServer(t)
-		defer srv.stop()
+		srv := fakeplc.StartPLC(t)
+		defer srv.Stop()
 
 		const fakeHandle uint32 = 0x11110001
-		srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-			return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
+		srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+			return fakeplc.AddNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 		})
-		srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+		srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 			return ams.ReturnCodeNoErrors
 		})
 
@@ -453,14 +455,14 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 		// This is what production does today; if the contract changes to
 		// treat 0x714 as success-equivalent (matching SumDeleteDeviceNotification),
 		// this assertion will surface the divergence.
-		srv := startScriptableServer(t)
-		defer srv.stop()
+		srv := fakeplc.StartPLC(t)
+		defer srv.Stop()
 
 		const fakeHandle uint32 = 0x22220001
-		srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-			return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
+		srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+			return fakeplc.AddNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 		})
-		srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+		srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 			return ams.ReturnCodeDeviceNotifyHandleInvalid
 		})
 
@@ -577,8 +579,8 @@ func TestNotificationChannel_SetOnFirstSuccess(t *testing.T) {
 //
 // Validates: R-NOT-013 (resubscribe retry-up-to-max with cap enforcement).
 func TestResubscribeRetry_UpToMax(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	logHandler := &testlog.Handler{}
 	logger := slog.New(logHandler)
@@ -601,22 +603,22 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 
 	// Sum-add request: respond with a fresh handle but FIRST swap the cache
 	// to empty so the post-roundtrip re-fetch finds nil and Skipped fires.
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		sess.cache.lock.Lock()
 		sess.cache.symbols = map[string]*symtab.Symbol{}
 		sess.cache.lock.Unlock()
 		h := sumHandle.Add(1) - 1
-		return buildSumAddNotifPayload([]sumNotifResponse{{Handle: h, Error: ams.ReturnCodeNoErrors}})
+		return fakeplc.SumAddNotifPayload([]fakeplc.SumNotifResponse{{Handle: h, Error: ams.ReturnCodeNoErrors}})
 	})
 	// bestEffortDelete after Skipped+Handle uses SumDeleteDeviceNotification.
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		// One handle per request (4 bytes). Always succeed.
 		nItems := len(req) / 4
 		codes := make([]ams.ReturnCode, nItems)
 		for i := range codes {
 			codes[i] = ams.ReturnCodeNoErrors
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
 
 	// Run resubscribeMaxAttempts (=3) iterations. Each attempt must be
@@ -671,14 +673,14 @@ func TestBestEffortDeleteNotifications_MixedSuccess(t *testing.T) {
 	})
 
 	t.Run("mixed_results", func(t *testing.T) {
-		srv := startScriptableServer(t)
-		defer srv.stop()
+		srv := fakeplc.StartPLC(t)
+		defer srv.Stop()
 
 		// Sum-delete returns [NoErrors, NotifyHandleInvalid, DeviceError].
 		// Per bestEffortDeleteNotifications: NoErrors + NotifyHandleInvalid
 		// count as success (handle gone PLC-side); DeviceError does NOT.
-		srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
-			return buildSumDeleteNotifPayload([]ams.ReturnCode{
+		srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
+			return fakeplc.SumDeleteNotifPayload([]ams.ReturnCode{
 				ams.ReturnCodeNoErrors,
 				ams.ReturnCodeDeviceNotifyHandleInvalid,
 				ams.ReturnCodeDeviceError,
@@ -728,8 +730,8 @@ var (
 // Validates: R-NOT-009 (per-config result contract) / R-SUM-004
 // (sum-batch tri-state).
 func TestSumNotificationResultTriState(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	sess, _ := newWiredTestSession(t, srv)
 
 	// Three symbols cached up-front: x, y, z.
@@ -748,26 +750,26 @@ func TestSumNotificationResultTriState(t *testing.T) {
 	// Item 2 (z) succeeds with handle 0x1003 — but the test mutates
 	// the cache mid-handler so the post-roundtrip re-fetch finds the
 	// orphan and reports Skipped+Handle (TOCTOU race).
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
 		// Mid-roundtrip: delete z from the cache so the post-roundtrip
 		// re-resolve fails for that handle, triggering the TOCTOU branch.
 		sess.cache.lock.Lock()
 		delete(sess.cache.symbols, symtab.Key("MAIN.z"))
 		sess.cache.lock.Unlock()
-		return buildSumAddNotifPayload([]sumNotifResponse{
+		return fakeplc.SumAddNotifPayload([]fakeplc.SumNotifResponse{
 			{Handle: 0x1001, Error: ams.ReturnCodeNoErrors},
 			{Handle: 0, Error: ams.ReturnCodeDeviceInvalidParam},
 			{Handle: 0x1003, Error: ams.ReturnCodeNoErrors},
 		})
 	})
 	// bestEffortDelete uses SumDelete for the orphan release.
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		nItems := len(req) / 4
 		codes := make([]ams.ReturnCode, nItems)
 		for i := range codes {
 			codes[i] = ams.ReturnCodeNoErrors
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
 
 	ch := make(chan *Update, 4)
@@ -826,12 +828,12 @@ func TestSumNotificationResultTriState(t *testing.T) {
 //
 // Validates: resubscribeNotifications save/restore via resetConfigs.
 func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// Truncated response: claims n=1 item but returns 0 bytes of item data.
 	// executeSumCommand asserts len(resp) >= n*itemReadSize (n*8 for Add).
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		return []byte{} // too short — outer parse will fail
 	})
 
@@ -885,8 +887,8 @@ func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
 // LIVE subscriptions by handle — the last delete nils notificationChannel while
 // those re-queued entries are still on file.
 func TestResubscribe_NilChannelKeepsTheDeclaredIntent(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 	sess, _ := newWiredTestSession(t, srv)
 
 	// Declared intent with no channel bound and nothing live — exactly the state a
@@ -926,12 +928,12 @@ func TestResubscribe_NilChannelKeepsTheDeclaredIntent(t *testing.T) {
 // Retaining the intent (the test above) is what makes this state persist rather
 // than being accidentally cleaned up, so the two must land together.
 func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const fakeHandle uint32 = 0x22220002
-	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -984,20 +986,20 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 // REFUSES the symbol upload so a reload can never be what rescues the session —
 // recovery has to come from the on-demand re-resolve. uploadInfoReads therefore
 // counts reload attempts, which is how the no-storm assertions are made.
-func seedStaleSymbol(t *testing.T, srv *scriptableServer, handleLookups, staleAdds, uploadInfoReads *atomic.Int32, opts ...SessionOption) (*Session, *symtab.Symbol) {
+func seedStaleSymbol(t *testing.T, srv *fakeplc.PLC, handleLookups, staleAdds, uploadInfoReads *atomic.Int32, opts ...SessionOption) (*Session, *symtab.Symbol) {
 	t.Helper()
-	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		handleLookups.Add(1)
-		return buildHandlePayload(staleTestFreshHandle)
+		return fakeplc.HandlePayload(staleTestFreshHandle)
 	})
-	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
+	srv.OnAddDeviceNotification(func(req fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
 		if req.Offset == staleTestStaleHandle {
 			staleAdds.Add(1)
-			return addNotifResponse{Error: ams.ReturnCodeDeviceSymbolNoFound}
+			return fakeplc.AddNotifResponse{Error: ams.ReturnCodeDeviceSymbolNoFound}
 		}
-		return addNotifResponse{Handle: staleTestNotifHandle}
+		return fakeplc.AddNotifResponse{Handle: staleTestNotifHandle}
 	})
-	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		uploadInfoReads.Add(1)
 		return ams.ReturnCodeDeviceError, nil
 	})
@@ -1067,8 +1069,8 @@ func awaitHandleZeroed(t *testing.T, sess *Session, sym *symtab.Symbol) {
 // Self-healing lands on the NEXT call. That two-call shape is the contract, and
 // it is what this test asserts.
 func TestAddSymbolNotification_SymbolNotFoundInvalidatesTheCachedHandle(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var handleLookups, staleAdds, uploadInfoReads atomic.Int32
 	sess, sym := seedStaleSymbol(t, srv, &handleLookups, &staleAdds, &uploadInfoReads)
@@ -1118,18 +1120,18 @@ func TestAddSymbolNotification_SymbolNotFoundInvalidatesTheCachedHandle(t *testi
 // stuck forever. Kept alongside so a later refactor cannot level the two paths
 // down instead of up.
 func TestAddSymbolNotifications_SymbolNotFoundInvalidatesTheCachedHandle(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var handleLookups, staleAdds, uploadInfoReads atomic.Int32
 	sess, sym := seedStaleSymbol(t, srv, &handleLookups, &staleAdds, &uploadInfoReads)
 
 	var sumAdds atomic.Int32
-	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		if sumAdds.Add(1) == 1 {
-			return buildSumAddNotifPayload([]sumNotifResponse{{Error: ams.ReturnCodeDeviceSymbolNoFound}})
+			return fakeplc.SumAddNotifPayload([]fakeplc.SumNotifResponse{{Error: ams.ReturnCodeDeviceSymbolNoFound}})
 		}
-		return buildSumAddNotifPayload([]sumNotifResponse{{Handle: staleTestNotifHandle}})
+		return fakeplc.SumAddNotifPayload([]fakeplc.SumNotifResponse{{Handle: staleTestNotifHandle}})
 	})
 
 	ctx := context.Background()
@@ -1169,8 +1171,8 @@ func TestAddSymbolNotifications_SymbolNotFoundInvalidatesTheCachedHandle(t *test
 // left alone (samples get flagged Stale instead) — that is its documented
 // meaning, not a bug. So: callback fires, handle unchanged, no reload.
 func TestAddSymbolNotification_SymbolNotFoundIgnoreKeepsTheCachedHandle(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	reasons := make(chan Reason, 4)
 	var handleLookups, staleAdds, uploadInfoReads atomic.Int32
@@ -1271,16 +1273,16 @@ func TestAddSymbolNotifications_StaleItemLogsAtWarnNotError(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := startScriptableServer(t)
-			defer srv.stop()
+			srv := fakeplc.StartPLC(t)
+			defer srv.Stop()
 
 			logs := &testlog.Handler{}
 			var handleLookups, staleAdds, uploadInfoReads atomic.Int32
 			sess, _ := seedStaleSymbol(t, srv, &handleLookups, &staleAdds, &uploadInfoReads,
 				WithLogger(slog.New(logs)))
 
-			srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
-				return buildSumAddNotifPayload([]sumNotifResponse{{Error: tc.code}})
+			srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+				return fakeplc.SumAddNotifPayload([]fakeplc.SumNotifResponse{{Error: tc.code}})
 			})
 
 			ch := make(chan *Update, 1)

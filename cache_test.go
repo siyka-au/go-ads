@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -55,19 +57,19 @@ func newCacheTestSession() *Session {
 //
 // Validates: R-CACHE-002 (race-detector clean cache).
 func TestCacheLock_GuardsMutations(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// Name-aware symbol info so every distinct name resolves to its own symbol.
-	srv.onWriteRead(ams.GroupSymbolInfoByNameEx, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSymbolInfoByNameEx, func(req []byte) []byte {
 		name := strings.TrimRight(string(req), "\x00")
-		return buildSymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ams.DataTypeInt16, 0)
+		return fakeplc.SymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ams.DataTypeInt16, 0)
 	})
 	var nextHandle atomic.Uint32
-	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
-		return buildHandlePayload(nextHandle.Add(1))
+	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
+		return fakeplc.HandlePayload(nextHandle.Add(1))
 	})
-	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
+	srv.OnWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
 		return ams.ReturnCodeNoErrors
 	})
 
@@ -227,24 +229,24 @@ func TestCacheEpoch_BumpsOnSwapNotInsert(t *testing.T) {
 //
 // Validates: R-CACHE-007 (concurrent on-demand resolve duplicate-handle release).
 func TestCache_OnDemandResolve_DuplicateHandleReleased(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const fakeHandle uint32 = 0xCAFE0001
-	srv.onWriteRead(ams.GroupSymbolInfoByNameEx, func(_ []byte) []byte {
-		return buildSymbolInfoPayload(
+	srv.OnWriteRead(ams.GroupSymbolInfoByNameEx, func(_ []byte) []byte {
+		return fakeplc.SymbolInfoPayload(
 			"MAIN.x", "INT", "",
 			0x4040, 0x100, 2, ams.DataTypeInt16, 0)
 	})
-	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
-		return buildHandlePayload(fakeHandle)
+	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
+		return fakeplc.HandlePayload(fakeHandle)
 	})
 	// Inject a small delay before GetHandleByName so both goroutines pass
 	// the cache.lock check, hit the network, and race on commit.
-	srv.delayBefore(ams.CommandReadWrite, uint32(ams.GroupSymbolHandleByName), 50*time.Millisecond)
+	srv.DelayBefore(ams.CommandReadWrite, uint32(ams.GroupSymbolHandleByName), 50*time.Millisecond)
 
 	var releases atomic.Int32
-	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, data []byte) ams.ReturnCode {
+	srv.OnWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, data []byte) ams.ReturnCode {
 		if len(data) == 4 && binary.LittleEndian.Uint32(data) == fakeHandle {
 			releases.Add(1)
 		}

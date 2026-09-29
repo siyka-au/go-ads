@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -32,10 +34,10 @@ import (
 // Asserted structurally rather than by racing the window: by the time any worker
 // exists, sess.client must already point at the Client those workers belong to.
 func TestPublishWiredClient_PublishesBeforeStartingWorkers(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 0)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
 	}
@@ -66,10 +68,10 @@ func TestPublishWiredClient_PublishesBeforeStartingWorkers(t *testing.T) {
 // FSM-based and was never wrong here, because a session in an activation window is
 // Connecting or Reconnecting rather than Connected.
 func TestRedialDuringHandshake_FlagsDisconnectedAcrossTheGap(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 0)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
 	}
@@ -119,10 +121,10 @@ func TestRedialDuringHandshake_FlagsDisconnectedAcrossTheGap(t *testing.T) {
 // Reconnect that the disarm exists to prevent. Both callers need this, which is
 // why it lives in the helper rather than being repeated at each of them.
 func TestRedialDuringHandshake_LeavesOndropDisarmed(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 0)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
 	}
@@ -154,10 +156,10 @@ func TestRedialDuringHandshake_LeavesOndropDisarmed(t *testing.T) {
 // Run this under -race: the failure it guards against is a torn teardown, not a
 // wrong number.
 func TestDialMu_SerialisesConcurrentRedials(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	sess := newDialableTestSession(t, srv.host, srv.port, 0)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
 	}
@@ -262,11 +264,11 @@ func TestDropSentinels_AreDistinct(t *testing.T) {
 // `debug_level: true` then rotated away every ~9 seconds. The counts go in the
 // same line because they are the evidence behind the verdict.
 func TestLogDropVerdict_CarriesTheLocalPortAndFrameCounts(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	logs := &testlog.Handler{}
-	sess := newDialableTestSession(t, srv.host, srv.port, 0)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
 	sess.logger = slog.New(logs)
 	if err := sess.dialAndStart(); err != nil {
 		t.Fatalf("dialAndStart: %v", err)
@@ -334,16 +336,16 @@ func TestLogDropVerdict_EstablishedDropDoesNotBlameTheRoute(t *testing.T) {
 // What must remain true is that a device answering the system service gets the
 // runtime-not-running verdict rather than the route one.
 func TestAwaitRouteActive_ConfigFallbackStillRunsWhileRedialling(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
-	srv.setADSState(ams.StateConfig)
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+	srv.SetADSState(ams.StateConfig)
 
 	sess := activationTestSession(t, srv, 3*time.Second)
 
 	// The runtime port answers nothing (the probe reads the symbol version there),
 	// while the system service still reports CONFIG — the real shape of a PLC that
 	// is up but not running.
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeDeviceError, nil
 	})
 
@@ -367,11 +369,11 @@ func TestAwaitRouteActive_ConfigFallbackStillRunsWhileRedialling(t *testing.T) {
 // The failure mode is a hang, not a wrong answer, so this test is written around a
 // timeout: without one it would report as a suite timeout in some other test.
 func TestNestedRedial_DoesNotDeadlock(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess := activationTestSession(t, srv, time.Second)
-	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeNoErrors, []byte{4}
 	})
 
@@ -483,15 +485,15 @@ func TestNextFlapCount_MetronomeEscalates(t *testing.T) {
 // check holds a data-flow component out of active on any error line and has no
 // allowlist, so the level is what makes an outage visible downstream.
 func TestReconnect_LogsAtError(t *testing.T) {
-	srv := startScriptableServer(t)
+	srv := fakeplc.StartPLC(t)
 	logs := &testlog.Handler{}
-	sess := newDialableTestSession(t, srv.host, srv.port, 1)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 1)
 	sess.logger = slog.New(logs)
 	t.Cleanup(func() { sess.markClosed() })
 
 	// Nothing to dial: the loop fails at the first step and exhausts its one
 	// attempt, which is the shape of a PLC that has gone away.
-	srv.stop()
+	srv.Stop()
 
 	if err := sess.Reconnect(context.Background()); err == nil {
 		t.Fatal("Reconnect against a stopped server returned nil")
@@ -527,14 +529,14 @@ func TestReconnect_LogsAtError(t *testing.T) {
 // never says what failed. An operator watching a down bridge has to see the
 // cause on each attempt.
 func TestReconnect_LogsEveryFailedAttemptAtError(t *testing.T) {
-	srv := startScriptableServer(t)
+	srv := fakeplc.StartPLC(t)
 	logs := &testlog.Handler{}
 	const attempts = 3
-	sess := newDialableTestSession(t, srv.host, srv.port, attempts)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, attempts)
 	sess.logger = slog.New(logs)
 	t.Cleanup(func() { sess.markClosed() })
 
-	srv.stop()
+	srv.Stop()
 	if err := sess.Reconnect(context.Background()); err == nil {
 		t.Fatal("Reconnect against a stopped server returned nil")
 	}

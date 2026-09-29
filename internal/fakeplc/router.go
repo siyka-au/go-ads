@@ -1,7 +1,9 @@
 // Package fakeplc provides in-process stand-ins for a TwinCAT device, for tests:
+// PLC is a scriptable AMS/TCP server whose responses each test sets up, and
 // Router answers the AMS router's UDP services (identify and route
-// registration). Protocol constants are spelled out here rather than imported,
-// so the fakes check the library against the protocol, not against itself.
+// registration). Wire layouts are spelled out here rather than borrowed from the
+// library's parsers, so the fakes check the library against the protocol, not
+// against itself.
 package fakeplc
 
 import (

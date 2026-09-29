@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -20,13 +22,13 @@ func TestDroppedDoesNotDiscardArrivedReply(t *testing.T) {
 	const runs = 40
 	lost, got := 0, 0
 	for i := 0; i < runs; i++ {
-		srv := startScriptableServer(t)
-		srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		srv := fakeplc.StartPLC(t)
+		srv.OnRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 			return ams.ReturnCodeNoErrors, []byte{42}
 		})
-		srv.answerThenClose(ams.CommandRead, 1)
+		srv.AnswerThenClose(ams.CommandRead, 1)
 
-		c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second,
+		c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, 2*time.Second,
 			WithClientLogger(slog.New(&testlog.Handler{})))
 		if err != nil {
 			t.Fatalf("Dial: %v", err)
@@ -41,7 +43,7 @@ func TestDroppedDoesNotDiscardArrivedReply(t *testing.T) {
 			t.Logf("run %d: unexpected outcome v=%d err=%v", i, v, err)
 		}
 		_ = c.Close()
-		srv.stop()
+		srv.Stop()
 	}
 	t.Logf("answered-then-closed: %d/%d replies delivered, %d lost to ErrTransportClosed", got, runs, lost)
 	if lost > 0 {

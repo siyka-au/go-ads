@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -1321,16 +1323,16 @@ func TestReadFrames_SourceRaceWithLocalHandshake(t *testing.T) {
 // Lives in client_test.go rather than beside getSymbol only because of file ownership
 // during the concurrent fix waves.
 func TestGetSymbol_TraceLogDoesNotRaceNotificationWriter(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	srv.onWriteRead(ams.GroupSymbolInfoByNameEx, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSymbolInfoByNameEx, func(req []byte) []byte {
 		name := strings.TrimRight(string(req), "\x00")
-		return buildSymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ams.DataTypeInt16, 0)
+		return fakeplc.SymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ams.DataTypeInt16, 0)
 	})
 	var nextHandle atomic.Uint32
-	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
-		return buildHandlePayload(nextHandle.Add(1))
+	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
+		return fakeplc.HandlePayload(nextHandle.Add(1))
 	})
 
 	sess, client := newWiredTestSession(t, srv)

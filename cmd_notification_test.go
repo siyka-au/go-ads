@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
@@ -726,12 +728,12 @@ func TestSession_ConsumeStaleFlag_IdempotentSecondCallEmpty(t *testing.T) {
 // schedules an async DeleteDeviceNotification on the PLC, so PLC handle
 // table slots leaked by prior processes don't accumulate.
 func TestOrphanDelete_FiresOnUnknownHandleOutsideRaceWindow(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
 	var seenHandle atomic.Uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deleted.Add(1)
 		seenHandle.Store(h)
 		return ams.ReturnCodeNoErrors
@@ -763,11 +765,11 @@ func TestOrphanDelete_FiresOnUnknownHandleOutsideRaceWindow(t *testing.T) {
 // TestOrphanDelete_ThrottledOnRepeatedHandle: same orphan handle arriving
 // at high rate must trigger Delete only once within the 60s throttle window.
 func TestOrphanDelete_ThrottledOnRepeatedHandle(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -791,13 +793,13 @@ func TestOrphanDelete_ThrottledOnRepeatedHandle(t *testing.T) {
 // TestOrphanDelete_DistinctHandlesNotThrottled verifies the throttle is
 // per-handle: different orphan handles each get a Delete attempt.
 func TestOrphanDelete_DistinctHandlesNotThrottled(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
 	seen := make(map[uint32]bool)
 	var mu sync.Mutex
-	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		mu.Lock()
 		seen[h] = true
 		mu.Unlock()
@@ -834,11 +836,11 @@ func TestOrphanDelete_DistinctHandlesNotThrottled(t *testing.T) {
 // within 100ms of a successful subscribe (first-sample-race) must NOT fire
 // orphan-Delete — that handle is most likely our own pending subscribe.
 func TestOrphanDelete_SuppressedDuringRaceWindow(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -862,11 +864,11 @@ func TestOrphanDelete_SuppressedDuringRaceWindow(t *testing.T) {
 // up by Fix 3's post-dial Delete path; firing async orphan-Deletes during
 // the reconnect window would race with that cleanup.
 func TestOrphanDelete_SuppressedDuringReconnect(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -892,14 +894,14 @@ func TestOrphanDelete_SuppressedDuringReconnect(t *testing.T) {
 // the PLC (PLC reuses freed slot IDs). The orphan-Delete must re-check
 // activeNotifications under lock and abort if the handle is now present.
 func TestOrphanDelete_AbortsWhenHandleReappearsInActiveNotifications(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleted atomic.Int32
 	// Block the Delete RPC for 200ms so we can inject the handle back into
 	// activeNotifications before the goroutine's re-check fires.
-	srv.delayBefore(ams.CommandDeleteDeviceNotification, 0, 200*time.Millisecond)
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.DelayBefore(ams.CommandDeleteDeviceNotification, 0, 200*time.Millisecond)
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -928,10 +930,10 @@ func TestOrphanDelete_AbortsWhenHandleReappearsInActiveNotifications(t *testing.
 // TestOrphanDelete_RPCFailureNonFatal: PLC returning an error for the
 // Delete RPC must not panic, leak goroutines, or skip the throttle update.
 func TestOrphanDelete_RPCFailureNonFatal(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
-	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		return ams.ReturnCodeDeviceError
 	})
 

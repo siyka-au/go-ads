@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
@@ -416,8 +418,8 @@ func TestSession_HandleStaleDetection_NilCallbackOK(t *testing.T) {
 // Validates: R-CACHE-011 (Close strategy terminates session +
 // surfaces lifecycle event to observers).
 func TestSession_HandleStaleDetection_Close(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	disconnected := make(chan struct{})
 	sess, _ := newWiredTestSession(t, srv,
@@ -540,8 +542,8 @@ func TestSession_MarkAllHandlesStale_NilNotificationsSafe(t *testing.T) {
 //
 // Validates: R-CACHE-010 (AutoReload bumps epoch + invalidates handles).
 func TestSession_AutoReload_BumpsEpoch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv,
 		WithSymbolVersionStrategy(SymbolVersionAutoReload),
@@ -571,8 +573,8 @@ func TestSession_AutoReload_BumpsEpoch(t *testing.T) {
 //
 // Validates: R-CACHE-013 (cap exhaustion fires callback w/ specific reason).
 func TestSession_AutoReload_CapExhaustion_FiresCallback(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	exhausted := make(chan Reason, 4)
 	cb := func(reason Reason) {
@@ -608,8 +610,8 @@ func TestSession_AutoReload_CapExhaustion_FiresCallback(t *testing.T) {
 // (R-CACHE-010). The single-flight guard (reloadInProgress CAS) must prevent
 // duplicate concurrent bumpEpoch calls.
 func TestSession_AutoReload_SingleFlight(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv,
 		WithSymbolVersionStrategy(SymbolVersionAutoReload),
@@ -622,7 +624,7 @@ func TestSession_AutoReload_SingleFlight(t *testing.T) {
 	// overlap a reload that fails in microseconds against the stub — so the test
 	// passed or failed on scheduling luck rather than on the guard, and it did
 	// flake (~1 in 16). The delay makes the overlap a property of the test.
-	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolUploadInfo), 300*time.Millisecond)
+	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolUploadInfo), 300*time.Millisecond)
 
 	preEpoch := sess.epoch()
 
@@ -677,14 +679,14 @@ func TestSession_AutoReload_SingleFlight(t *testing.T) {
 // Validates: R-CACHE-009 (extends detection set with Length-mismatch
 // signal) + R-NOT-016 (ReasonInvalidSize wired through callback).
 func TestSession_ReadFromSymbol_LengthMismatchTriggersDetection(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const fakeHandle uint32 = 0xCAFEBABE
 	// PLC returns 2 bytes (post-online-change INT size) on Read by handle.
 	// Cache will hold Length=8 (pre-change LREAL) — the mismatch is the
 	// detection trigger.
-	srv.onRead(ams.GroupSymbolValueByHandle, func(_, offset, length uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolValueByHandle, func(_, offset, length uint32) (ams.ReturnCode, []byte) {
 		if offset != fakeHandle {
 			return ams.ReturnCodeDeviceInvalidParam, nil
 		}
@@ -773,15 +775,15 @@ func TestSession_IsClosed_TrueAfterClose(t *testing.T) {
 //
 // Validates: PLC-side notification delete fires for every staged handle.
 func TestReleasePLCResources_NotificationCleanup(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const stagedHandle uint32 = 0xC0DE
 	var deletes atomic.Int32
 	// releasePLCResources calls bestEffortDeleteNotifications which prefers
 	// SumDeleteDeviceNotification; register that handler so the sum path
 	// completes instead of falling back. Count handles passed through.
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		nItems := len(req) / 4
 		codes := make([]ams.ReturnCode, nItems)
 		for i := 0; i < nItems; i++ {
@@ -791,7 +793,7 @@ func TestReleasePLCResources_NotificationCleanup(t *testing.T) {
 			}
 			codes[i] = ams.ReturnCodeNoErrors
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -814,11 +816,11 @@ func TestReleasePLCResources_NotificationCleanup(t *testing.T) {
 //
 // Validates: wasDisconnected gate on symbol-handle release path.
 func TestReleasePLCResources_SymbolHandleRelease_SkippedWhenDisconnected(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var writes atomic.Int32
-	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
+	srv.OnWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
 		writes.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -841,12 +843,12 @@ func TestReleasePLCResources_SymbolHandleRelease_SkippedWhenDisconnected(t *test
 // transport alive, the helper must issue ReleaseHandle for every cached
 // symbol with a non-zero Handle.
 func TestReleasePLCResources_SymbolHandleRelease_FiredWhenConnected(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const stagedHandle uint32 = 0xABCD0001
 	var writes atomic.Int32
-	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
+	srv.OnWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
 		writes.Add(1)
 		return ams.ReturnCodeNoErrors
 	})
@@ -980,12 +982,12 @@ func TestNewSession_WithLocalAMS_ZeroPort_KeepsRandomDefault(t *testing.T) {
 // handler registered) — we only validate the pre-delete step ran and that
 // activeNotifications was wiped under the same lock.
 func TestAutoReload_DeletesOldHandlesBeforeResubscribe(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var mu sync.Mutex
 	var deletedHandles []uint32
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		n := len(req) / 4
 		mu.Lock()
 		for i := 0; i < n; i++ {
@@ -996,7 +998,7 @@ func TestAutoReload_DeletesOldHandlesBeforeResubscribe(t *testing.T) {
 		for i := range codes {
 			codes[i] = ams.ReturnCodeNoErrors
 		}
-		return buildSumDeleteNotifPayload(codes)
+		return fakeplc.SumDeleteNotifPayload(codes)
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -1041,13 +1043,13 @@ func TestAutoReload_DeletesOldHandlesBeforeResubscribe(t *testing.T) {
 // when reloadSymbolsAndResubscribe runs with no pre-existing handles, no
 // SumDelete RPC must fire (avoids a useless wire round-trip on first reload).
 func TestAutoReload_NoOldHandles_SkipsDelete(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	var deleteCalls atomic.Int32
-	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
 		deleteCalls.Add(1)
-		return buildSumDeleteNotifPayload([]ams.ReturnCode{ams.ReturnCodeNoErrors})
+		return fakeplc.SumDeleteNotifPayload([]ams.ReturnCode{ams.ReturnCodeNoErrors})
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -1111,19 +1113,19 @@ func TestIsProbeRetryable_TransportLevel(t *testing.T) {
 // so the reload's LoadSymbols FAILS: recovery must come from the on-demand
 // re-resolve, not from a reload that happened to succeed.
 func TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	const (
 		staleHandle uint32 = 0x1111
 		freshHandle uint32 = 0x2222
 	)
 	var handleLookups, staleReads atomic.Int32
-	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		handleLookups.Add(1)
-		return buildHandlePayload(freshHandle)
+		return fakeplc.HandlePayload(freshHandle)
 	})
-	srv.onRead(ams.GroupSymbolValueByHandle, func(_, offset, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolValueByHandle, func(_, offset, _ uint32) (ams.ReturnCode, []byte) {
 		if offset == staleHandle {
 			staleReads.Add(1)
 			return ams.ReturnCodeDeviceSymbolNoFound, nil
@@ -1132,7 +1134,7 @@ func TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle(t *testing.T) {
 	})
 	// A TC3 restart does not bump the symbol version, so the version must never be
 	// what rescues this. Refuse the upload too, so the reload cannot rescue it either.
-	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeDeviceError, nil
 	})
 

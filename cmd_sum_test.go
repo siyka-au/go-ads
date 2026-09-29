@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -301,8 +303,8 @@ func seedSymbol(sess *Session, name string, handle uint32) {
 //
 // Validates: R-CACHE-009 (sum-batch per-item detection wiring).
 func TestSession_ReadValues_StaleDetection(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	cbReason := make(chan Reason, 1)
 	sess, _ := newWiredTestSession(t, srv,
@@ -319,7 +321,7 @@ func TestSession_ReadValues_StaleDetection(t *testing.T) {
 
 	// SumReadEx2 (0xF084) handler: respond with one stale code + one OK.
 	// Response shape: [N × (error(4), length(4))][data].
-	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		resp := craftSumReadResponse(
 			[]ams.ReturnCode{ams.ReturnCodeDeviceSymbolVersionInvalid, ams.ReturnCodeNoErrors},
 			[]uint32{0, 1},
@@ -357,8 +359,8 @@ func TestSession_ReadValues_StaleDetection(t *testing.T) {
 //
 // Validates: R-CACHE-009 + R-SES-011 (no callback amplification on batched ops).
 func TestSession_ReadValues_FiresCallbackOncePerBatch(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// Buffer of 4 so a buggy implementation (one callback per stale item)
 	// would visibly fill the channel; correct impl pushes exactly 1.
@@ -372,7 +374,7 @@ func TestSession_ReadValues_FiresCallbackOncePerBatch(t *testing.T) {
 	seedSymbol(sess, "MAIN.c", 0x2003)
 
 	// Three stale codes — implementation must break after first.
-	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
 			[]ams.ReturnCode{
 				ams.ReturnCodeDeviceSymbolVersionInvalid,
@@ -418,8 +420,8 @@ func TestSession_ReadValues_FiresCallbackOncePerBatch(t *testing.T) {
 //
 // Validates: R-CACHE-009 (SumWrite batch wiring).
 func TestSession_WriteValues_StaleDetection(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	cbReason := make(chan Reason, 1)
 	sess, _ := newWiredTestSession(t, srv,
@@ -435,7 +437,7 @@ func TestSession_WriteValues_StaleDetection(t *testing.T) {
 	seedSymbol(sess, "MAIN.b", 0x3002)
 
 	// SumWrite (0xF081) response: N × uint32 per-item error codes.
-	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		buf := make([]byte, 8)
 		binary.LittleEndian.PutUint32(buf[0:], uint32(ams.ReturnCodeDeviceSymbolVersionInvalid))
 		binary.LittleEndian.PutUint32(buf[4:], uint32(ams.ReturnCodeNoErrors))
@@ -476,16 +478,16 @@ func TestSession_WriteValues_StaleDetection(t *testing.T) {
 //
 // Validates: fallback error preservation (fix for sumReadFallback masking).
 func TestSumReadFallback_PreservesADSReturnCode(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	// Register a Read handler for an arbitrary group that returns the stale code.
 	const testGroup ams.Group = 0xABCD1234
-	srv.onRead(testGroup, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+	srv.OnRead(testGroup, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		return ams.ReturnCodeDeviceSymbolVersionInvalid, nil
 	})
 
-	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
+	c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -685,15 +687,15 @@ func itemFor(t *testing.T, batchErr *BatchError, symbol string) BatchItemError {
 //
 // Validates: DECISIONS.md Decision 1 (per-item status, PLC-verdict state).
 func TestReadValues_AllItemsFailedIsNotSuccess(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4001)
 	seedSymbol(sess, "MAIN.b", 0x4002)
 	seedSymbol(sess, "MAIN.c", 0x4003)
 
-	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
 			[]ams.ReturnCode{
 				ams.ReturnCodeDeviceSymbolNoFound,
@@ -735,15 +737,15 @@ func TestReadValues_AllItemsFailedIsNotSuccess(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (partial success stays usable).
 func TestReadValues_OneAbsentSymbolKeepsTheRest(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4101)
 	seedSymbol(sess, "MAIN.absent", 0x4102)
 	seedSymbol(sess, "MAIN.c", 0x4103)
 
-	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
 			[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeDeviceSymbolNoFound, ams.ReturnCodeNoErrors},
 			[]uint32{1, 0, 1},
@@ -779,15 +781,15 @@ func TestReadValues_OneAbsentSymbolKeepsTheRest(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (Skipped state, resolve-time drop).
 func TestReadValues_UnresolvedSymbolIsReported(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4201)
 	// MAIN.typo is not seeded, and the server answers no handle lookup, so
 	// getSymbol fails for it before any request is built.
 
-	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse([]ams.ReturnCode{ams.ReturnCodeNoErrors}, []uint32{1}, []byte{0x01})
 	})
 
@@ -825,8 +827,8 @@ func TestReadValues_UnresolvedSymbolIsReported(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (Skipped state, decode-time drops).
 func TestReadValues_VanishedAndUnparsableAreReported(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4301)
@@ -837,7 +839,7 @@ func TestReadValues_VanishedAndUnparsableAreReported(t *testing.T) {
 	// loop takes cache.lock, so it can stage exactly the two races: drop one
 	// entry from the cache, and widen another's Length past the payload the PLC
 	// is about to return.
-	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		sess.cache.lock.Lock()
 		delete(sess.cache.symbols, symtab.Key("MAIN.gone"))
 		sess.cache.symbols[symtab.Key("MAIN.widened")].Length = 8
@@ -871,8 +873,8 @@ func TestReadValues_VanishedAndUnparsableAreReported(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (bare error reserved for transport).
 func TestReadValues_TransportFailureIsABareError(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4401)
@@ -880,7 +882,7 @@ func TestReadValues_TransportFailureIsABareError(t *testing.T) {
 
 	// Seeded symbols need no handle lookup, so the first ReadWrite is the
 	// SumRead itself: the router rejects it the way a PLC in CONFIG does.
-	srv.amsErrorAfter(ams.CommandReadWrite, 1, ams.ReturnCodeGlobalTargetPortNotFound)
+	srv.AMSErrorAfter(ams.CommandReadWrite, 1, ams.ReturnCodeGlobalTargetPortNotFound)
 
 	values, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.b"})
 	if err == nil {
@@ -903,8 +905,8 @@ func TestReadValues_TransportFailureIsABareError(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (empty request stays nil, nil).
 func TestReadValues_EmptyRequestIsNotAnError(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 
@@ -923,8 +925,8 @@ func TestReadValues_EmptyRequestIsNotAnError(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (write-path dropped item).
 func TestWriteValues_DroppedItemIsNotSuccess(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4501)
@@ -933,7 +935,7 @@ func TestWriteValues_DroppedItemIsNotSuccess(t *testing.T) {
 	// the PLC. MAIN.bad is a BOOL handed a non-boolean, the shape a type change
 	// under an online change takes, and it dies at serialization instead.
 
-	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		buf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(buf, uint32(ams.ReturnCodeNoErrors))
 		return buf
@@ -969,13 +971,13 @@ func TestWriteValues_DroppedItemIsNotSuccess(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (write-path PLC verdict).
 func TestWriteValues_PerItemRejectionIsAnError(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4601)
 
-	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		buf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(buf, uint32(ams.ReturnCodeDeviceSymbolNoFound))
 		return buf
@@ -1000,21 +1002,21 @@ func TestWriteValues_PerItemRejectionIsAnError(t *testing.T) {
 //
 // Validates: DECISIONS.md Decision 1 (error only when an item failed).
 func TestBatchSymbols_FullSuccessIsNotAnError(t *testing.T) {
-	srv := startScriptableServer(t)
-	defer srv.stop()
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
 
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4701)
 	seedSymbol(sess, "MAIN.b", 0x4702)
 
-	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
 			[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors},
 			[]uint32{1, 1},
 			[]byte{0x01, 0x00},
 		)
 	})
-	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
+	srv.OnWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		return make([]byte, 8) // two items, both ReturnCodeNoErrors
 	})
 
