@@ -3,11 +3,9 @@ package ads
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -447,98 +445,6 @@ func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
 	}
 }
 
-// TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping: when the PLC says
-// the registration is already gone, the local bookkeeping must go with it.
-//
-// 0x714 NotifyHandleInvalid and 0x715 DeviceClientUnknown mean the PLC has no such
-// registration — after a runtime restart or a dropped client identity, that is the
-// normal answer. Returning early on it left the entry in activeNotifications
-// forever (every retry gets the same code, so the caller can never delete it) and
-// left the config on file, so the next reconnect re-subscribed a symbol the caller
-// had explicitly deleted, creating a duplicate PLC registration. The batch sibling
-// has always treated these codes as success-equivalent.
-func TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-	var nextHandle atomic.Uint32
-	nextHandle.Store(0xB00)
-	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
-		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
-	})
-	// The PLC no longer knows this registration.
-	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
-		return ams.ReturnCodeDeviceNotifyHandleInvalid
-	})
-
-	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
-	c.SetNotificationHandler(sess.handleNotification)
-	preSeedTypedSymbol(sess, "MAIN.gone", 0xF600)
-	ch := make(chan *Update, 4)
-	handle, err := sess.Subscribe(context.Background(), "MAIN.gone", 0, 0,
-		ams.TransModeServerOnChange, ch)
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	// The error is still reported — the caller asked for a delete and it did not
-	// happen the way they asked — but the state must not be stranded.
-	_ = sess.Unsubscribe(context.Background(), handle)
-
-	sess.notifications.lock.Lock()
-	_, stillActive := sess.notifications.activeNotifications[handle]
-	stillConfigured := sess.notifications.hasConfig("MAIN.gone")
-	sess.notifications.lock.Unlock()
-
-	if stillActive {
-		t.Errorf("handle %d still in activeNotifications after the PLC reported it already gone: "+
-			"every retry gets the same code, so the caller can never remove it", handle)
-	}
-	if stillConfigured {
-		t.Error("config for MAIN.gone still on file after a delete the PLC confirmed as already gone: " +
-			"the next reconnect re-subscribes a symbol the caller deleted")
-	}
-}
-
-// TestDeleteNotification_ForeignHandleKeepsTheSubscriptionChannel: deleting a
-// handle this session does not own must not disturb the ones it does.
-//
-// The clear of notificationChannel was gated on the map being empty rather than on
-// the handle having actually been removed, so a delete for an unknown handle wiped
-// the channel whenever the map happened to be empty — exactly the state a sweep
-// leaves behind. resubscribeNotifications then returns early on a nil channel while
-// the reconnect logs success, and every subscription is silently dropped. This is
-// the single-symbol twin of the sum-path bug that hardware caught: a power cycle
-// left notifications never resuming.
-func TestDeleteNotification_ForeignHandleKeepsTheSubscriptionChannel(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
-
-	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
-	c.SetNotificationHandler(sess.handleNotification)
-
-	// The state a sweep leaves: nothing bound yet, but the caller's intent and
-	// channel are on file for the re-subscribe that follows.
-	ch := make(chan *Update, 4)
-	sess.notifications.lock.Lock()
-	sess.notifications.notificationChannel = ch
-	sess.notifications.addConfig(NotificationConfig{Symbol: "MAIN.keepme"})
-	sess.notifications.lock.Unlock()
-
-	if err := sess.Unsubscribe(context.Background(), 0xDEAD); err != nil {
-		t.Fatalf("delete of a foreign handle: %v", err)
-	}
-
-	sess.notifications.lock.Lock()
-	channel := sess.notifications.notificationChannel
-	configs := len(sess.notifications.pending)
-	sess.notifications.lock.Unlock()
-	if channel == nil {
-		t.Errorf("notificationChannel was cleared by deleting a handle this session never owned, with %d config(s) still on file: "+
-			"resubscribeNotifications returns early on a nil channel while the reconnect reports success", configs)
-	}
-}
-
 // TestHeartbeat_SymbolVersionChangeDetectedOnce: the beat carries the symbol
 // version, so a change shows up for free — but it must be detected once, not on
 // every beat forever.
@@ -779,113 +685,6 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if after := logs.CountByMessage("no notification heartbeat within the allowed window"); after != before {
 		t.Errorf("watcher logged %d more time(s) after the session was closed: the goroutine outlives its session", after-before)
-	}
-}
-
-// TestRuntimeState_RefusesSymbolWorkOutsideRun: when the system service says the
-// runtime is not in RUN, symbol and subscription calls must refuse and say why.
-//
-// Measured on TC3.1.4024 in CONFIG: every request to the runtime port 851 came back
-// with AMS ErrorCode 6 (target port not found), while port 10000 answered
-// ADSState=15. The library discarded the AMS error and parsed the response body
-// anyway, so a subscribe failed with "0xF008: unknown error code" — an index group
-// formatted as a return code. Asking the system service turns that into a fact.
-func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
-		return fakeplc.AddNotifResponse{Handle: 0x1234}
-	})
-
-	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
-	c.SetNotificationHandler(sess.handleNotification)
-	preSeedTypedSymbol(sess, "MAIN.cfg", 0xFC00)
-	preSeedTypedSymbol(sess, "MAIN.cfg2", 0xFC01)
-	preSeedTypedSymbol(sess, "MAIN.cfg3", 0xFC02)
-	ch := make(chan *Update, 4)
-
-	// No reading yet: the gate must permit, or every device that does not serve the
-	// system service port would stop working.
-	if _, err := sess.Subscribe(context.Background(), "MAIN.cfg", 0, 0,
-		ams.TransModeServerOnChange, ch); err != nil {
-		t.Fatalf("subscribe refused with no runtime-state reading: %v", err)
-	}
-
-	// Now the system service reports CONFIG.
-	sess.recordRuntimeState(ams.StateConfig)
-	_, err := sess.Subscribe(context.Background(), "MAIN.cfg2", 0, 0,
-		ams.TransModeServerOnChange, ch)
-	if err == nil {
-		t.Error("subscribe succeeded although the runtime is in CONFIG: the runtime port does not exist in that state, so this " +
-			"can only fail later and obscurely")
-	}
-	if !errors.Is(err, ErrRuntimeNotRunning) {
-		t.Errorf("error = %v, want one wrapping ErrRuntimeNotRunning so callers can branch on it", err)
-	}
-	if err != nil && !strings.Contains(err.Error(), "15") {
-		t.Errorf("error %q does not name the state; the operator needs to know it is CONFIG, not just that something failed", err)
-	}
-	if lerr := sess.LoadSymbols(context.Background()); !errors.Is(lerr, ErrRuntimeNotRunning) {
-		t.Errorf("LoadSymbols error = %v, want ErrRuntimeNotRunning", lerr)
-	}
-
-	// Back to RUN: work is allowed again without rebuilding anything.
-	sess.recordRuntimeState(ams.StateRun)
-	if _, err := sess.Subscribe(context.Background(), "MAIN.cfg3", 0, 0,
-		ams.TransModeServerOnChange, ch); err != nil {
-		t.Errorf("subscribe still refused after the runtime returned to RUN: %v", err)
-	}
-}
-
-// TestRuntimeState_PollReportsTheState: the state has to be discovered by the
-// session, not only by a caller who asks.
-//
-// It is a poll on purpose. There is nothing to subscribe to that survives the
-// transition being watched: in CONFIG the runtime port that would carry a
-// notification does not exist. One small request per heartbeat interval to a port
-// that is up whenever the device is.
-func TestRuntimeState_PollReportsTheState(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-	srv.SetADSState(ams.StateConfig)
-
-	// WithRuntimeStateWatch, not WithNotificationHeartbeat: the state poll used to
-	// run at the heartbeat cycle, so this test tuned the heartbeat purely to make
-	// the poll fast. The two are independent now (defaultStateWatchInterval), and
-	// this test wants a fast POLL.
-	sess, _ := newWiredTestSession(t, srv,
-		WithNotificationHeartbeat(100*time.Millisecond, 3),
-		WithRuntimeStateWatch(100*time.Millisecond))
-	if state, known := sess.knownRuntimeState(); known {
-		t.Fatalf("state already known before polling: %v", state)
-	}
-	sess.startRuntimeStateWatch()
-
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if state, known := sess.knownRuntimeState(); known {
-			if state != ams.StateConfig {
-				t.Errorf("polled state = %v, want CONFIG", state)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the runtime state was never polled: the session cannot tell CONFIG from a broken device")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// And it must notice the way back.
-	srv.SetADSState(ams.StateRun)
-	deadline = time.Now().Add(3 * time.Second)
-	for {
-		if state, _ := sess.knownRuntimeState(); state == ams.StateRun {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the poll never saw the return to RUN, so the session would refuse subscriptions forever")
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -1148,64 +947,6 @@ func TestHeartbeat_RecoveryKeepsALargeConfigSet(t *testing.T) {
 	}
 }
 
-// TestRuntimeState_RefusesOnlyMeasuredStates: the gate must refuse only where a
-// runtime port provably does not serve.
-//
-// An earlier version refused on anything that was not RUN, then on a list that
-// included STOP and SHUTDOWN by inference. Only CONFIG and RECONFIG are measured
-// (TC3.1.4024 in CONFIG reports 15 and answers AMS ErrorCode 6 for every request to
-// a runtime port). STOP was seen only as a ~4s way-point during a CONFIG -> RUN
-// switch, so whether a device can idle there while serving is unknown — and
-// refusing every subscribe on such a device, with no PLC error to explain it, is
-// worse than attempting the call.
-func TestRuntimeState_RefusesOnlyMeasuredStates(t *testing.T) {
-	refuse := []ams.State{ams.StateConfig, ams.StateReconfig}
-	permit := []ams.State{ams.StateRun, ams.StateStop, ams.StateShutdown, ams.StateIdle, ams.StateStart, ams.StateInvalid, ams.State(99)}
-
-	for _, state := range refuse {
-		if !runtimeDefinitelyNotServing(state) {
-			t.Errorf("state %d should be refused: it is measured to have no serving runtime port", uint16(state))
-		}
-	}
-	for _, state := range permit {
-		if runtimeDefinitelyNotServing(state) {
-			t.Errorf("state %d is refused on inference rather than evidence; attempting the call and letting the PLC answer is "+
-				"the safer default", uint16(state))
-		}
-	}
-}
-
-// TestRuntimeState_ReadingExpires: a state reading must not outlive its usefulness.
-//
-// The watch gives up after a run of failed polls, and before this a session that had
-// seen CONFIG then kept that verdict forever — refusing every symbol and subscribe
-// call for the rest of its life with nothing left to notice the runtime returning.
-// Failing OPEN is deliberate: the worst case is the behaviour that predates the
-// gate.
-func TestRuntimeState_ReadingExpires(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-	sess, _ := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
-
-	sess.recordRuntimeState(ams.StateConfig)
-	if _, known := sess.knownRuntimeState(); !known {
-		t.Fatal("a fresh reading is not known")
-	}
-	if err := sess.requireRunningRuntime("probe"); err == nil {
-		t.Fatal("a fresh CONFIG reading must refuse")
-	}
-
-	// Age it past the TTL, as an abandoned poll would.
-	sess.runtimeStateNs.Store(time.Now().Add(-2 * runtimeStateTTL).UnixNano())
-	if _, known := sess.knownRuntimeState(); known {
-		t.Error("a stale reading is still reported as known: nothing refreshes it once the watch has given up, so the gates " +
-			"would refuse for the life of the session")
-	}
-	if err := sess.requireRunningRuntime("probe"); err != nil {
-		t.Errorf("a stale reading still refuses: %v", err)
-	}
-}
-
 // TestHeartbeat_DeferralsKeepAConstantRate: waiting for a runtime that is not
 // serving must not make the next check later.
 //
@@ -1338,44 +1079,6 @@ func TestHeartbeat_ReconnectDoesNotInheritStaleQuietTicks(t *testing.T) {
 	}
 	t.Errorf("no re-subscribe after %d silent ticks following the reconnect (%d Add calls throughout);"+
 		" a genuinely dead subscription set is no longer recovered", allowed+8, adds.Load())
-}
-
-// TestConnectedGeneration_OnlyAdvancesOnAConnectOrReconnect guards the property
-// the heartbeat reset depends on: the generation must move ONLY when the session
-// really re-entered Connected from a connect or reconnect attempt. Anything else
-// resets the detector while the session sits Connected, which masks a real stall
-// for as long as the other event keeps firing — the reason epoch() cannot be used
-// here (bumpEpoch also fires on symbol-cache swaps).
-func TestConnectedGeneration_OnlyAdvancesOnAConnectOrReconnect(t *testing.T) {
-	tests := []struct {
-		name string
-		from SessionState
-		want uint64
-	}{
-		{name: "a first connect advances it", from: SessionStateConnecting, want: 1},
-		{name: "a reconnect advances it", from: SessionStateReconnecting, want: 1},
-		// Reloading -> Connected is in the FSM table but no production path enters
-		// Reloading today. If one ever does, an AutoReload cycle must still not
-		// advance the generation, or every reload resets the heartbeat detector.
-		{name: "a reload does not advance it", from: SessionStateReloading, want: 0},
-		{name: "an idempotent re-announcement does not advance it", from: SessionStateConnected, want: 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sess := &Session{
-				lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
-				logger:    slog.Default(),
-			}
-			sess.lifecycle.state.value.Store(uint32(tt.from))
-			sess.enterConnected()
-			if got := sess.lifecycle.state.load(); got != SessionStateConnected {
-				t.Fatalf("state after enterConnected() from %v = %v, want Connected", tt.from, got)
-			}
-			if got := sess.connectedGen(); got != tt.want {
-				t.Errorf("connectedGen() after entering Connected from %v = %d, want %d", tt.from, got, tt.want)
-			}
-		})
-	}
 }
 
 // TestHeartbeatAllowedTicks pins the recovery backoff arithmetic.
@@ -1646,64 +1349,6 @@ func TestWithHeartbeatRecovery_Modes(t *testing.T) {
 	})
 }
 
-// TestRuntimeStateWatch_DefaultIsIndependentOfTheHeartbeat.
-//
-// The poll used to run at heartbeatCycle(), so WithNotificationHeartbeat(30s, ...)
-// silently made the state poll 30s too — the gate reporting "the runtime is in
-// CONFIG" went stale for half a minute because an unrelated knob moved. This is
-// the only assertion on the default, since the poller's own test now pins an
-// explicit interval.
-func TestRuntimeStateWatch_DefaultIsIndependentOfTheHeartbeat(t *testing.T) {
-	var sess Session
-	if got := sess.stateWatchCycle(); got != defaultStateWatchInterval {
-		t.Errorf("default state watch cycle = %v, want %v", got, defaultStateWatchInterval)
-	}
-	WithNotificationHeartbeat(30*time.Second, 3)(&sess)
-	if got := sess.stateWatchCycle(); got != defaultStateWatchInterval {
-		t.Errorf("state watch cycle = %v after a 30s heartbeat, want %v — the coupling is back",
-			got, defaultStateWatchInterval)
-	}
-	WithRuntimeStateWatch(750 * time.Millisecond)(&sess)
-	if got := sess.stateWatchCycle(); got != 750*time.Millisecond {
-		t.Errorf("state watch cycle = %v after WithRuntimeStateWatch, want 750ms", got)
-	}
-}
-
-// TestWithoutRuntimeStateWatch_StartsNoPollerAndKeepsTheOnce: the disabled check
-// sits outside stateOnce.Do, so turning the watch off does not consume the Once —
-// and with no reading the gates fall back to permitting, which is the behaviour
-// that predates the watch.
-func TestWithoutRuntimeStateWatch_StartsNoPollerAndKeepsTheOnce(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-	srv.SetADSState(ams.StateConfig)
-
-	sess, _ := newWiredTestSession(t, srv, WithoutRuntimeStateWatch())
-	sess.startRuntimeStateWatch()
-
-	time.Sleep(200 * time.Millisecond)
-	if state, known := sess.knownRuntimeState(); known {
-		t.Errorf("runtime state became known (%v) although the watch is disabled", state)
-	}
-
-	// The Once must still be unused: a session that had the watch disabled and
-	// later enabled it would otherwise never get a poller.
-	sess.stateWatchDisabled = false
-	// An explicit fast interval: the default is 5s, so a poller started here would
-	// not have ticked inside this test's deadline whether the Once was consumed or
-	// not — which would make the assertion below vacuous.
-	sess.stateWatchInterval = 100 * time.Millisecond
-	sess.startRuntimeStateWatch()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, known := sess.knownRuntimeState(); known {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Error("no poller started after re-enabling the watch: stateOnce was consumed by the disabled path")
-}
-
 // TestHeartbeat_RecoversSubscriptionsWhileTheBeatIsHealthy pins the deadlock
 // measured on 192.168.3.107 (2026-09-12): a degraded link starved the beat,
 // recovery released every handle, the 41-symbol re-subscribe failed, and then the
@@ -1870,77 +1515,4 @@ func TestHeartbeat_RecoversWhenTheBeatIsSlowerThanTheTick(t *testing.T) {
 	w, h := sess.notifications.subscriptionGap()
 	t.Fatalf("never recovered with a beat slower than the tick: want=%d have=%d — "+
 		"beatless ticks are resetting the gap counter", w, h)
-}
-
-// newGapManager builds a notificationManager holding n handles with the baseline
-// raised to match, which is the state a first connect leaves behind.
-func newGapManager(n int) *notificationManager {
-	m := &notificationManager{activeNotifications: map[uint32]activeNotification{}}
-	for i := 1; i <= n; i++ {
-		m.activeNotifications[uint32(0x100+i)] = activeNotification{}
-	}
-	m.raiseRegistered()
-	return m
-}
-
-// A re-subscribe that restores fewer handles than the session had must leave the
-// shortfall visible. The baseline used to be stored outright on every commit, so
-// the last partial commit redefined healthy as the smaller set: want == have, no
-// gap, and nothing ever retried the symbols that did not come back.
-func TestRegisteredBaseline_PartialResubscribeLeavesAGap(t *testing.T) {
-	m := newGapManager(40)
-	if want, have := m.subscriptionGap(); want != 40 || have != 40 {
-		t.Fatalf("first connect baseline: want=%d have=%d, expected 40/40", want, have)
-	}
-
-	// A reconnect that gets only 12 of them back.
-	m.lock.Lock()
-	m.activeNotifications = map[uint32]activeNotification{}
-	for i := 1; i <= 12; i++ {
-		m.activeNotifications[uint32(0x200+i)] = activeNotification{}
-		m.raiseRegistered() // as each commit lands
-	}
-	m.lock.Unlock()
-
-	want, have := m.subscriptionGap()
-	if want != 40 || have != 12 {
-		t.Fatalf("want=%d have=%d, expected 40/12 — a partial re-subscribe redefined what healthy means, "+
-			"so the 28 symbols that never came back leave no gap and nothing retries them", want, have)
-	}
-}
-
-// The baseline must still rise when the caller genuinely subscribes more.
-func TestRegisteredBaseline_RisesOnNewSubscriptions(t *testing.T) {
-	m := newGapManager(2)
-	m.lock.Lock()
-	m.activeNotifications[0x999] = activeNotification{}
-	m.raiseRegistered()
-	m.lock.Unlock()
-	if want, have := m.subscriptionGap(); want != 3 || have != 3 {
-		t.Errorf("want=%d have=%d, expected 3/3: a new subscribe must raise the baseline", want, have)
-	}
-}
-
-// Symbols the PLC no longer has must come off the baseline, or the gap check
-// chases handles that can never come back for the life of the session.
-func TestRegisteredBaseline_LowersWhenSymbolsAreGone(t *testing.T) {
-	m := newGapManager(40)
-	m.lock.Lock()
-	m.lowerRegisteredTo(35) // filterValidPending dropped 5
-	m.activeNotifications = map[uint32]activeNotification{}
-	for i := 1; i <= 35; i++ {
-		m.activeNotifications[uint32(0x300+i)] = activeNotification{}
-		m.raiseRegistered()
-	}
-	m.lock.Unlock()
-	if want, have := m.subscriptionGap(); want != 35 || have != 35 {
-		t.Errorf("want=%d have=%d, expected 35/35: symbols gone from the PLC must not leave a permanent gap", want, have)
-	}
-	// And lowering never raises.
-	m.lock.Lock()
-	m.lowerRegisteredTo(99)
-	m.lock.Unlock()
-	if want, _ := m.subscriptionGap(); want != 35 {
-		t.Errorf("lowerRegisteredTo raised the baseline to %d", want)
-	}
 }

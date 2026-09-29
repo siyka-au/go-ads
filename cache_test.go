@@ -297,3 +297,74 @@ func TestCache_OnDemandResolve_DuplicateHandleReleased(t *testing.T) {
 		t.Errorf("ReleaseHandle calls = %d, want at least 1 (duplicate-handle release path)", rel)
 	}
 }
+
+// TestZeroOldSymbolHandles validates R-CACHE-004 in full: loadSymbols
+// replaces the cache.symbols map, but callers (e.g. readMultipleSymbolsRetry)
+// may hold *symbol pointers into the OLD map. zeroOldSymbolHandles MUST
+// clear Handle, Value, Valid, ValueParsed, and LastUpdateTime so stale
+// data cannot leak post-reconnect.
+//
+// Validates: R-CACHE-004.
+func TestZeroOldSymbolHandles(t *testing.T) {
+	t0 := time.Now()
+	oldMap := map[string]*symtab.Symbol{
+		"a": {
+			Name:           "a",
+			Handle:         0x1234,
+			Value:          int16(42),
+			Valid:          true,
+			ValueParsed:    true,
+			LastUpdateTime: t0,
+		},
+		"b": {
+			Name:           "b",
+			Handle:         0x5678,
+			Value:          "hello",
+			Valid:          true,
+			ValueParsed:    true,
+			LastUpdateTime: t0,
+		},
+		"c": {Name: "c"}, // already zero across all fields
+	}
+	pa := oldMap["a"]
+	pb := oldMap["b"]
+	pc := oldMap["c"]
+
+	zeroOldSymbolHandles(oldMap)
+
+	for _, p := range []*symtab.Symbol{pa, pb, pc} {
+		if p.Handle != 0 {
+			t.Errorf("%s.Handle = 0x%X, want 0", p.Name, p.Handle)
+		}
+		if p.Value != nil {
+			t.Errorf("%s.Value = %#v, want nil", p.Name, p.Value)
+		}
+		if p.Valid {
+			t.Errorf("%s.Valid = true, want false", p.Name)
+		}
+		if p.ValueParsed {
+			t.Errorf("%s.ValueParsed = true, want false", p.Name)
+		}
+		if !p.LastUpdateTime.IsZero() {
+			t.Errorf("%s.LastUpdateTime = %v, want zero", p.Name, p.LastUpdateTime)
+		}
+	}
+}
+
+// Nil and empty input must not panic, and a nil map ENTRY must be skipped
+// rather than dereferenced. The nil/empty calls alone asserted nothing: ranging
+// a nil map is a language guarantee, so deleting the `if s != nil` guard in
+// zeroOldSymbolHandles left the old version green. The real entry also pins
+// "every field is cleared", which the old version missed too.
+//
+// Validates: R-CACHE-004 (defensive).
+func TestZeroOldSymbolHandles_NilSafe(t *testing.T) {
+	zeroOldSymbolHandles(nil)
+	zeroOldSymbolHandles(map[string]*symtab.Symbol{})
+
+	sym := &symtab.Symbol{Handle: 7, Value: int16(1), Valid: true, ValueParsed: true, LastUpdateTime: time.Now()}
+	zeroOldSymbolHandles(map[string]*symtab.Symbol{"gone": nil, "MAIN.x": sym})
+	if sym.Handle != 0 || sym.Value != nil || sym.Valid || sym.ValueParsed || !sym.LastUpdateTime.IsZero() {
+		t.Errorf("stale symbol not fully zeroed: %+v", sym)
+	}
+}

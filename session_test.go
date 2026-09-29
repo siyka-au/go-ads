@@ -1,23 +1,18 @@
 package ads
 
 import (
+	"bytes"
 	"context"
-	"encoding/binary"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/internal/adsconn"
-
-	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
 
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
@@ -25,77 +20,6 @@ import (
 
 	"github.com/siyka-au/go-ads/v3/ams"
 )
-
-// TestZeroOldSymbolHandles validates R-CACHE-004 in full: loadSymbols
-// replaces the cache.symbols map, but callers (e.g. readMultipleSymbolsRetry)
-// may hold *symbol pointers into the OLD map. zeroOldSymbolHandles MUST
-// clear Handle, Value, Valid, ValueParsed, and LastUpdateTime so stale
-// data cannot leak post-reconnect.
-//
-// Validates: R-CACHE-004.
-func TestZeroOldSymbolHandles(t *testing.T) {
-	t0 := time.Now()
-	oldMap := map[string]*symtab.Symbol{
-		"a": {
-			Name:           "a",
-			Handle:         0x1234,
-			Value:          int16(42),
-			Valid:          true,
-			ValueParsed:    true,
-			LastUpdateTime: t0,
-		},
-		"b": {
-			Name:           "b",
-			Handle:         0x5678,
-			Value:          "hello",
-			Valid:          true,
-			ValueParsed:    true,
-			LastUpdateTime: t0,
-		},
-		"c": {Name: "c"}, // already zero across all fields
-	}
-	pa := oldMap["a"]
-	pb := oldMap["b"]
-	pc := oldMap["c"]
-
-	zeroOldSymbolHandles(oldMap)
-
-	for _, p := range []*symtab.Symbol{pa, pb, pc} {
-		if p.Handle != 0 {
-			t.Errorf("%s.Handle = 0x%X, want 0", p.Name, p.Handle)
-		}
-		if p.Value != nil {
-			t.Errorf("%s.Value = %#v, want nil", p.Name, p.Value)
-		}
-		if p.Valid {
-			t.Errorf("%s.Valid = true, want false", p.Name)
-		}
-		if p.ValueParsed {
-			t.Errorf("%s.ValueParsed = true, want false", p.Name)
-		}
-		if !p.LastUpdateTime.IsZero() {
-			t.Errorf("%s.LastUpdateTime = %v, want zero", p.Name, p.LastUpdateTime)
-		}
-	}
-}
-
-// Nil and empty input must not panic, and a nil map ENTRY must be skipped
-// rather than dereferenced. The nil/empty calls alone asserted nothing: ranging
-// a nil map is a language guarantee, so deleting the `if s != nil` guard in
-// zeroOldSymbolHandles left the old version green. The real entry also pins
-// "every field is cleared", which the old version missed too.
-//
-// Validates: R-CACHE-004 (defensive).
-func TestZeroOldSymbolHandles_NilSafe(t *testing.T) {
-	zeroOldSymbolHandles(nil)
-	zeroOldSymbolHandles(map[string]*symtab.Symbol{})
-
-	sym := &symtab.Symbol{Handle: 7, Value: int16(1), Valid: true, ValueParsed: true, LastUpdateTime: time.Now()}
-	zeroOldSymbolHandles(map[string]*symtab.Symbol{"gone": nil, "MAIN.x": sym})
-	if sym.Handle != 0 || sym.Value != nil || sym.Valid || sym.ValueParsed || !sym.LastUpdateTime.IsZero() {
-		t.Errorf("stale symbol not fully zeroed: %+v", sym)
-	}
-}
 
 // TestNewSession_TotalConstruction asserts NewSession does no I/O, spawns
 // no goroutines, leaves Session.client nil, and applies defaults
@@ -287,8 +211,6 @@ func TestSession_ConnectAfterCloseRejected(t *testing.T) {
 	if c := sess.client.Load(); c != nil && c.Transport().Conn() != nil {
 		t.Error("Connect post-Close created a live transport")
 	}
-	// Sanity: at least one of these must be true.
-	_ = errors.New
 }
 
 // TestSession_OnDisconnectFiresOnceOnConcurrentTrigger spawns 50 goroutines
@@ -353,390 +275,6 @@ func TestSession_OnDisconnectFiresOnceOnConcurrentTrigger(t *testing.T) {
 	}
 }
 
-// TestSession_HandleStaleDetection_NoMatch validates that non-stale
-// ReturnCodes are a no-op for the dispatcher.
-//
-// Validates: R-CACHE-009 dispatch (negative path).
-func TestSession_HandleStaleDetection_NoMatch(t *testing.T) {
-	sess := &Session{
-		versionStrategy: SymbolVersionIgnore,
-		logger:          slog.Default(),
-	}
-	stale, reason := sess.handleStaleDetection(ams.ReturnCodeNoErrors)
-	if stale || reason != "" {
-		t.Errorf("got (%v, %q), want (false, \"\")", stale, reason)
-	}
-}
-
-// TestSession_HandleStaleDetection_Ignore_FiresCallback validates that the
-// Ignore strategy fires the callback in a goroutine and returns the
-// expected reason without altering Session state.
-//
-// Validates: R-CACHE-012 (Ignore) + R-NOT-016 (callback reason).
-func TestSession_HandleStaleDetection_Ignore_FiresCallback(t *testing.T) {
-	cbReason := make(chan Reason, 1)
-	sess := &Session{
-		versionStrategy: SymbolVersionIgnore,
-		versionCallback: func(r Reason) { cbReason <- r },
-		logger:          slog.Default(),
-	}
-
-	stale, reason := sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
-	if !stale || reason != ReasonSymbolVersionInvalid {
-		t.Errorf("got (%v, %q), want (true, %q)", stale, reason, ReasonSymbolVersionInvalid)
-	}
-	select {
-	case r := <-cbReason:
-		if r != ReasonSymbolVersionInvalid {
-			t.Errorf("callback got %q, want %q", r, ReasonSymbolVersionInvalid)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("callback not invoked")
-	}
-}
-
-// TestSession_HandleStaleDetection_NilCallbackOK validates R-SES-011: when
-// no callback is configured, the dispatcher must still classify the code
-// without panicking.
-//
-// Validates: R-SES-011 (nil-callback safety).
-func TestSession_HandleStaleDetection_NilCallbackOK(t *testing.T) {
-	sess := &Session{
-		versionStrategy: SymbolVersionIgnore,
-		versionCallback: nil,
-		logger:          slog.Default(),
-	}
-	stale, _ := sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
-	if !stale {
-		t.Error("expected stale=true")
-	}
-}
-
-// TestSession_HandleStaleDetection_Close exercises the SymbolVersionClose
-// strategy end-to-end against a scriptable PLC stub: handleStaleDetection
-// must spawn closeOnStaleDetection in a goroutine, which fires the
-// onDisconnect callback and drives the FSM to Closed.
-//
-// Validates: R-CACHE-011 (Close strategy terminates session +
-// surfaces lifecycle event to observers).
-func TestSession_HandleStaleDetection_Close(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	disconnected := make(chan struct{})
-	sess, _ := newWiredTestSession(t, srv,
-		WithSymbolVersionStrategy(SymbolVersionClose),
-		WithOnDisconnect(func() { close(disconnected) }),
-	)
-
-	// Trigger detection synthetically. Close strategy fires
-	// closeOnStaleDetection in a goroutine, so the test must wait for the
-	// disconnect signal rather than asserting immediately.
-	stale, reason := sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
-	if !stale || reason != ReasonSymbolVersionInvalid {
-		t.Errorf("handleStaleDetection = (%v, %q), want (true, %q)",
-			stale, reason, ReasonSymbolVersionInvalid)
-	}
-
-	select {
-	case <-disconnected:
-		// pass
-	case <-time.After(3 * time.Second):
-		t.Fatal("Close strategy did not fire onDisconnect within 3s")
-	}
-
-	// closeOnStaleDetection invokes sess.Close() in the same goroutine as
-	// the onDisconnect callback. Close() runs synchronously, so once the
-	// callback has fired and Close() returns, isClosed() must report true.
-	// Allow a short grace window for the goroutine to finish Close().
-	deadline := time.Now().Add(2 * time.Second)
-	for !sess.isClosed() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !sess.isClosed() {
-		t.Error("session not in Closed state after Close strategy")
-	}
-}
-
-// TestSession_TryRecordReloadAttempt_CapEnforced validates that
-// tryRecordReloadAttempt returns true until the per-window cap is reached
-// and false thereafter. Pure unit — no PLC stub needed.
-//
-// Validates: R-CACHE-013 (sliding-window cap).
-func TestSession_TryRecordReloadAttempt_CapEnforced(t *testing.T) {
-	sess := &Session{
-		maxReloadAttempts: 2,
-		reloadWindow:      10 * time.Second,
-	}
-	if !sess.tryRecordReloadAttempt() {
-		t.Error("attempt 1 must succeed")
-	}
-	if !sess.tryRecordReloadAttempt() {
-		t.Error("attempt 2 must succeed")
-	}
-	if sess.tryRecordReloadAttempt() {
-		t.Error("attempt 3 must be rejected (cap=2)")
-	}
-}
-
-// TestSession_TryRecordReloadAttempt_SlidingWindow validates that entries
-// older than reloadWindow are pruned, freeing capacity for new attempts.
-//
-// Validates: R-CACHE-013 (sliding window).
-func TestSession_TryRecordReloadAttempt_SlidingWindow(t *testing.T) {
-	sess := &Session{
-		maxReloadAttempts: 2,
-		reloadWindow:      50 * time.Millisecond,
-	}
-	if !sess.tryRecordReloadAttempt() {
-		t.Fatal("attempt 1")
-	}
-	if !sess.tryRecordReloadAttempt() {
-		t.Fatal("attempt 2")
-	}
-	// Wait for window to slide past.
-	time.Sleep(80 * time.Millisecond)
-	if !sess.tryRecordReloadAttempt() {
-		t.Error("attempt after window slide must succeed")
-	}
-}
-
-// TestSession_MarkAllHandlesStale validates the helper used by both the
-// Ignore branch of handleStaleDetection and the AutoReload pre-reload
-// window: every active notification handle gets a one-shot Stale flag
-// with the supplied reason.
-//
-// Validates: R-NOT-017 (markAllHandlesStale fans the flag across handles).
-func TestSession_MarkAllHandlesStale(t *testing.T) {
-	sess := newTestConnection()
-	defer sess.lifecycle.shutdown()
-	sess.notifications.activeNotifications[42] = activeNotification{Sym: &symtab.Symbol{}}
-	sess.notifications.activeNotifications[99] = activeNotification{Sym: &symtab.Symbol{}}
-
-	sess.markAllHandlesStale(ReasonReloadInProgress)
-
-	if r, ok := sess.consumeStaleFlag(42); !ok || r != ReasonReloadInProgress {
-		t.Errorf("h=42: reason=%q ok=%v, want (%q, true)", r, ok, ReasonReloadInProgress)
-	}
-	if r, ok := sess.consumeStaleFlag(99); !ok || r != ReasonReloadInProgress {
-		t.Errorf("h=99: reason=%q ok=%v, want (%q, true)", r, ok, ReasonReloadInProgress)
-	}
-	// Idempotency check: second consume returns ok=false.
-	if _, ok := sess.consumeStaleFlag(42); ok {
-		t.Error("flag should be one-shot — second consume should return ok=false")
-	}
-}
-
-// TestSession_MarkAllHandlesStale_NilNotificationsSafe validates the
-// nil-guard for unit-test bare Session{} construction.
-func TestSession_MarkAllHandlesStale_NilNotificationsSafe(t *testing.T) {
-	sess := &Session{logger: slog.Default()}
-	// Must not panic even without notifications manager.
-	sess.markAllHandlesStale(ReasonReloadInProgress)
-}
-
-// TestSession_AutoReload_BumpsEpoch validates that handleStaleDetection
-// under SymbolVersionAutoReload triggers autoReloadOnStaleDetection which
-// bumps the session epoch (R-CACHE-003) before attempting reload. The
-// scriptable server doesn't implement the full reload sequence — but
-// epoch is bumped BEFORE reload is attempted, so the test succeeds even
-// when LoadSymbols() ultimately errors out.
-//
-// Validates: R-CACHE-010 (AutoReload bumps epoch + invalidates handles).
-func TestSession_AutoReload_BumpsEpoch(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	sess, _ := newWiredTestSession(t, srv,
-		WithSymbolVersionStrategy(SymbolVersionAutoReload),
-		WithMaxSymbolVersionReloadAttempts(3),
-		WithSymbolVersionReloadWindow(60*time.Second),
-	)
-
-	preEpoch := sess.epoch()
-
-	sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
-
-	deadline := time.After(5 * time.Second)
-	for sess.epoch() == preEpoch {
-		select {
-		case <-deadline:
-			t.Fatal("AutoReload did not bump epoch within 5s")
-		default:
-			time.Sleep(50 * time.Millisecond)
-		}
-	}
-}
-
-// TestSession_AutoReload_CapExhaustion_FiresCallback validates that once
-// the sliding-window cap is exceeded, the callback fires with
-// ReasonReloadCapExhausted and the strategy degrades to Ignore semantics
-// (no further reload attempts within the window).
-//
-// Validates: R-CACHE-013 (cap exhaustion fires callback w/ specific reason).
-func TestSession_AutoReload_CapExhaustion_FiresCallback(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	exhausted := make(chan Reason, 4)
-	cb := func(reason Reason) {
-		if reason == ReasonReloadCapExhausted {
-			select {
-			case exhausted <- reason:
-			default:
-			}
-		}
-	}
-
-	sess, _ := newWiredTestSession(t, srv,
-		WithSymbolVersionStrategy(SymbolVersionAutoReload),
-		WithMaxSymbolVersionReloadAttempts(2),
-		WithSymbolVersionReloadWindow(10*time.Second),
-		WithOnSymbolVersionChanged(cb))
-
-	for i := 0; i < 4; i++ {
-		sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	select {
-	case <-exhausted:
-		// pass
-	case <-time.After(3 * time.Second):
-		t.Fatal("cap exhaustion did not fire callback w/ ReasonReloadCapExhausted within 3s")
-	}
-}
-
-// TestSession_AutoReload_SingleFlight validates that when N stale events fire
-// concurrently under SymbolVersionAutoReload, only one reload goroutine runs
-// (R-CACHE-010). The single-flight guard (reloadInProgress CAS) must prevent
-// duplicate concurrent bumpEpoch calls.
-func TestSession_AutoReload_SingleFlight(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	sess, _ := newWiredTestSession(t, srv,
-		WithSymbolVersionStrategy(SymbolVersionAutoReload),
-		WithMaxSymbolVersionReloadAttempts(10),
-		WithSymbolVersionReloadWindow(60*time.Second),
-	)
-
-	// Make the reload outlast the window in which the N detections arrive.
-	// Without this the guard is only exercised if the goroutines happen to
-	// overlap a reload that fails in microseconds against the stub — so the test
-	// passed or failed on scheduling luck rather than on the guard, and it did
-	// flake (~1 in 16). The delay makes the overlap a property of the test.
-	srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolUploadInfo), 300*time.Millisecond)
-
-	preEpoch := sess.epoch()
-
-	const N = 5
-	var wg sync.WaitGroup
-	for range N {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
-		}()
-	}
-	wg.Wait()
-
-	// Give goroutines time to complete the reload path.
-	deadline := time.After(3 * time.Second)
-	for {
-		select {
-		case <-deadline:
-			t.Fatal("epoch never bumped within 3s")
-		default:
-		}
-		if sess.epoch() > preEpoch {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// Allow the one in-flight goroutine to complete before sampling epoch.
-	time.Sleep(200 * time.Millisecond)
-
-	got := int(sess.epoch() - preEpoch)
-	if got > 1 {
-		t.Errorf("epoch bumped %d times, want 1 (single-flight guard failed)", got)
-	}
-}
-
-// TestSession_ReadFromSymbol_LengthMismatchTriggersDetection validates the
-// supplementary R-CACHE-009 detection path: when the PLC returns a payload
-// whose length disagrees with the cached symbol.Length (e.g. operator
-// toggled nProbeA INT↔LREAL via TC3 online change with ServerCycle), the
-// PLC does NOT surface a ReturnCode — the parse method would fail with
-// "symbol.Length N exceeds data buffer size M" and bypass detection.
-// readFromSymbolRetry MUST detect the Length mismatch BEFORE parse, fire
-// handleStaleDetection (Ignore strategy here so callback fires), and
-// return a ReturnCode-typed error (ReturnCodeDeviceInvalidSize / 0x705)
-// that callers can match via errors.As.
-//
-// Closes hardware test gap from TestSymbolVersionClose_OnDetection where
-// TC3 type-change only manifests as Go-side parse error.
-//
-// Validates: R-CACHE-009 (extends detection set with Length-mismatch
-// signal) + R-NOT-016 (ReasonInvalidSize wired through callback).
-func TestSession_ReadFromSymbol_LengthMismatchTriggersDetection(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	const fakeHandle uint32 = 0xCAFEBABE
-	// PLC returns 2 bytes (post-online-change INT size) on Read by handle.
-	// Cache will hold Length=8 (pre-change LREAL) — the mismatch is the
-	// detection trigger.
-	srv.OnRead(ams.GroupSymbolValueByHandle, func(_, offset, length uint32) (ams.ReturnCode, []byte) {
-		if offset != fakeHandle {
-			return ams.ReturnCodeDeviceInvalidParam, nil
-		}
-		_ = length // requested length is 8 (cached LREAL); we deliberately ship 2.
-		return ams.ReturnCodeNoErrors, []byte{0x05, 0x00}
-	})
-
-	cbReason := make(chan Reason, 1)
-	sess, _ := newWiredTestSession(t, srv,
-		WithSymbolVersionStrategy(SymbolVersionIgnore),
-		WithOnSymbolVersionChanged(func(r Reason) { cbReason <- r }),
-	)
-
-	// Pre-seed the cache with a stale LREAL (Length=8) symbol carrying an
-	// already-resolved handle so getSymbol returns it without hitting the
-	// network. This emulates the post-online-change state where the cache
-	// still holds the pre-change type metadata.
-	const symName = "MAIN_DP1.nProbeA"
-	sess.cache.symbols[symtab.Key(symName)] = &symtab.Symbol{
-		FullName: symName,
-		Name:     symName,
-		Handle:   fakeHandle,
-		Length:   8,
-		DataType: "LREAL",
-	}
-
-	_, err := sess.ReadValue(context.Background(), symName)
-	if err == nil {
-		t.Fatal("expected error from ReadValue on length mismatch, got nil")
-	}
-	var rc ams.ReturnCode
-	if !errors.As(err, &rc) {
-		t.Fatalf("error is not ReturnCode-typed: %v", err)
-	}
-	if rc != ams.ReturnCodeDeviceInvalidSize {
-		t.Errorf("rc = 0x%X, want 0x%X (ReturnCodeDeviceInvalidSize)", uint32(rc), uint32(ams.ReturnCodeDeviceInvalidSize))
-	}
-
-	select {
-	case r := <-cbReason:
-		if r != ReasonInvalidSize {
-			t.Errorf("callback reason = %q, want %q", r, ReasonInvalidSize)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("onSymbolVersionChanged callback did not fire within 2s on Length mismatch")
-	}
-}
-
 // TestSession_IsClosed_FalseBeforeClose validates that IsClosed reports
 // false on a freshly-constructed session that has not transitioned into
 // the terminal Closed state.
@@ -765,153 +303,6 @@ func TestSession_IsClosed_TrueAfterClose(t *testing.T) {
 	}
 	if !sess.IsClosed() {
 		t.Error("IsClosed=false after transition to Closed, want true")
-	}
-}
-
-// TestReleasePLCResources_NotificationCleanup exercises the notification
-// cleanup branch of releasePLCResources directly (rather than via Close,
-// which blocks on the Client waitGroup in test harness setups where the
-// Client ctx is independent of sess.lifecycle.ctx). The helper is the
-// shared entry point used by both Close() and the Reconnect-exhaustion
-// path; testing it directly covers both call sites.
-//
-// Validates: PLC-side notification delete fires for every staged handle.
-func TestReleasePLCResources_NotificationCleanup(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	const stagedHandle uint32 = 0xC0DE
-	var deletes atomic.Int32
-	// releasePLCResources calls bestEffortDeleteNotifications which prefers
-	// SumDeleteDeviceNotification; register that handler so the sum path
-	// completes instead of falling back. Count handles passed through.
-	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		nItems := len(req) / 4
-		codes := make([]ams.ReturnCode, nItems)
-		for i := 0; i < nItems; i++ {
-			h := binary.LittleEndian.Uint32(req[i*4:])
-			if h == stagedHandle {
-				deletes.Add(1)
-			}
-			codes[i] = ams.ReturnCodeNoErrors
-		}
-		return fakeplc.SumDeleteNotifPayload(codes)
-	})
-
-	sess, _ := newWiredTestSession(t, srv)
-	sess.notifications.lock.Lock()
-	sess.notifications.activeNotifications[stagedHandle] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.x"}}
-	sess.notifications.lock.Unlock()
-
-	sess.releasePLCResources(false)
-
-	if got := deletes.Load(); got < 1 {
-		t.Errorf("staged handle delivered to SumDelete = %d, want >= 1 (must release PLC subscriptions)", got)
-	}
-}
-
-// TestReleasePLCResources_SymbolHandleRelease_SkippedWhenDisconnected pins
-// the wasDisconnected=true short-circuit: when the transport is already
-// dead, the helper must NOT issue PLC Write commands for handle release.
-// Issuing them against a dead socket would block Close behind requestTimeout
-// for every staged handle.
-//
-// Validates: wasDisconnected gate on symbol-handle release path.
-func TestReleasePLCResources_SymbolHandleRelease_SkippedWhenDisconnected(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	var writes atomic.Int32
-	srv.OnWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
-		writes.Add(1)
-		return ams.ReturnCodeNoErrors
-	})
-
-	sess, _ := newWiredTestSession(t, srv)
-	sess.cache.lock.Lock()
-	sess.cache.symbols[symtab.Key("MAIN.x")] = &symtab.Symbol{
-		FullName: "MAIN.x", Name: "MAIN.x", Handle: 0x12345678,
-	}
-	sess.cache.lock.Unlock()
-
-	sess.releasePLCResources(true) // wasDisconnected=true
-
-	if got := writes.Load(); got != 0 {
-		t.Errorf("GroupSymbolReleaseHandle writes = %d, want 0 (must skip when disconnected)", got)
-	}
-}
-
-// TestReleasePLCResources_SymbolHandleRelease_FiredWhenConnected: with the
-// transport alive, the helper must issue ReleaseHandle for every cached
-// symbol with a non-zero Handle.
-func TestReleasePLCResources_SymbolHandleRelease_FiredWhenConnected(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	const stagedHandle uint32 = 0xABCD0001
-	var writes atomic.Int32
-	srv.OnWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
-		writes.Add(1)
-		return ams.ReturnCodeNoErrors
-	})
-
-	sess, _ := newWiredTestSession(t, srv)
-	sess.cache.lock.Lock()
-	sess.cache.symbols[symtab.Key("MAIN.x")] = &symtab.Symbol{
-		FullName: "MAIN.x", Name: "MAIN.x", Handle: stagedHandle,
-	}
-	sess.cache.lock.Unlock()
-
-	sess.releasePLCResources(false) // wasDisconnected=false
-
-	if got := writes.Load(); got < 1 {
-		t.Errorf("ReleaseHandle writes = %d, want >= 1 (alive transport must release)", got)
-	}
-}
-
-// TestHandleStaleDetection_Ignore_FiresCallbackPerTrigger pins the contract
-// that under SymbolVersionIgnore, N concurrent stale-cache detections fire N
-// versionCallback invocations. The Ignore strategy intentionally does NOT
-// gate the callback behind reloadInProgress CAS (which is AutoReload-only) —
-// callers using Ignore typically install their own dedup logic and rely on
-// every detection being observable.
-//
-// Companion to TestSession_AutoReload_SingleFlight, which pins the inverse
-// contract for AutoReload (1 callback per N triggers).
-func TestHandleStaleDetection_Ignore_FiresCallbackPerTrigger(t *testing.T) {
-	sess := newTestConnection()
-	defer sess.lifecycle.shutdown()
-	sess.versionStrategy = SymbolVersionIgnore
-
-	var callbacks atomic.Int32
-	sess.versionCallback = func(_ Reason) {
-		callbacks.Add(1)
-	}
-
-	const N = 25
-	var wg sync.WaitGroup
-	wg.Add(N)
-	for i := 0; i < N; i++ {
-		go func() {
-			defer wg.Done()
-			sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
-		}()
-	}
-	wg.Wait()
-
-	// versionCallback is launched in a goroutine; give them all room to run.
-	// Each callback is trivial (single atomic.Add), so a short bounded wait
-	// is enough — but use a deadline so a regression that drops callbacks
-	// fails reliably instead of timing out the whole test.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if callbacks.Load() == int32(N) {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := callbacks.Load(); got != int32(N) {
-		t.Errorf("Ignore strategy: %d callbacks for %d triggers, want %d (every detection must be observable)", got, N, N)
 	}
 }
 
@@ -972,223 +363,44 @@ func TestNewSession_WithLocalAMS_ZeroPort_KeepsRandomDefault(t *testing.T) {
 	}
 }
 
-// TestAutoReload_DeletesOldHandlesBeforeResubscribe verifies Fix 2 of the
-// v2.2.1 PLC-flood patch: reloadSymbolsAndResubscribe must issue a
-// SumDeleteDeviceNotification for every pre-reload handle BEFORE attempting
-// to re-subscribe, so the PLC's notification handle table doesn't accumulate
-// orphan entries across online-change cycles.
+// F-25: secret type must redact via fmt.Sprintf "%v", "%+v", "%s" — all paths
+// that call String().
 //
-// We pre-populate activeNotifications with two synthetic handles, intercept
-// the SumDelete RPC via the scriptable server, then drive
-// reloadSymbolsAndResubscribe. LoadSymbols is expected to fail (no upload
-// handler registered) — we only validate the pre-delete step ran and that
-// activeNotifications was wiped under the same lock.
-func TestAutoReload_DeletesOldHandlesBeforeResubscribe(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
+// Validates: R-LOCK-004.
+func TestSecret_StringRedacted(t *testing.T) {
+	s := secret("supersecret123")
 
-	var mu sync.Mutex
-	var deletedHandles []uint32
-	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		n := len(req) / 4
-		mu.Lock()
-		for i := 0; i < n; i++ {
-			deletedHandles = append(deletedHandles, binary.LittleEndian.Uint32(req[i*4:]))
-		}
-		mu.Unlock()
-		codes := make([]ams.ReturnCode, n)
-		for i := range codes {
-			codes[i] = ams.ReturnCodeNoErrors
-		}
-		return fakeplc.SumDeleteNotifPayload(codes)
-	})
-
-	sess, _ := newWiredTestSession(t, srv)
-	sess.notifications.lock.Lock()
-	sess.notifications.activeNotifications[0xA1A1] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.x"}, Ch: nil}
-	sess.notifications.activeNotifications[0xB2B2] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.y"}, Ch: nil}
-	sess.notifications.lock.Unlock()
-
-	// LoadSymbols is expected to fail (no upload-info handler registered).
-	// The pre-delete step runs unconditionally before LoadSymbols, so we
-	// don't care about the returned error.
-	_ = sess.reloadSymbolsAndResubscribe()
-
-	mu.Lock()
-	got := append([]uint32{}, deletedHandles...)
-	mu.Unlock()
-
-	if len(got) != 2 {
-		t.Fatalf("Delete RPC received %d handles, want 2: got=%v", len(got), got)
+	if got := s.String(); got != "[REDACTED]" {
+		t.Errorf("s.String() = %q, want \"[REDACTED]\"", got)
 	}
-	seen := map[uint32]bool{0xA1A1: false, 0xB2B2: false}
-	for _, h := range got {
-		if _, ok := seen[h]; ok {
-			seen[h] = true
-		}
+	if got := fmt.Sprintf("%v", s); got != "[REDACTED]" {
+		t.Errorf("fmt.Sprintf(%%v) = %q, want \"[REDACTED]\"", got)
 	}
-	for h, found := range seen {
-		if !found {
-			t.Errorf("handle 0x%X not in Delete RPC payload", h)
-		}
-	}
+	// %s on a Stringer routes through String() — covered by Go fmt semantics;
+	// %v above already exercises that path. Skipping a separate %s assertion
+	// avoids staticcheck S1025 noise.
 
-	sess.notifications.lock.Lock()
-	postLen := len(sess.notifications.activeNotifications)
-	sess.notifications.lock.Unlock()
-	if postLen != 0 {
-		t.Errorf("activeNotifications len = %d after reload, want 0 (must be wiped under lock with snapshot)", postLen)
+	// Cast to string still gives raw value (intentional — for use at boundary).
+	if got := string(s); got != "supersecret123" {
+		t.Errorf("string(s) = %q, want raw value", got)
 	}
 }
 
-// TestAutoReload_NoOldHandles_SkipsDelete validates the empty-snapshot path:
-// when reloadSymbolsAndResubscribe runs with no pre-existing handles, no
-// SumDelete RPC must fire (avoids a useless wire round-trip on first reload).
-func TestAutoReload_NoOldHandles_SkipsDelete(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
-
-	var deleteCalls atomic.Int32
-	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
-		deleteCalls.Add(1)
-		return fakeplc.SumDeleteNotifPayload([]ams.ReturnCode{ams.ReturnCodeNoErrors})
-	})
-
-	sess, _ := newWiredTestSession(t, srv)
-	// activeNotifications is empty by construction.
-	_ = sess.reloadSymbolsAndResubscribe()
-
-	if got := deleteCalls.Load(); got != 0 {
-		t.Errorf("SumDelete called %d times with empty active set, want 0", got)
-	}
-}
-
-// TestIsProbeRetryable_TransportLevel verifies the predicate identifies
-// transport-level probe errors (RST/EOF/timeout/closed) as retryable, so
-// ensureRouteOnConnect's redial-retry path engages on transient PLC slot
-// conflicts instead of spuriously firing AddRoute.
-func TestIsProbeRetryable_TransportLevel(t *testing.T) {
-	connResetOp := &net.OpError{
-		Op:  "read",
-		Net: "tcp",
-		Err: &net.OpError{Err: syscall.ECONNRESET},
-	}
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil → not retryable", nil, false},
-		{"ErrTransportClosed", ErrTransportClosed, true},
-		{"wrapped ErrTransportClosed", fmt.Errorf("send: %w", ErrTransportClosed), true},
-		{"bare io.EOF", io.EOF, true},
-		{"wrapped io.EOF", fmt.Errorf("recv: %w", io.EOF), true},
-		{"context.DeadlineExceeded → not retryable (caller-ctx)", context.DeadlineExceeded, false},
-		{"wrapped DeadlineExceeded → not retryable", fmt.Errorf("probe: %w", context.DeadlineExceeded), false},
-		{"bare ECONNRESET", syscall.ECONNRESET, true},
-		{"wrapped net.OpError with ECONNRESET", fmt.Errorf("listen: %w", connResetOp), true},
-		{"unrelated error → not retryable", errors.New("ads: ReturnCodeRouterNotInitialized"), false},
-		{"context.Canceled → not retryable", context.Canceled, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isProbeRetryable(tc.err); got != tc.want {
-				t.Errorf("isProbeRetryable(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle pins the TC3
-// runtime-restart case end to end.
+// F-25: slog.LogValue must return [REDACTED], not the raw value.
 //
-// Measured on hardware: after a TC3 restart the PLC refuses a cached symbol
-// handle with 0x710 (symbol not found) and — unlike TC2, which answers 0x711 —
-// does NOT bump the symbol version. So nothing version-driven can save the
-// session: the ONLY signal is the 0x710 on the read itself, and if that does not
-// invalidate the handle, every later ReadFromSymbol repeats the same doomed read
-// against the same dead handle forever.
-//
-// The wiring under test: read-by-handle gets 0x710 → handleStaleDetection →
-// AutoReload zeroes the cached handles → the next ReadFromSymbol sees Handle==0
-// and re-resolves via GetHandleByName. The symbol upload is refused on purpose,
-// so the reload's LoadSymbols FAILS: recovery must come from the on-demand
-// re-resolve, not from a reload that happened to succeed.
-func TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle(t *testing.T) {
-	srv := fakeplc.StartPLC(t)
-	defer srv.Stop()
+// Validates: R-LOCK-004.
+func TestSecret_LogValueRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-	const (
-		staleHandle uint32 = 0x1111
-		freshHandle uint32 = 0x2222
-	)
-	var handleLookups, staleReads atomic.Int32
-	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
-		handleLookups.Add(1)
-		return fakeplc.HandlePayload(freshHandle)
-	})
-	srv.OnRead(ams.GroupSymbolValueByHandle, func(_, offset, _ uint32) (ams.ReturnCode, []byte) {
-		if offset == staleHandle {
-			staleReads.Add(1)
-			return ams.ReturnCodeDeviceSymbolNoFound, nil
-		}
-		return ams.ReturnCodeNoErrors, []byte{7, 0}
-	})
-	// A TC3 restart does not bump the symbol version, so the version must never be
-	// what rescues this. Refuse the upload too, so the reload cannot rescue it either.
-	srv.OnRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
-		return ams.ReturnCodeDeviceError, nil
-	})
+	s := secret("supersecret123")
+	logger.Info("test", "password", s)
 
-	sess, _ := newWiredTestSession(t, srv)
-	// Mirrors NewSession's defaults (session.go): the helper leaves them zero, and
-	// maxReloadAttempts=0 means the cap is exhausted on the first attempt, which
-	// would skip the invalidation for a reason that never happens in production.
-	sess.maxReloadAttempts = 3
-	sess.reloadWindow = 60 * time.Second
-
-	sym := &symtab.Symbol{
-		Name: "MAIN.a", FullName: "MAIN.a", DataType: "INT",
-		Length: 2, Handle: staleHandle, Value: int16(1), Valid: true,
+	out := buf.String()
+	if strings.Contains(out, "supersecret123") {
+		t.Errorf("log output leaked raw secret: %s", out)
 	}
-	sess.cache.lock.Lock()
-	sess.cache.symbols[symtab.Key("MAIN.a")] = sym
-	sess.cache.lock.Unlock()
-
-	ctx := context.Background()
-	if _, err := sess.ReadValue(ctx, "MAIN.a"); err == nil {
-		t.Fatal("read against the stale handle succeeded; the stub was supposed to refuse it with 0x710")
-	}
-	if got := staleReads.Load(); got != 1 {
-		t.Fatalf("reads against the stale handle = %d, want 1", got)
-	}
-
-	// The invalidation is asynchronous (handleStaleDetection spawns the reload), so
-	// poll — but bounded, and short: this must never lean on the package timeout.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		sess.cache.lock.Lock()
-		h := sym.Handle
-		sess.cache.lock.Unlock()
-		if h == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("cached handle is still 0x%X after a 0x710 read: nothing invalidates it, "+
-				"and since TC3 does not bump the symbol version every later read repeats the same dead handle", h)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// And the recovery has to be real: the next read re-resolves and succeeds.
-	got, err := sess.ReadValue(ctx, "MAIN.a")
-	if err != nil {
-		t.Fatalf("read after invalidation: %v", err)
-	}
-	if got != int16(7) {
-		t.Errorf("value after re-resolve = %#v, want int16(7)", got)
-	}
-	if n := handleLookups.Load(); n != 1 {
-		t.Errorf("GetHandleByName calls = %d, want 1 (the handle must be re-resolved exactly once)", n)
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("log output missing [REDACTED]: %s", out)
 	}
 }

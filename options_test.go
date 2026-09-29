@@ -138,28 +138,6 @@ func TestWithSkipRouteRegistration(t *testing.T) {
 	}
 }
 
-func TestRouteManager_ShouldSkip(t *testing.T) {
-	tests := []struct {
-		name             string
-		routeName        string
-		skipRegistration bool
-		want             bool
-	}{
-		{"empty name → skip", "", false, true},
-		{"name set, no skip → register", "myroute", false, false},
-		{"name set + explicit skip → skip", "myroute", true, true},
-		{"empty name + explicit skip → skip", "", true, true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &routeManager{name: tc.routeName, skipRegistration: tc.skipRegistration}
-			if got := r.shouldSkip(); got != tc.want {
-				t.Errorf("shouldSkip() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestWithLocalBindIP(t *testing.T) {
 	t.Run("valid IPv4", func(t *testing.T) {
 		s := &Session{}
@@ -208,4 +186,23 @@ func TestWithLocalBindIP(t *testing.T) {
 			t.Errorf("invalid IP should leave localBindIP nil, got %v", s.localBindIP)
 		}
 	})
+}
+
+// TestWithoutSumCommands_ReachesEveryConn: the option has to apply to the Conn
+// wired on each (re)dial, not only the first.
+func TestWithoutSumCommands_ReachesEveryConn(t *testing.T) {
+	srv := servingPLC(t)
+	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
+	WithoutSumCommands()(sess)
+	for i := 0; i < 2; i++ {
+		if err := sess.dialAndStart(); err != nil {
+			t.Fatalf("dialAndStart: %v", err)
+		}
+		c := sess.client.Load()
+		if c.Capabilities().SumWriteStateLoad() != 2 {
+			t.Fatalf("dial %d: sum write not disabled", i)
+		}
+		sess.tearDownAndReset()
+	}
+	sess.markClosed()
 }

@@ -7,91 +7,7 @@ import (
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
-	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
 )
-
-// servingPLC answers sum and single notification registration with fresh
-// handles, and deletes.
-func servingPLC(t *testing.T) *fakeplc.PLC {
-	t.Helper()
-	srv := fakeplc.StartPLC(t)
-	t.Cleanup(srv.Stop)
-	next := uint32(0x2000)
-	srv.OnWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
-		items := make([]fakeplc.SumNotifResponse, len(req)/40)
-		for i := range items {
-			next++
-			items[i] = fakeplc.SumNotifResponse{Error: ams.ReturnCodeNoErrors, Handle: next}
-		}
-		return fakeplc.SumAddNotifPayload(items)
-	})
-	srv.OnAddDeviceNotification(func(fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
-		next++
-		return fakeplc.AddNotifResponse{Handle: next}
-	})
-	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		return fakeplc.SumDeleteNotifPayload(make([]ams.ReturnCode, len(req)/4))
-	})
-	srv.OnDeleteDeviceNotification(func(uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
-	return srv
-}
-
-// TestSubscribeAll_ResultsCarryMetadataAndErr: a consumer labels its values from
-// the result — no follow-up lookup per symbol — and checks one Err instead of
-// pairing Skipped with a ReturnCode.
-func TestSubscribeAll_ResultsCarryMetadataAndErr(t *testing.T) {
-	srv := servingPLC(t)
-	sess, c := newWiredTestSession(t, srv)
-	c.SetNotificationHandler(sess.handleNotification)
-	preSeedTypedSymbol(sess, "MAIN.a", 0x3001)
-
-	ch := make(chan *Update, 8)
-	results, err := sess.SubscribeAll(context.Background(), []NotificationConfig{
-		{Symbol: "MAIN.a", Mode: ams.TransModeServerOnChange},
-		{Symbol: "MAIN.a", Mode: ams.TransModeServerOnChange}, // duplicate within the batch
-	}, ch)
-	if err != nil {
-		t.Fatalf("SubscribeAll: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2", len(results))
-	}
-	if results[0].Err != nil || results[0].Handle == 0 {
-		t.Errorf("first entry = %+v, want a live handle", results[0])
-	}
-	if results[0].Symbol.DataType != "INT" || results[0].Symbol.Length != 2 {
-		t.Errorf("first entry's metadata = %q/%d, want INT/2", results[0].Symbol.DataType, results[0].Symbol.Length)
-	}
-	if !errors.Is(results[1].Err, ErrNotificationDuplicate) || results[1].Handle != 0 {
-		t.Errorf("duplicate entry = %+v, want ErrNotificationDuplicate and no handle", results[1])
-	}
-}
-
-// TestUpdate_CarriesTheSubscribedSpelling: TC2 upper-cases names; the Update
-// must come back under the name the caller subscribed with.
-func TestUpdate_CarriesTheSubscribedSpelling(t *testing.T) {
-	srv := servingPLC(t)
-	sess, c := newWiredTestSession(t, srv)
-	c.SetNotificationHandler(sess.handleNotification)
-	preSeedTypedSymbol(sess, "MAIN.COUNTER", 0x3001) // the PLC's casing
-
-	ch := make(chan *Update, 8)
-	results, err := sess.SubscribeAll(context.Background(), []NotificationConfig{
-		{Symbol: "Main.counter", Mode: ams.TransModeServerOnChange},
-	}, ch)
-	if err != nil || results[0].Err != nil {
-		t.Fatalf("SubscribeAll: %v / %v", err, results[0].Err)
-	}
-	sess.handleNotification(context.Background(), results[0].Handle, 0, intSample(7))
-	select {
-	case u := <-ch:
-		if u.Symbol != "Main.counter" {
-			t.Errorf("Update.Symbol = %q, want the subscribed spelling Main.counter", u.Symbol)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("no update delivered")
-	}
-}
 
 // TestSubscriptions_ReportsIntentAndRegistration: the declared subscriptions,
 // with the handle each is registered under, and no internal heartbeat.
@@ -226,23 +142,4 @@ func TestClient_UsesTheSessionConnection(t *testing.T) {
 	if _, err := cl.SymbolVersion(context.Background()); !errors.Is(err, ErrTransportClosed) {
 		t.Errorf("SymbolVersion while disconnected = %v, want ErrTransportClosed", err)
 	}
-}
-
-// TestWithoutSumCommands_ReachesEveryConn: the option has to apply to the Conn
-// wired on each (re)dial, not only the first.
-func TestWithoutSumCommands_ReachesEveryConn(t *testing.T) {
-	srv := servingPLC(t)
-	sess := newDialableTestSession(t, srv.Host, srv.Port, 0)
-	WithoutSumCommands()(sess)
-	for i := 0; i < 2; i++ {
-		if err := sess.dialAndStart(); err != nil {
-			t.Fatalf("dialAndStart: %v", err)
-		}
-		c := sess.client.Load()
-		if c.Capabilities().SumWriteStateLoad() != 2 {
-			t.Fatalf("dial %d: sum write not disabled", i)
-		}
-		sess.tearDownAndReset()
-	}
-	sess.markClosed()
 }

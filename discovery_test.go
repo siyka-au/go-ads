@@ -121,3 +121,17 @@ func TestGetSymbol_TraceLogDoesNotRaceNotificationWriter(t *testing.T) {
 		t.Error("no notification sample was ever parsed, so the writer half never ran")
 	}
 }
+
+// TestListSymbols_ErrorBeforeLoadSymbols asserts Symbols returns an
+// error when full discovery has not been performed (cache.symbolsFullyLoaded
+// is false).
+//
+// Validates: R-VIEW-005 (Symbols requires full discovery).
+func TestListSymbols_ErrorBeforeLoadSymbols(t *testing.T) {
+	sess := newViewTestSession()
+	// cache.symbolsFullyLoaded is false; Symbols must fail.
+	_, err := sess.Symbols()
+	if err == nil {
+		t.Error("Symbols on un-discovered cache: err = nil, want error")
+	}
+}

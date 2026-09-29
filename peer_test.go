@@ -615,3 +615,31 @@ func TestPeerListener_StopDoesNotHangWhenRacingStart(t *testing.T) {
 		sess.stopPeerListener() // idempotent, and cleans up if start won the race
 	}
 }
+
+// TestPeerListener_NotBoundAfterStop: once teardown has stopped the listener, a
+// Connect that was on its way to binding must not.
+//
+// stopPeerListener read peerLn, unlocked, then waited on an empty peerWG. A Connect
+// descheduled just before its bind would then bind AFTER Close returned, leaving
+// 48898 and an accept loop held for the life of the process — in a session the
+// caller believes is fully closed. The accept loop's own isClosed() escape only runs
+// once a connection arrives, which on a dead PLC never happens.
+func TestPeerListener_NotBoundAfterStop(t *testing.T) {
+	sess := &Session{
+		logger:    slog.Default(),
+		lifecycle: &sessionLifecycle{closedCh: make(chan struct{})},
+	}
+	sess.peerListenPort = freeLocalPort(t)
+
+	sess.stopPeerListener()
+	if err := sess.startPeerListener(); err == nil {
+		sess.peerMu.Lock()
+		ln := sess.peerLn
+		sess.peerMu.Unlock()
+		if ln != nil {
+			_ = ln.Close()
+		}
+		t.Error("bound the inbound AMS port after the listener had been stopped: a Connect racing Close can leave the port and " +
+			"an accept loop held for the process lifetime")
+	}
+}
