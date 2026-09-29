@@ -4,6 +4,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // transport owns the TCP socket, per-invoke request multiplexing, and the
@@ -66,24 +67,15 @@ func (r amsReply) payload() ([]byte, error) {
 	return r.data, nil
 }
 
-// AMSError is a rejection from the AMS router, not a verdict about any ADS item:
-// the request never reached a service that could answer. A system in CONFIG
-// answers 0x06 for every request to a runtime port. Branch with errors.Is against
-// the ReturnCode constants, or read Code off the typed value.
-type AMSError struct {
-	Code ReturnCode
-}
-
-func (e AMSError) Error() string { return "AMS router: " + e.Code.String() }
-
-// Is makes errors.Is(err, ReturnCodeX) match the router's code without making a
-// router rejection indistinguishable from an ADS device verdict.
-//
-// There is deliberately no Unwrap: errors.As traverses it, and every abort guard
-// in this package asks errors.As(err, &ReturnCode) to mean "the device answered
-// about my item". Unwrapping to Code would put the router back inside that
-// answer — which is the bug this type exists to close, so do not add one.
-func (e AMSError) Is(target error) bool {
-	rc, ok := target.(ReturnCode)
-	return ok && rc == e.Code
+// configureKeepAlive enables aggressive TCP keepalive on a connection.
+// With Idle=3s, Interval=2s, Count=5: connection declared dead after ~13s of no response.
+func configureKeepAlive(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetKeepAliveConfig(net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     3 * time.Second,
+			Interval: 2 * time.Second,
+			Count:    5,
+		})
+	}
 }

@@ -164,12 +164,6 @@ func (c *Client) WriteRead(ctx context.Context, group uint32, offset uint32, rea
 	return respBuff.Next(int(response.Length)), nil
 }
 
-// States holds the ADS and device state returned by ReadState.
-type States struct {
-	ADSState    ADSState
-	DeviceState uint16
-}
-
 // ReadState issues ADS ReadState (cmd 4) and returns the PLC's ADS+device state.
 func (c *Client) ReadState(ctx context.Context) (response States, err error) {
 	return c.readStateOn(ctx, c.target)
@@ -211,16 +205,6 @@ func (c *Client) readStateOn(ctx context.Context, target AMSAddress) (response S
 	return stateResponse.States, nil
 }
 
-// DeviceInfo is the PLC's self-reported identity (returned by ReadDeviceInfo).
-// DeviceName is a 16-byte null-padded ASCII field; trim at the first null byte
-// for display.
-type DeviceInfo struct {
-	Major      uint8
-	Minor      uint8
-	Version    uint16
-	DeviceName [16]byte
-}
-
 // ReadDeviceInfo issues ADS ReadDeviceInfo (cmd 1).
 func (c *Client) ReadDeviceInfo(ctx context.Context) (response DeviceInfo, err error) {
 	// Try to send the request
@@ -248,4 +232,13 @@ func (c *Client) ReadDeviceInfo(ctx context.Context) (response DeviceInfo, err e
 	}
 
 	return deviceInfoResponse.DeviceInfo, nil
+}
+
+// ReleaseHandle releases a symbol handle previously acquired via
+// GetHandleByName. Wraps Write to GroupSymbolReleaseHandle so the
+// Beckhoff-equivalent surface includes a symmetric release primitive.
+func (c *Client) ReleaseHandle(ctx context.Context, handle uint32) error {
+	handleBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(handleBytes, handle)
+	return c.Write(ctx, uint32(GroupSymbolReleaseHandle), 0, handleBytes)
 }

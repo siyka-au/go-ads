@@ -69,13 +69,6 @@ func (sess *Session) writeValueRetry(ctx context.Context, symbolName string, val
 	return nil
 }
 
-// invalidate drops the cached value so the next read goes to the PLC. Caller
-// holds cache.lock.
-func (s *symbol) invalidate() {
-	s.Value = nil
-	s.ValueParsed = false
-}
-
 // ReadValue reads a PLC symbol by name (handle resolved on demand and cached)
 // and returns its value as a Go type: see the table in value.go. A struct or
 // array needs the datatype table (LoadSymbols) and comes back as

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"time"
 )
 
 // Batched ADS sum commands: SumRead, SumWrite, SumAddDeviceNotification,
@@ -79,19 +78,6 @@ func executeSumCommand[Req any, Res any](ctx context.Context, c *Client, spec su
 		return nil, fmt.Errorf("sum command (group 0x%X) response too short: got %d, expected at least %d", uint32(spec.group), len(resp), n*spec.itemReadSize)
 	}
 	return spec.decode(resp, n)
-}
-
-// SumReadRequest represents a single read request within a sum/batch read.
-type SumReadRequest struct {
-	Group  uint32
-	Offset uint32
-	Length uint32
-}
-
-// SumReadResult represents the result of a single read within a sum/batch read.
-type SumReadResult struct {
-	Error ReturnCode
-	Data  []byte
 }
 
 // SumRead performs a batch read of multiple index group/offset/length combinations
@@ -294,18 +280,6 @@ func (c *Client) sumReadFallback(ctx context.Context, requests []SumReadRequest)
 	return results, nil
 }
 
-// SumWriteRequest represents a single write request within a sum/batch write.
-type SumWriteRequest struct {
-	Group  uint32
-	Offset uint32
-	Data   []byte
-}
-
-// SumWriteResult represents the result of a single write within a sum/batch write.
-type SumWriteResult struct {
-	Error ReturnCode
-}
-
 // SumWrite performs a batch write using GroupSumupWrite (0xF081).
 // This writes multiple index group/offset combinations in a single ADS round-trip.
 // If the sum command fails (e.g. on older PLCs), it falls back to individual writes.
@@ -391,27 +365,6 @@ func (c *Client) sumWriteFallback(ctx context.Context, requests []SumWriteReques
 		}
 	}
 	return results, nil
-}
-
-// SumNotificationRequest represents a single notification add request within a batch.
-type SumNotificationRequest struct {
-	Group            uint32
-	Offset           uint32
-	Length           uint32
-	TransmissionMode TransMode
-	MaxDelay         time.Duration
-	CycleTime        time.Duration
-}
-
-// SumNotificationResult is a per-item result from SumAddDeviceNotification.
-// Either Skipped is non-nil (library refused to send this entry — duplicate,
-// resolution failure, transport-aborted batch) or Skipped is nil and Error
-// carries the PLC-side return code. Handle is valid only when Skipped == nil
-// AND Error == ReturnCodeNoErrors.
-type SumNotificationResult struct {
-	Handle  uint32
-	Error   ReturnCode // PLC-side return code; valid only when Skipped == nil
-	Skipped error      // non-nil if library skipped this entry; Error/Handle not meaningful
 }
 
 // SumAddDeviceNotification adds multiple device notifications in a single ADS
@@ -568,43 +521,6 @@ func (c *Client) sumAddNotificationFallback(ctx context.Context, requests []SumN
 	return results, nil
 }
 
-// bestEffortDeleteNotifications deletes handles for cleanup paths that cannot act
-// on a failure, logging errors rather than returning them, and reports how many
-// went. 0x714 and 0x715 count as gone. On *Session because it routes through the
-// wrapper that keeps activeNotifications consistent with the PLC.
-func (sess *Session) bestEffortDeleteNotifications(ctx context.Context, handles []uint32) int {
-	if len(handles) == 0 {
-		return 0
-	}
-	// userTeardown=false: this is recovery cleanup, not a user releasing their
-	// last subscription, so it must not clear notificationChannel — the
-	// resubscribe that follows needs it. See sumDeleteDeviceNotification.
-	errors, err := sess.sumDeleteDeviceNotification(ctx, handles, false)
-	// Count successes from any returned codes — sumDeleteNotificationFallback
-	// returns partial codes alongside a non-nil error when it short-circuits
-	// on transport failure, so handles cleaned up before the failure are not
-	// "lost" from the operator's perspective.
-	deleted := 0
-	for _, code := range errors {
-		if isBestEffortDeleteSuccess(code) {
-			deleted++
-		}
-	}
-	if err != nil {
-		sess.logger.Warn("bestEffortDelete: SumDeleteDeviceNotification failed",
-			"error", err,
-			"partial_deleted", deleted,
-			"handles", len(handles))
-		return deleted
-	}
-	if deleted < len(handles) {
-		sess.logger.Warn("bestEffortDelete: some handles not cleaned up",
-			"deleted", deleted,
-			"requested", len(handles))
-	}
-	return deleted
-}
-
 // sumDeleteNotificationFallback deletes individually when sum commands are
 // unsupported. An ADS-level code is stored and the loop continues; anything else
 // (transport closed, ctx cancelled) short-circuits with partial codes, since every
@@ -638,4 +554,29 @@ func (c *Client) sumDeleteNotificationFallback(ctx context.Context, handles []ui
 		}
 	}
 	return codes, nil
+}
+
+// downgradeTransMode converts v2 transmission modes to their v1 equivalents
+// for older PLCs (e.g. TwinCAT 2) that silently ignore v2 modes.
+func downgradeTransMode(mode TransMode) TransMode {
+	switch mode {
+	case TransModeServerOnChange2:
+		return TransModeServerOnChange
+	case TransModeServerCycle2:
+		return TransModeServerCycle
+	default:
+		return mode
+	}
+}
+
+// isSumCommandUnsupportedError returns true if the error indicates the PLC does
+// not support sum/batch commands (as opposed to a transient network error).
+func isSumCommandUnsupportedError(err error) bool {
+	var rc ReturnCode
+	if !errors.As(err, &rc) {
+		return false // network/timeout error — not a capability issue
+	}
+	return rc == ReturnCodeDeviceServiceNotSupported ||
+		rc == ReturnCodeGlobalUnknownCommandID ||
+		rc == ReturnCodeGlobalUnknownAdsCommand
 }

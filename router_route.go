@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"time"
 )
 
@@ -330,57 +329,4 @@ func parseRouteResponse(logger *slog.Logger, data []byte, expectedInvokeID uint3
 	// response — caller would observe Connect() succeed and then every
 	// subsequent ADS command fail with ReturnCodeGlobalTargetNotFound.
 	return fmt.Errorf("route registration response had no error tag (response truncated or malformed)")
-}
-
-// routeManager holds the credentials and policy state used for AMS route
-// registration. The caller's WithRoute(name, user, password) option populates
-// these fields; Connect/Reconnect read them when probing the PLC's route
-// table and registering if needed.
-//
-// name/username/password/forceRouteRegistration are write-once at construction
-// (via WithRoute). routeProbeFailures is read+written from both Connect (caller
-// goroutine) and Reconnect (lifecycle goroutine) - atomic.Int32 makes that
-// race-free without imposing a lock on the hot reconnect path.
-type routeManager struct {
-	name                   string
-	username               string
-	password               secret
-	forceRouteRegistration bool
-	// activationTimeout caps the post-registration wait for the PLC's router
-	// to start serving the new route. 0 means use defaultRouteActivationTimeout;
-	// set via WithRouteActivationTimeout.
-	activationTimeout  time.Duration
-	skipRegistration   bool // set via WithSkipRouteRegistration — caller manages routes externally
-	routeProbeFailures atomic.Int32
-
-	// registered stops a reconnect storm re-registering the route over and over.
-	// Not absolute: re-registering the CORRECT route is the documented recovery for
-	// a muted router, since TC3 keys its table by address and the right NetID
-	// rebinds it. Cleared whenever the session concludes the PLC stopped answering,
-	// permitting one healing registration per cooldown cycle.
-	registered atomic.Bool
-}
-
-// mayRegister reports whether this session may register its route. True exactly
-// once; see routeManager.registered for why that is the rule.
-func (r *routeManager) mayRegister() bool {
-	return !r.registered.Load()
-}
-
-// markRegistered records that this session has registered its route.
-func (r *routeManager) markRegistered() {
-	r.registered.Store(true)
-}
-
-// allowHealingRegistration permits one further registration, for use when the PLC
-// has stopped answering and re-registering the correct route is the way back.
-func (r *routeManager) allowHealingRegistration() {
-	r.registered.Store(false)
-}
-
-// shouldSkip reports whether route registration must be bypassed entirely.
-// True when no route name was configured (default) or when the caller
-// explicitly opted out via WithSkipRouteRegistration.
-func (r *routeManager) shouldSkip() bool {
-	return r.skipRegistration || r.name == ""
 }
