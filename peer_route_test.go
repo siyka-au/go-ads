@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // peer_route_test.go — talking to a device that answers on its OWN connection.
@@ -40,8 +42,8 @@ func TestPeerRoute_ResponsesOnInboundConnection(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{42}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{42}
 	})
 
 	// Pick the port the "PLC" will dial back on, and point the stub at it.
@@ -49,7 +51,7 @@ func TestPeerRoute_ResponsesOnInboundConnection(t *testing.T) {
 	srv.answerViaPeerConnection(localAddr(port))
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(2*time.Second),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -83,8 +85,8 @@ func TestPeerRoute_DisabledStillFailsClearly(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{7}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 	port := freeLocalPort(t)
 	srv.answerViaPeerConnection(localAddr(port)) // nothing listens there
@@ -94,7 +96,7 @@ func TestPeerRoute_DisabledStillFailsClearly(t *testing.T) {
 	fallbackPort := freeLocalPort(t)
 	logs := &testLogHandler{}
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(300*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -138,15 +140,15 @@ func TestPeerRoute_CloseDoesNotHangWithAdoptedConnection(t *testing.T) {
 	isolatePeerRouteCache(t)
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{5}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{5}
 	})
 
 	port := freeLocalPort(t)
 	srv.answerViaPeerConnection(localAddr(port))
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(2*time.Second),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -235,8 +237,8 @@ func TestPeerRoute_HealthyDeviceDropsTheRememberedHost(t *testing.T) {
 	defer srv.stop()
 
 	// A healthy device: it answers on the connection we opened, and never dials us.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{5}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{5}
 	})
 
 	// Seed the fact, as a genuine peer-route device (or a stub on a recycled port)
@@ -255,7 +257,7 @@ func TestPeerRoute_HealthyDeviceDropsTheRememberedHost(t *testing.T) {
 		t.Helper()
 		logs := &testLogHandler{}
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+			AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 			WithRequestTimeout(500*time.Millisecond),
 			WithTargetCheck(TargetCheckOff),
 			WithAutoReconnect(false),
@@ -351,14 +353,14 @@ func TestPeerRoute_AutomaticFallback(t *testing.T) {
 
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{9}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{9}
 	})
 	srv.answerViaPeerConnection(localAddr(amsPeerListenPort))
 
 	logs := &testLogHandler{}
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(500*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -412,8 +414,8 @@ func TestPeerRoute_FallbackCanBeDisabled(t *testing.T) {
 		t.Helper()
 		srv := startScriptableServer(t)
 		t.Cleanup(srv.stop)
-		srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-			return ReturnCodeNoErrors, []byte{9}
+		srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+			return ams.ReturnCodeNoErrors, []byte{9}
 		})
 		// Answers only on a connection it opens to us, on the protocol port.
 		srv.answerViaPeerConnection(localAddr(amsPeerListenPort))
@@ -427,7 +429,7 @@ func TestPeerRoute_FallbackCanBeDisabled(t *testing.T) {
 			WithAutoReconnect(false),
 		}, extra...)
 		sess, err := NewSession(context.Background(),
-			AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+			AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 			opts...)
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
@@ -490,7 +492,7 @@ func TestPeerRoute_AdoptionAfterTeardownIsRefused(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 2*time.Second)
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -541,7 +543,7 @@ func TestPeerRoute_AdoptedConnectionIsClosedWhenItsReaderExits(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 2*time.Second)
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

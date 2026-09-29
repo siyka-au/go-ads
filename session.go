@@ -9,15 +9,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // randomAMSPort returns a random AMS source port in the dynamic range. The PLC
 // keys its notification table by {source NetID, port, handle}, so a fresh port per
 // session means a prior process's subscriptions age out instead of competing with
 // the new connection. WithLocalAMS overrides it where a stable port is needed.
-func randomAMSPort() uint16 {
+func randomAMSPort() ams.Port {
 	const minPort, span = 32768, 49151 - 32768 + 1
-	return uint16(minPort + rand.IntN(span)) //nolint:gosec // non-cryptographic port selection
+	return ams.Port(minPort + rand.IntN(span)) //nolint:gosec // non-cryptographic port selection
 }
 
 // secret wraps credential strings so String() and slog.LogValuer return
@@ -48,8 +50,8 @@ type Session struct {
 	// TCP socket + request multiplexing + listen/transmit channels.
 	tx *transport
 
-	target      AMSAddress
-	source      AMSAddress
+	target      ams.Address
+	source      ams.Address
 	callbackIP  string // IP PLC uses to reach us (for Docker/VPN; set via WithHostIP)
 	localBindIP net.IP // Force outbound TCP source IP (multi-session per host; set via WithLocalBindIP). nil = OS default routing.
 
@@ -156,7 +158,7 @@ type Session struct {
 
 // AMSEndpoint identifies a remote ADS endpoint at the TCP and AMS layers.
 // IP+Port locate the TwinCAT runtime over TCP (port 48898 by default);
-// AMS is the target AMSAddress carried in every ADS request header.
+// AMS is the target Address carried in every ADS request header.
 type AMSEndpoint struct {
 	// IP is the host or address of the PLC (or of the NAT that forwards to it).
 	IP string
@@ -164,7 +166,7 @@ type AMSEndpoint struct {
 	Port int
 	// AMS is the target AMS address. A zero NetID and/or Port is resolved from
 	// the device — see NewSession.
-	AMS AMSAddress
+	AMS ams.Address
 	// RouterPort is the AMS router's UDP port (default 48899), used to register a
 	// route and identify the device. Set it behind NAT, where the forwarded UDP
 	// port differs from the TCP one and cannot be derived from Port. Only the two

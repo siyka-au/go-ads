@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // cache_test.go — symbolCache unit tests.
@@ -55,16 +57,16 @@ func TestCacheLock_GuardsMutations(t *testing.T) {
 	defer srv.stop()
 
 	// Name-aware symbol info so every distinct name resolves to its own symbol.
-	srv.onWriteRead(GroupSymbolInfoByNameEx, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolInfoByNameEx, func(req []byte) []byte {
 		name := strings.TrimRight(string(req), "\x00")
-		return buildSymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ADSTInt16, 0)
+		return buildSymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ams.DataTypeInt16, 0)
 	})
 	var nextHandle atomic.Uint32
-	srv.onWriteRead(GroupSymbolHandleByName, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		return buildHandlePayload(nextHandle.Add(1))
 	})
-	srv.onWrite(GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ReturnCode {
-		return ReturnCodeNoErrors
+	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, client := newWiredTestSession(t, srv)
@@ -227,24 +229,24 @@ func TestCache_OnDemandResolve_DuplicateHandleReleased(t *testing.T) {
 	defer srv.stop()
 
 	const fakeHandle uint32 = 0xCAFE0001
-	srv.onWriteRead(GroupSymbolInfoByNameEx, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolInfoByNameEx, func(_ []byte) []byte {
 		return buildSymbolInfoPayload(
 			"MAIN.x", "INT", "",
-			0x4040, 0x100, 2, ADSTInt16, 0)
+			0x4040, 0x100, 2, ams.DataTypeInt16, 0)
 	})
-	srv.onWriteRead(GroupSymbolHandleByName, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		return buildHandlePayload(fakeHandle)
 	})
 	// Inject a small delay before GetHandleByName so both goroutines pass
 	// the cache.lock check, hit the network, and race on commit.
-	srv.delayBefore(CommandIDReadWrite, uint32(GroupSymbolHandleByName), 50*time.Millisecond)
+	srv.delayBefore(ams.CommandReadWrite, uint32(ams.GroupSymbolHandleByName), 50*time.Millisecond)
 
 	var releases atomic.Int32
-	srv.onWrite(GroupSymbolReleaseHandle, func(_, _ uint32, data []byte) ReturnCode {
+	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, data []byte) ams.ReturnCode {
 		if len(data) == 4 && binary.LittleEndian.Uint32(data) == fakeHandle {
 			releases.Add(1)
 		}
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, _ := newWiredTestSession(t, srv)

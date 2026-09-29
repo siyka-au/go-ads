@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // ListSymbols returns the full symbol table.
@@ -108,7 +110,7 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 
 	// Step 3: Download datatypes in chunks
 	datatypesData, err := sess.client.Load().DownloadInChunks(ctx,
-		uint32(GroupSymbolDataTypeUpload),
+		uint32(ams.GroupSymbolDataTypeUpload),
 		uploadInfo.DataTypeLength,
 		cfg.ChunkSize,
 		cfg.ChunkDelay,
@@ -132,7 +134,7 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 
 	// Step 4: Download symbols in chunks
 	symbolsData, err := sess.client.Load().DownloadInChunks(ctx,
-		uint32(GroupSymbolUpload),
+		uint32(ams.GroupSymbolUpload),
 		uploadInfo.SymbolLength,
 		cfg.ChunkSize,
 		cfg.ChunkDelay,
@@ -234,7 +236,7 @@ func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol,
 				sess.cache.lock.Unlock()
 				handleBytes := make([]byte, 4)
 				binary.LittleEndian.PutUint32(handleBytes, handle)
-				if err := sess.client.Load().Write(ctx, uint32(GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
+				if err := sess.client.Load().Write(ctx, uint32(ams.GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
 					sess.logger.Warn("failed to release orphan symbol handle after cache swap",
 						"symbol", symbolName, "handle", handle, "error", err)
 				}
@@ -244,7 +246,7 @@ func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol,
 				sess.cache.lock.Unlock()
 				handleBytes := make([]byte, 4)
 				binary.LittleEndian.PutUint32(handleBytes, handle)
-				if err := sess.client.Load().Write(ctx, uint32(GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
+				if err := sess.client.Load().Write(ctx, uint32(ams.GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
 					sess.logger.Warn("failed to release duplicate symbol handle",
 						"symbol", symbolName, "handle", handle, "error", err)
 				}
@@ -276,7 +278,7 @@ func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol,
 		// Release the handle we just acquired since another goroutine beat us
 		handleBytes := make([]byte, 4)
 		binary.LittleEndian.PutUint32(handleBytes, handle)
-		if err := sess.client.Load().Write(ctx, uint32(GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
+		if err := sess.client.Load().Write(ctx, uint32(ams.GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
 			sess.logger.Warn("failed to release duplicate symbol handle",
 				"symbol", symbolName, "handle", handle, "error", err)
 		}
@@ -345,7 +347,7 @@ func (sess *Session) RefreshSymbols(ctx context.Context) error {
 	for _, h := range handleList {
 		handleBytes := make([]byte, 4)
 		binary.LittleEndian.PutUint32(handleBytes, h)
-		if err := sess.client.Load().Write(ctx, uint32(GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
+		if err := sess.client.Load().Write(ctx, uint32(ams.GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
 			sess.logger.Warn("failed to release symbol handle", "error", err, "handle", h)
 		}
 	}
@@ -390,7 +392,7 @@ func (sess *Session) LoadSymbolList(ctx context.Context, cfg SlowDiscoveryConfig
 
 	// Download symbols in chunks
 	symbolsData, err := sess.client.Load().DownloadInChunks(ctx,
-		uint32(GroupSymbolUpload),
+		uint32(ams.GroupSymbolUpload),
 		uploadInfo.SymbolLength,
 		cfg.ChunkSize,
 		cfg.ChunkDelay,
@@ -448,7 +450,7 @@ func (sess *Session) LoadDataTypes(ctx context.Context, cfg SlowDiscoveryConfig)
 
 	// Download datatypes in chunks
 	datatypesData, err := sess.client.Load().DownloadInChunks(ctx,
-		uint32(GroupSymbolDataTypeUpload),
+		uint32(ams.GroupSymbolDataTypeUpload),
 		uploadInfo.DataTypeLength,
 		cfg.ChunkSize,
 		cfg.ChunkDelay,

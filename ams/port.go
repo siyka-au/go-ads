@@ -1,8 +1,8 @@
-package ads
+package ams
 
 // Port is a well-known AMS port number for a TwinCAT service. PortR0PlcTc3
 // (851) is the typical PLC runtime port for TwinCAT 3.
-type Port uint32
+type Port uint16
 
 const (
 	PortLogger    Port = 100

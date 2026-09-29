@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // dialTCP opens the outbound connection, honouring localBindIP. Shared by Connect
@@ -142,7 +144,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 			}
 			sess.source.NetID = [6]byte{ip[0], ip[1], ip[2], ip[3], 1, 1}
 			sess.logger.Info("auto-derived source AMS NetID from local IP",
-				"netid", sess.source.NetIDString())
+				"netid", sess.source.NetID.String())
 		}
 
 		// NAT/Docker detection: compare TCP and UDP source IPs
@@ -183,7 +185,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 		routeHostIP = fmt.Sprintf("%d.%d.%d.%d (from NetID, PLC will use UDP source IP)", sourceIP[0], sourceIP[1], sourceIP[2], sourceIP[3])
 	}
 	sess.logger.Info("ADS addressing",
-		"sourceNetID", sourceAddr.NetIDString(),
+		"sourceNetID", sourceAddr.NetID.String(),
 		"routeHostIP", routeHostIP,
 		"target", sess.target.String())
 
@@ -219,7 +221,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 			return fmt.Errorf("local mode handshake failed: %w", err)
 		}
 		buf := bytes.NewBuffer(resp)
-		result := AMSAddress{}
+		result := ams.Address{}
 		sess.logger.Log(context.Background(), LevelTrace, "got stuff", "stuff", buf.Bytes())
 		err = binary.Read(buf, binary.LittleEndian, &result)
 		if err != nil {
@@ -339,7 +341,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 				}
 				sess.tearDownAndReset()
 				sess.transitionState(SessionStateDisconnected)
-				hint := "a stale or duplicate route entry for source NetID " + sess.sourceAddr().NetIDString() +
+				hint := "a stale or duplicate route entry for source NetID " + sess.sourceAddr().NetID.String() +
 					", or another client using this IP, can hold a TwinCAT router in this state"
 				if ferr != nil {
 					hint += "; the peer-route fallback could not run: " + ferr.Error()
@@ -368,7 +370,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 	// "ADS error in Read: 0xF008", which is an index group, not a return code.
 	if state, serr := sess.runtimeStateQuietly(ctx); serr != nil {
 		sess.logger.Debug("could not read the runtime state from the system service at connect", "error", serr)
-	} else if state != ADSStateRun {
+	} else if state != ams.StateRun {
 		sess.logger.Warn("connected, but the PLC runtime is not in RUN: symbol and subscription calls will refuse until it returns",
 			"state", uint16(state), "detail", "in CONFIG the runtime port does not exist, so those calls cannot succeed")
 	}
@@ -512,7 +514,7 @@ func (sess *Session) dialAndStart() error {
 // Every reader outside Connect's own critical sections must come through here;
 // AddRoute is callable from any goroutine. Returns the whole address, not just the
 // NetID, so one accessor covers the field.
-func (sess *Session) sourceAddr() AMSAddress {
+func (sess *Session) sourceAddr() ams.Address {
 	sess.tx.connMu.Lock()
 	defer sess.tx.connMu.Unlock()
 	return sess.source
@@ -555,7 +557,7 @@ func (sess *Session) publishWiredClient() *Client {
 	return c
 }
 
-// localHandshake performs the local-mode AMSAddress probe used after dial when
+// localHandshake performs the local-mode Address probe used after dial when
 // isLocal is true. Updates sess.source on success.
 func (sess *Session) localHandshake() error {
 	resp, err := sess.client.Load().send([]byte{0, 16, 2, 0, 0, 0, 0, 0})
@@ -563,7 +565,7 @@ func (sess *Session) localHandshake() error {
 		return fmt.Errorf("local handshake send: %w", err)
 	}
 	buf := bytes.NewBuffer(resp)
-	result := AMSAddress{}
+	result := ams.Address{}
 	if err := binary.Read(buf, binary.LittleEndian, &result); err != nil {
 		return fmt.Errorf("local handshake parse: %w", err)
 	}

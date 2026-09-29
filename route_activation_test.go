@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // route_activation_test.go — awaitRouteActive's context handling.
@@ -70,7 +72,7 @@ func TestAwaitRouteActive_SurvivesCtxReplacement(t *testing.T) {
 	sess.route = &routeManager{name: "go-ads-test", activationTimeout: 4 * time.Second}
 
 	var probes atomic.Int32
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		n := probes.Add(1)
 		if n == 1 {
 			// Fail the first probe, then replace lifecycle.ctx the way a redial
@@ -79,9 +81,9 @@ func TestAwaitRouteActive_SurvivesCtxReplacement(t *testing.T) {
 			sess.lifecycle.shutdown()
 			sess.lifecycle.ctx, sess.lifecycle.shutdown = context.WithCancel(sess.lifecycle.parentCtx)
 			sess.lifecycle.ctxMu.Unlock()
-			return ReturnCodeDeviceError, nil
+			return ams.ReturnCodeDeviceError, nil
 		}
-		return ReturnCodeNoErrors, []byte{7}
+		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 
 	version, err := sess.awaitRouteActive(sess.currentLifecycleCtx)
@@ -106,8 +108,8 @@ func TestAwaitRouteActive_RestoresClientState(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	sess.route = &routeManager{name: "go-ads-test", activationTimeout: time.Second}
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{3}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{3}
 	})
 
 	if _, err := sess.awaitRouteActive(sess.currentLifecycleCtx); err != nil {
@@ -224,7 +226,7 @@ func TestAwaitRouteActive_CapsTheRedialStorm(t *testing.T) {
 	// Sticky, unlike dropConnAfter, which disarms itself after one firing: the
 	// probe has to keep failing at transport level or the loop never takes the
 	// branch under test.
-	srv.dropConnAlways(CommandIDRead)
+	srv.dropConnAlways(ams.CommandRead)
 
 	if _, err := sess.awaitRouteActive(sess.currentLifecycleCtx); err == nil {
 		t.Fatal("awaitRouteActive returned nil for a route the PLC never served")
@@ -255,7 +257,7 @@ func TestAwaitRouteActive_DoesNotSpinAfterTheBudget(t *testing.T) {
 
 	const budget = 10 * time.Second
 	sess := activationTestSession(t, srv, budget)
-	srv.dropConnAlways(CommandIDRead)
+	srv.dropConnAlways(ams.CommandRead)
 
 	start := time.Now()
 	if _, err := sess.awaitRouteActive(sess.currentLifecycleCtx); err == nil {
@@ -286,7 +288,7 @@ func TestAwaitRouteActive_CloseDuringTheWaitOpensNoSocket(t *testing.T) {
 	defer srv.stop()
 
 	sess := activationTestSession(t, srv, 5*time.Second)
-	srv.dropConnAlways(CommandIDRead)
+	srv.dropConnAlways(ams.CommandRead)
 
 	// A context of its own that is never cancelled: this is Connect's caller ctx,
 	// the case where closedCh is the only signal that ever arrives.
@@ -327,15 +329,15 @@ func TestAwaitRouteActive_ProbesAgainAfterARedial(t *testing.T) {
 	defer srv.stop()
 
 	sess := activationTestSession(t, srv, 5*time.Second)
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{9}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.dropConnAlways(CommandIDRead)
+	srv.dropConnAlways(ams.CommandRead)
 
 	// Let the loop take the retryable path at least once, then start serving.
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		srv.stopDroppingConn(CommandIDRead)
+		srv.stopDroppingConn(ams.CommandRead)
 	}()
 
 	version, err := sess.awaitRouteActive(sess.currentLifecycleCtx)
@@ -345,7 +347,7 @@ func TestAwaitRouteActive_ProbesAgainAfterARedial(t *testing.T) {
 	if version != 9 {
 		t.Errorf("symbol version = %d, want 9 — the winning probe's value must be returned", version)
 	}
-	if srv.droppingAlways(CommandIDRead) {
+	if srv.droppingAlways(ams.CommandRead) {
 		t.Fatal("the stub was still refusing; this test proved nothing")
 	}
 }

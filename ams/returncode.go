@@ -1,4 +1,4 @@
-package ads
+package ams
 
 import (
 	"fmt"
@@ -336,15 +336,15 @@ func (rc ReturnCode) Error() string {
 	return rc.String()
 }
 
-// AMSError is a rejection from the AMS router, not a verdict about any ADS item:
+// RouterError is a rejection from the AMS router, not a verdict about any ADS item:
 // the request never reached a service that could answer. A system in CONFIG
 // answers 0x06 for every request to a runtime port. Branch with errors.Is against
 // the ReturnCode constants, or read Code off the typed value.
-type AMSError struct {
+type RouterError struct {
 	Code ReturnCode
 }
 
-func (e AMSError) Error() string { return "AMS router: " + e.Code.String() }
+func (e RouterError) Error() string { return "AMS router: " + e.Code.String() }
 
 // Is makes errors.Is(err, ReturnCodeX) match the router's code without making a
 // router rejection indistinguishable from an ADS device verdict.
@@ -353,7 +353,7 @@ func (e AMSError) Error() string { return "AMS router: " + e.Code.String() }
 // in this package asks errors.As(err, &ReturnCode) to mean "the device answered
 // about my item". Unwrapping to Code would put the router back inside that
 // answer — which is the bug this type exists to close, so do not add one.
-func (e AMSError) Is(target error) bool {
+func (e RouterError) Is(target error) bool {
 	rc, ok := target.(ReturnCode)
 	return ok && rc == e.Code
 }

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // manual_reconnect_integration_test.go — recovery against real hardware, with a
@@ -151,7 +153,7 @@ func TestManualRestartRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ADS_TARGET_PORT %q: %v", portStr, err)
 	}
-	target, err := NewAMSAddress(targetAMS, uint16(port))
+	target, err := ams.NewAddress(targetAMS, ams.Port(port))
 	if err != nil {
 		t.Fatalf("target AMS: %v", err)
 	}
@@ -171,7 +173,7 @@ func TestManualRestartRecovery(t *testing.T) {
 		opts = append(opts, WithRoute("go-ads-manual-restart", u, p))
 	}
 	if localAMS := os.Getenv("ADS_LOCAL_AMS"); localAMS != "" {
-		local, err := NewAMSAddress(localAMS, 10500)
+		local, err := ams.NewAddress(localAMS, 10500)
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, err)
 		}
@@ -217,9 +219,9 @@ func TestManualRestartRecovery(t *testing.T) {
 	}
 	configs := make([]NotificationConfig, 0, len(names))
 	for i, n := range names {
-		mode := TransModeServerCycle
+		mode := ams.TransModeServerCycle
 		if i < onChange {
-			mode = TransModeServerOnChange
+			mode = ams.TransModeServerOnChange
 		}
 		configs = append(configs, NotificationConfig{
 			SymbolName:       n,
@@ -475,7 +477,7 @@ func TestManualConfigToRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ADS_TARGET_PORT %q: %v", portStr, err)
 	}
-	target, err := NewAMSAddress(targetAMS, uint16(port))
+	target, err := ams.NewAddress(targetAMS, ams.Port(port))
 	if err != nil {
 		t.Fatalf("target AMS: %v", err)
 	}
@@ -494,7 +496,7 @@ func TestManualConfigToRun(t *testing.T) {
 		opts = append(opts, WithRoute("go-ads-manual-restart", u, p))
 	}
 	if localAMS := os.Getenv("ADS_LOCAL_AMS"); localAMS != "" {
-		local, lerr := NewAMSAddress(localAMS, 10600)
+		local, lerr := ams.NewAddress(localAMS, 10600)
 		if lerr != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, lerr)
 		}
@@ -520,10 +522,10 @@ func TestManualConfigToRun(t *testing.T) {
 
 	state, err := sess.RuntimeState(ctx)
 	if err != nil {
-		t.Fatalf("RuntimeState: %v — the system service on port %d should answer even in CONFIG", err, PortSystemService)
+		t.Fatalf("RuntimeState: %v — the system service on port %d should answer even in CONFIG", err, ams.PortSystemService)
 	}
 	timeline("runtime state = %d", uint16(state))
-	if state == ADSStateRun {
+	if state == ams.StateRun {
 		t.Skip("the PLC is already in RUN — put it into CONFIG before running this")
 	}
 
@@ -537,7 +539,7 @@ func TestManualConfigToRun(t *testing.T) {
 	ch := make(chan *Update, 256)
 	_, serr := sess.AddSymbolNotifications(ctx, []NotificationConfig{{
 		SymbolName:       symbol,
-		TransmissionMode: TransModeServerOnChange,
+		TransmissionMode: ams.TransModeServerOnChange,
 	}}, ch)
 	if !errors.Is(serr, ErrRuntimeNotRunning) {
 		t.Errorf("AddSymbolNotifications error = %v, want ErrRuntimeNotRunning", serr)
@@ -555,7 +557,7 @@ func TestManualConfigToRun(t *testing.T) {
 
 	deadline := time.Now().Add(manualDisruptWait)
 	for {
-		if s, known := sess.knownRuntimeState(); known && s == ADSStateRun {
+		if s, known := sess.knownRuntimeState(); known && s == ams.StateRun {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -573,7 +575,7 @@ func TestManualConfigToRun(t *testing.T) {
 	}
 	results, err := sess.AddSymbolNotifications(ctx, []NotificationConfig{{
 		SymbolName:       symbol,
-		TransmissionMode: TransModeServerOnChange,
+		TransmissionMode: ams.TransModeServerOnChange,
 		MaxDelay:         200 * time.Millisecond,
 		CycleTime:        200 * time.Millisecond,
 	}}, ch)

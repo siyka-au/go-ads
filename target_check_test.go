@@ -6,13 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // newTargetCheckSession builds the minimum Session applyTargetCheck touches,
 // with a capturing logger.
 func newTargetCheckSession(t *testing.T, netID string, check TargetCheck) (*Session, *testLogHandler) {
 	t.Helper()
-	target, err := NewAMSAddress(netID, 851)
+	target, err := ams.NewAddress(netID, 851)
 	if err != nil {
 		t.Fatalf("target %q: %v", netID, err)
 	}
@@ -27,7 +29,7 @@ func newTargetCheckSession(t *testing.T, netID string, check TargetCheck) (*Sess
 
 func identityOf(t *testing.T, netID string) RemoteIdentity {
 	t.Helper()
-	ams, err := NewAMSAddress(netID, 10000)
+	ams, err := ams.NewAddress(netID, 10000)
 	if err != nil {
 		t.Fatalf("identity %q: %v", netID, err)
 	}
@@ -142,6 +144,6 @@ func TestNewSession_LocalModeSkipsDiscovery(t *testing.T) {
 		t.Errorf("NewSession took %v — local mode probed the network", elapsed)
 	}
 	if sess.target.NetID != [6]byte{} {
-		t.Errorf("target NetID = %s, want zero (Connect assigns the loopback NetID)", sess.target.NetIDString())
+		t.Errorf("target NetID = %s, want zero (Connect assigns the loopback NetID)", sess.target.NetID.String())
 	}
 }

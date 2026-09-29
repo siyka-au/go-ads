@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // Single-symbol device-notification raw RPCs on *Client:
@@ -39,7 +41,7 @@ func (c *Client) AddDeviceNotification(
 	group uint32,
 	offset uint32,
 	length uint32,
-	transmissionMode TransMode,
+	transmissionMode ams.TransMode,
 	maxDelay time.Duration,
 	cycleTime time.Duration,
 ) (handle uint32, err error) {
@@ -74,10 +76,10 @@ func (c *Client) AddDeviceNotification(
 		return 0, fmt.Errorf("binary.Write failed: %w", err)
 	}
 	type addDeviceNotificationResponse struct {
-		Error  ReturnCode
+		Error  ams.ReturnCode
 		Handle uint32
 	}
-	resp, err := c.sendRequest(ctx, CommandIDAddDeviceNotification, request.Bytes())
+	resp, err := c.sendRequest(ctx, ams.CommandAddDeviceNotification, request.Bytes())
 	if err != nil {
 		return
 	}
@@ -114,13 +116,13 @@ func (c *Client) DeleteDeviceNotification(ctx context.Context, handle uint32) er
 	if err := binary.Write(request, binary.LittleEndian, content); err != nil {
 		return fmt.Errorf("binary.Write failed: %w", err)
 	}
-	resp, err := c.sendRequest(ctx, CommandIDDeleteDeviceNotification, request.Bytes())
+	resp, err := c.sendRequest(ctx, ams.CommandDeleteDeviceNotification, request.Bytes())
 	if err != nil {
 		c.logger.Warn("error deleting handle", "handle", handle, "error", err)
 		return err
 	}
 	respBuffer := bytes.NewBuffer(resp)
-	var adsError ReturnCode
+	var adsError ams.ReturnCode
 	if err = binary.Read(respBuffer, binary.LittleEndian, &adsError); err != nil {
 		return fmt.Errorf("failed to parse DeleteDeviceNotification response: %w", err)
 	}

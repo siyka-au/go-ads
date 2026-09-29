@@ -12,6 +12,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 const (
@@ -376,7 +378,7 @@ func TestSeedBitPackingNotify(t *testing.T) {
 	ctx := context.Background()
 	const start = 1<<32 - 50 // crosses from the low word into the high one
 	setBitSeed(t, sess, start)
-	ch := subscribe(t, sess, []string{bitsFB + "stBitPacking"}, TransModeServerOnChange, 10*time.Millisecond)
+	ch := subscribe(t, sess, []string{bitsFB + "stBitPacking"}, ams.TransModeServerOnChange, 10*time.Millisecond)
 	if _, err := sess.WriteValues(ctx, map[string]any{bitsFB + "nAutoTickInterval": uint32(0), bitsFB + "bAutoMode": true}); err != nil {
 		t.Fatal(err)
 	}

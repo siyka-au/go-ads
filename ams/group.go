@@ -1,4 +1,4 @@
-package ads
+package ams
 
 // Group is an ADS index group identifier. The high-byte hex values address
 // reserved system tables (symbol cache, process image, device data) per

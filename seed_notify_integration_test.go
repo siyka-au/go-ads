@@ -13,9 +13,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
-func subscribe(t *testing.T, sess *Session, names []string, mode TransMode, cycle time.Duration) chan *Update {
+func subscribe(t *testing.T, sess *Session, names []string, mode ams.TransMode, cycle time.Duration) chan *Update {
 	t.Helper()
 	ch := make(chan *Update, 4096)
 	configs := make([]NotificationConfig, len(names))
@@ -27,7 +29,7 @@ func subscribe(t *testing.T, sess *Session, names []string, mode TransMode, cycl
 		t.Fatalf("AddSymbolNotifications: %v", err)
 	}
 	for i, r := range results {
-		if r.Skipped != nil || r.Error != ReturnCodeNoErrors {
+		if r.Skipped != nil || r.Error != ams.ReturnCodeNoErrors {
 			t.Fatalf("subscribe %s: skipped=%v code=%v", names[i], r.Skipped, r.Error)
 		}
 	}
@@ -78,7 +80,7 @@ func TestSeedNotifyEveryType(t *testing.T) {
 		t.Run(fmt.Sprintf("%d_to_%d", pair[0], pair[1]), func(t *testing.T) {
 			setSeed(t, writer, pair[0])
 			sess := openSeedSession(t, true)
-			ch := subscribe(t, sess, names, TransModeServerOnChange, 10*time.Millisecond)
+			ch := subscribe(t, sess, names, ams.TransModeServerOnChange, 10*time.Millisecond)
 
 			want := map[string]any{}
 			for f, v := range seedScalars(pair[0]) {
@@ -124,7 +126,7 @@ func TestSeedNotifyEveryType(t *testing.T) {
 func TestSeedNotifyComposite(t *testing.T) {
 	sess := seedSession(t)
 	setSeed(t, sess, 0)
-	ch := subscribe(t, sess, []string{seedFB + "stStructVar", seedFB + "aIntArray2d"}, TransModeServerOnChange, 10*time.Millisecond)
+	ch := subscribe(t, sess, []string{seedFB + "stStructVar", seedFB + "aIntArray2d"}, ams.TransModeServerOnChange, 10*time.Millisecond)
 
 	for seed := uint32(1); seed <= 10; seed++ {
 		if err := sess.WriteValue(context.Background(), seedFB+"nSeed", seed); err != nil {
@@ -168,7 +170,7 @@ func TestSeedNotifyComposite(t *testing.T) {
 func TestSeedNotifyAutoIncrement(t *testing.T) {
 	sess := seedSession(t)
 	setSeed(t, sess, 0)
-	ch := subscribe(t, sess, []string{seedFB + "nUdintVar", seedFB + "tTimeVar"}, TransModeServerOnChange, 10*time.Millisecond)
+	ch := subscribe(t, sess, []string{seedFB + "nUdintVar", seedFB + "tTimeVar"}, ams.TransModeServerOnChange, 10*time.Millisecond)
 	ctx := context.Background()
 	if _, err := sess.WriteValues(ctx, map[string]any{seedFB + "nAutoTickInterval": uint32(0), seedFB + "bAutoMode": true}); err != nil {
 		t.Fatal(err)
@@ -214,7 +216,7 @@ collect:
 func TestSeedNotifyServerCycle(t *testing.T) {
 	sess := seedSession(t)
 	setSeed(t, sess, 4242)
-	ch := subscribe(t, sess, []string{seedFB + "nUdintVar"}, TransModeServerCycle, 100*time.Millisecond)
+	ch := subscribe(t, sess, []string{seedFB + "nUdintVar"}, ams.TransModeServerCycle, 100*time.Millisecond)
 	n := 0
 	deadline := time.After(1050 * time.Millisecond)
 collect:
@@ -239,7 +241,7 @@ func TestSeedNotifyUnsubscribe(t *testing.T) {
 	sess := seedSession(t)
 	setSeed(t, sess, 1)
 	ch := make(chan *Update, 64)
-	h, err := sess.AddSymbolNotification(context.Background(), seedFB+"nUdintVar", 0, 10*time.Millisecond, TransModeServerOnChange, ch)
+	h, err := sess.AddSymbolNotification(context.Background(), seedFB+"nUdintVar", 0, 10*time.Millisecond, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatal(err)
 	}

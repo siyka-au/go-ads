@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // TestIntegrationIdentifyRemote checks discovery against the configured target:
@@ -22,11 +24,11 @@ func TestIntegrationIdentifyRemote(t *testing.T) {
 		t.Fatalf("IdentifyRemote(%s): %v", host, err)
 	}
 	t.Logf("%s: netID=%s host=%q twinCAT=%s runtimePort=%d",
-		host, id.AMS.NetIDString(), id.HostName, id.Version(), id.RuntimePort())
+		host, id.AMS.NetID.String(), id.HostName, id.Version(), id.RuntimePort())
 
-	if want != "" && id.AMS.NetIDString() != want {
+	if want != "" && id.AMS.NetID.String() != want {
 		t.Errorf("discovered NetID = %s, want %s (ADS_TARGET_AMS) — the env file or the device changed",
-			id.AMS.NetIDString(), want)
+			id.AMS.NetID.String(), want)
 	}
 	if id.AMS.Port != 10000 {
 		t.Errorf("reported port = %d, want 10000 (the router's own port)", id.AMS.Port)
@@ -53,7 +55,7 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 	if real == "" {
 		t.Skip("ADS_TARGET_AMS not set")
 	}
-	wrong, err := NewAMSAddress("5.99.99.99.1.1", 851)
+	wrong, err := ams.NewAddress("5.99.99.99.1.1", 851)
 	if err != nil {
 		t.Fatalf("wrong address: %v", err)
 	}
@@ -68,8 +70,8 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 			t.Fatalf("NewSession must not verify a supplied target: %v", err)
 		}
 		t.Cleanup(func() { sess.Close() })
-		if sess.target.NetIDString() != "5.99.99.99.1.1" {
-			t.Errorf("NewSession altered the target: %s", sess.target.NetIDString())
+		if sess.target.NetID.String() != "5.99.99.99.1.1" {
+			t.Errorf("NewSession altered the target: %s", sess.target.NetID.String())
 		}
 	})
 
@@ -109,13 +111,13 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 		if err := sess.verifyTarget(context.Background()); err != nil {
 			t.Errorf("warn mode must not fail verification: %v", err)
 		}
-		if sess.target.NetIDString() != "5.99.99.99.1.1" {
-			t.Errorf("verification altered the target: %s", sess.target.NetIDString())
+		if sess.target.NetID.String() != "5.99.99.99.1.1" {
+			t.Errorf("verification altered the target: %s", sess.target.NetID.String())
 		}
 	})
 
 	t.Run("correct NetID passes error mode", func(t *testing.T) {
-		right, err := NewAMSAddress(real, 851)
+		right, err := ams.NewAddress(real, 851)
 		if err != nil {
 			t.Fatalf("real address: %v", err)
 		}
@@ -147,7 +149,7 @@ func TestIntegrationSessionDiscoversTarget(t *testing.T) {
 		opts = append(opts, WithRoute(routeName, user, pass))
 	}
 	if localAMS := os.Getenv("ADS_LOCAL_AMS"); localAMS != "" {
-		local, err := NewAMSAddress(localAMS, 10500)
+		local, err := ams.NewAddress(localAMS, 10500)
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS: %v", err)
 		}
@@ -161,8 +163,8 @@ func TestIntegrationSessionDiscoversTarget(t *testing.T) {
 	}
 	t.Cleanup(func() { sess.Close() })
 
-	if wantNetID != "" && sess.target.NetIDString() != wantNetID {
-		t.Errorf("resolved NetID = %s, want %s", sess.target.NetIDString(), wantNetID)
+	if wantNetID != "" && sess.target.NetID.String() != wantNetID {
+		t.Errorf("resolved NetID = %s, want %s", sess.target.NetID.String(), wantNetID)
 	}
 	if envPort := os.Getenv("ADS_TARGET_PORT"); envPort != "" {
 		t.Logf("resolved port %d, env says %s", sess.target.Port, envPort)

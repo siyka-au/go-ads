@@ -3,6 +3,8 @@ package ads
 import (
 	"fmt"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // decode decodes the symbol's value from data at offset into s.Value (see
@@ -120,7 +122,7 @@ var parseableTypes = []string{
 // is ambiguous (DINT/REAL, LINT/LREAL) and reading a REAL as a DINT silently
 // corrupts every parse, so those return "" and the caller points at LoadSymbols.
 // baseType is threaded through for the chain; only size is inspected today.
-func inferBaseType(size uint32, baseType ADSDataType) string {
+func inferBaseType(size uint32, baseType ams.DataType) string {
 	_ = baseType // reserved for future width+type tightening; see godoc above.
 	switch size {
 	case 1:

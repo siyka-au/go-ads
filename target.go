@@ -40,7 +40,7 @@ func (sess *Session) applyDiscoveredIdentity(id RemoteIdentity) error {
 	}
 	sess.logger.Info("discovered target AMS address",
 		"host", sess.ip,
-		"netID", sess.target.NetIDString(),
+		"netID", sess.target.NetID.String(),
 		"port", sess.target.Port,
 		"hostName", id.HostName,
 		"twinCAT", id.Version())
@@ -65,7 +65,7 @@ func (sess *Session) verifyTarget(ctx context.Context) error {
 		// Silence here would read as "verified" at default log level.
 		sess.logger.Info("target NetID not verified — device did not answer the identify service (UDP firewalled?); continuing",
 			"host", sess.ip, "router_port", sess.effectiveRouterPort(),
-			"target", sess.target.NetIDString(), "error", err)
+			"target", sess.target.NetID.String(), "error", err)
 		return nil
 	}
 	return sess.applyTargetCheck(id)
@@ -76,7 +76,7 @@ func (sess *Session) verifyTarget(ctx context.Context) error {
 func (sess *Session) applyTargetCheck(id RemoteIdentity) error {
 	if id.AMS.NetID == sess.target.NetID {
 		sess.logger.Debug("target NetID confirmed by device",
-			"host", sess.ip, "netID", sess.target.NetIDString(),
+			"host", sess.ip, "netID", sess.target.NetID.String(),
 			"hostName", id.HostName, "twinCAT", id.Version())
 		return nil
 	}
@@ -86,12 +86,12 @@ func (sess *Session) applyTargetCheck(id RemoteIdentity) error {
 	const hint = "usually a wrong or stale target NetID; legitimate when this host is a router and the target sits behind it"
 	if sess.targetCheck == TargetCheckError {
 		return fmt.Errorf("ads: target NetID %s does not match the NetID %s reported by %s (%s, TwinCAT %s): %s",
-			sess.target.NetIDString(), id.AMS.NetIDString(), sess.ip, id.HostName, id.Version(), hint)
+			sess.target.NetID.String(), id.AMS.NetID.String(), sess.ip, id.HostName, id.Version(), hint)
 	}
 	sess.logger.Warn("target NetID differs from the NetID this device reports for itself",
 		"host", sess.ip,
-		"configured", sess.target.NetIDString(),
-		"reported", id.AMS.NetIDString(),
+		"configured", sess.target.NetID.String(),
+		"reported", id.AMS.NetID.String(),
 		"hostName", id.HostName,
 		"twinCAT", id.Version(),
 		"hint", hint)

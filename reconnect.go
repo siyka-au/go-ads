@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // reconnectBackoff returns the delay for the given reconnect attempt number (1-indexed)
@@ -61,10 +63,10 @@ func (sess *Session) unservedCooldownDuration() time.Duration {
 // isDeviceAnswer reports whether err carries an answer from the far side -- an ADS
 // return code or a router rejection -- as opposed to silence, which says nothing.
 // A rejection is the most direct evidence for an absent port (AMS ErrorCode 0x06).
-// AMSError does not unwrap to ReturnCode, so both must be asked about separately.
+// RouterError does not unwrap to ReturnCode, so both must be asked about separately.
 func isDeviceAnswer(err error) bool {
-	var rc ReturnCode
-	var amsErr AMSError
+	var rc ams.ReturnCode
+	var amsErr ams.RouterError
 	return errors.As(err, &rc) || errors.As(err, &amsErr)
 }
 
@@ -76,7 +78,7 @@ func isUnservedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var rc ReturnCode
+	var rc ams.ReturnCode
 	if errors.As(err, &rc) {
 		return false // the PLC answered, even if the answer was an error
 	}

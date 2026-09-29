@@ -1,7 +1,8 @@
-package ads
+package ams
 
 import (
 	"fmt"
+	"strings"
 )
 
 // TransMode is the transmission mode for an ADS device notification — how the
@@ -47,4 +48,42 @@ func (tm TransMode) String() string {
 	default:
 		return fmt.Sprintf("Unknown(%d)", uint32(tm))
 	}
+}
+
+var transModeText = []struct {
+	mode TransMode
+	text string
+}{
+	{TransModeNoTransmission, "noTransmission"},
+	{TransModeClientCycle, "clientCycle"},
+	{TransModeClientOnChange, "clientOnChange"},
+	{TransModeServerCycle, "serverCycle"},
+	{TransModeServerOnChange, "serverOnChange"},
+	{TransModeServerCycle2, "serverCycle2"},
+	{TransModeServerOnChange2, "serverOnChange2"},
+	{TransModeClient1Request, "client1Request"},
+}
+
+// MarshalText encodes the mode as its configuration name, e.g. "serverOnChange".
+func (tm TransMode) MarshalText() ([]byte, error) {
+	for _, t := range transModeText {
+		if t.mode == tm {
+			return []byte(t.text), nil
+		}
+	}
+	return nil, fmt.Errorf("ams: unknown transmission mode %d", uint32(tm))
+}
+
+// UnmarshalText decodes a configuration name such as "serverOnChange" or
+// "serverCycle2", ignoring case. It lets a TransMode be read straight from
+// JSON, YAML or flag values.
+func (tm *TransMode) UnmarshalText(b []byte) error {
+	s := string(b)
+	for _, t := range transModeText {
+		if strings.EqualFold(s, t.text) {
+			*tm = t.mode
+			return nil
+		}
+	}
+	return fmt.Errorf("ams: unknown transmission mode %q", s)
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // Heartbeat: proving the caller's subscriptions are alive without asking the PLC.
@@ -156,8 +158,8 @@ func (sess *Session) establishHeartbeat(ctx context.Context) error {
 	// Cyclic, one byte, on the symbol-version group: runtime-served (so it dies
 	// with the runtime's notification table, which is the event being detected),
 	// present regardless of the caller's program, and its payload is the version.
-	handle, err := c.AddDeviceNotification(ctx, uint32(GroupSymbolVersion), 0, 1,
-		TransModeServerCycle, 0, sess.heartbeatCycle())
+	handle, err := c.AddDeviceNotification(ctx, uint32(ams.GroupSymbolVersion), 0, 1,
+		ams.TransModeServerCycle, 0, sess.heartbeatCycle())
 	if err != nil {
 		// First failure is worth a Warn; the rest are Debug, because the watcher
 		// retries on a cadence and a device that refuses cyclic notifications
@@ -239,7 +241,7 @@ func (sess *Session) consumeHeartbeat(handle uint32, content []byte) bool {
 		sess.cache.lock.Unlock()
 		if changed {
 			sess.logger.Info("symbol version changed (seen on the heartbeat)", "old", known, "new", content[0])
-			sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+			sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 		}
 	}
 	return true

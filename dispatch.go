@@ -3,6 +3,8 @@ package ads
 import (
 	"context"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // DeviceNotification (ADS cmd 8) packet decoder lives on *Client — see
@@ -105,7 +107,7 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 		sess.cache.lock.Unlock()
 		sess.logger.Debug("notification terminal 0-byte sample (symbol removed post-online-change)",
 			"handle", handle, "symbol", fullName, "dataType", dataType, "expectedLength", length)
-		sess.handleStaleDetection(ReturnCodeDeviceSymbolNoFound)
+		sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolNoFound)
 		return
 	}
 	value, err := live.decode(content, 0, sess.cache.datatypes)

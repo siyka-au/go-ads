@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // Orphan-Delete frees handles left by a prior process sharing our source
@@ -21,10 +23,10 @@ const (
 // best-effort cleanup wants: deleted, 0x714 (already gone), or 0x715 (client
 // identity dropped, so our handles went with it). Beckhoff's AdsLib refuses
 // 0x715; here it is routine on reconnect and counting it as failure is spam.
-func isBestEffortDeleteSuccess(code ReturnCode) bool {
-	return code == ReturnCodeNoErrors ||
-		code == ReturnCodeDeviceNotifyHandleInvalid ||
-		code == ReturnCodeDeviceClientUnknown
+func isBestEffortDeleteSuccess(code ams.ReturnCode) bool {
+	return code == ams.ReturnCodeNoErrors ||
+		code == ams.ReturnCodeDeviceNotifyHandleInvalid ||
+		code == ams.ReturnCodeDeviceClientUnknown
 }
 
 // isBestEffortDeleteSuccessErr is the error-wrapped variant of
@@ -37,8 +39,8 @@ func isBestEffortDeleteSuccessErr(err error) bool {
 	if err == nil {
 		return true
 	}
-	return errors.Is(err, ReturnCodeDeviceNotifyHandleInvalid) ||
-		errors.Is(err, ReturnCodeDeviceClientUnknown)
+	return errors.Is(err, ams.ReturnCodeDeviceNotifyHandleInvalid) ||
+		errors.Is(err, ams.ReturnCodeDeviceClientUnknown)
 }
 
 // orphanDeleteAbortReason re-checks, immediately before the RPC, whether the

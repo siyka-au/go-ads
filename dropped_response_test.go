@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // TestDroppedDoesNotDiscardArrivedReply: a PLC that answers and then closes must
@@ -17,12 +19,12 @@ func TestDroppedDoesNotDiscardArrivedReply(t *testing.T) {
 	lost, got := 0, 0
 	for i := 0; i < runs; i++ {
 		srv := startScriptableServer(t)
-		srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-			return ReturnCodeNoErrors, []byte{42}
+		srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+			return ams.ReturnCodeNoErrors, []byte{42}
 		})
-		srv.answerThenClose(CommandIDRead, 1)
+		srv.answerThenClose(ams.CommandRead, 1)
 
-		c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 2*time.Second,
+		c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second,
 			WithClientLogger(slog.New(&testLogHandler{})))
 		if err != nil {
 			t.Fatalf("Dial: %v", err)

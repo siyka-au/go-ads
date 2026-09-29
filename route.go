@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // routeManager holds the credentials and policy state used for AMS route
@@ -407,18 +409,18 @@ func (sess *Session) awaitRouteActive(ctxFor func() context.Context) (uint8, err
 		// starting while the PLC is in CONFIG dies here instead of waiting.
 		if c := sess.client.Load(); c != nil {
 			stateCtx, stateCancel := context.WithTimeout(ctxFor(), probeTimeout)
-			state, serr := c.ReadStateOnPort(stateCtx, PortSystemService)
+			state, serr := c.ReadStateOnPort(stateCtx, ams.PortSystemService)
 			stateCancel()
 			if serr == nil {
-				sess.recordRuntimeState(state.ADSState)
-				if state.ADSState != ADSStateRun {
+				sess.recordRuntimeState(state.State)
+				if state.State != ams.StateRun {
 					sess.route.routeProbeFailures.Store(0)
 					sess.logger.Warn("route is active but the PLC runtime is not in RUN; connecting anyway and waiting for it",
-						"state", uint16(state.ADSState), "probeAttempts", attempt)
+						"state", uint16(state.State), "probeAttempts", attempt)
 					// ErrRuntimeNotRunning, not (0, nil): the route is proven but no version
 					// was read, and reporting 0 as the real version disables
 					// online-change detection and skips the liveness block.
-					return 0, fmt.Errorf("route is served but %w (ADS state %d)", ErrRuntimeNotRunning, uint16(state.ADSState))
+					return 0, fmt.Errorf("route is served but %w (ADS state %d)", ErrRuntimeNotRunning, uint16(state.State))
 				}
 			}
 		}

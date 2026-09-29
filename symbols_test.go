@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // F-15: PLC-controlled Elements with no sanity cap allows DoS via huge map allocation.
@@ -688,15 +690,15 @@ func TestMakeArrayChildren_ZeroElements(t *testing.T) {
 func TestInferBaseType(t *testing.T) {
 	tests := []struct {
 		size     uint32
-		baseType ADSDataType
+		baseType ams.DataType
 		want     string
 	}{
 		{1, 0, "SINT"},
 		{2, 0, "INT"},
-		{4, 0, ""},           // refused: REAL/DINT ambiguity
-		{8, 0, ""},           // refused: LREAL/LINT ambiguity
-		{4, ADSTBigType, ""}, // refused even for BIGTYPE — caller must LoadSymbols
-		{8, ADSTBigType, ""},
+		{4, 0, ""},                   // refused: REAL/DINT ambiguity
+		{8, 0, ""},                   // refused: LREAL/LINT ambiguity
+		{4, ams.DataTypeBigType, ""}, // refused even for BIGTYPE — caller must LoadSymbols
+		{8, ams.DataTypeBigType, ""},
 		{3, 0, ""},
 		{16, 0, ""},
 		{0, 0, ""},
@@ -802,8 +804,8 @@ func TestSymbolSumAddress_PrefersHandleOverDirect(t *testing.T) {
 		Length: 4,
 	}
 	group, offset := symbolSumAddress(sym)
-	if group != uint32(GroupSymbolValueByHandle) {
-		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolValueByHandle)", group, uint32(GroupSymbolValueByHandle))
+	if group != uint32(ams.GroupSymbolValueByHandle) {
+		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolValueByHandle)", group, uint32(ams.GroupSymbolValueByHandle))
 	}
 	if offset != 0xABCD {
 		t.Errorf("offset = 0x%X, want 0xABCD (handle)", offset)
@@ -820,8 +822,8 @@ func TestSymbolSumAddress_HandleOnlyNoGroup(t *testing.T) {
 		Length: 4,
 	}
 	group, offset := symbolSumAddress(sym)
-	if group != uint32(GroupSymbolValueByHandle) {
-		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolValueByHandle)", group, uint32(GroupSymbolValueByHandle))
+	if group != uint32(ams.GroupSymbolValueByHandle) {
+		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolValueByHandle)", group, uint32(ams.GroupSymbolValueByHandle))
 	}
 	if offset != 0xABCD {
 		t.Errorf("offset = 0x%X, want 0xABCD (handle)", offset)
@@ -977,9 +979,9 @@ func TestAddOffsetChildBaseType(t *testing.T) {
 	datatypes := map[string]SymbolUploadDataType{
 		"ST_Inner": {
 			Name:          "ST_Inner",
-			DatatypeEntry: datatypeEntry{Size: 4, SubItems: 1, DataType: uint32(ADSTBigType)},
+			DatatypeEntry: datatypeEntry{Size: 4, SubItems: 1, DataType: uint32(ams.DataTypeBigType)},
 			Children: map[string]*SymbolUploadDataType{
-				"nDeep": {Name: "nDeep", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4, DataType: uint32(ADSTInt32)}},
+				"nDeep": {Name: "nDeep", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4, DataType: uint32(ams.DataTypeInt32)}},
 			},
 		},
 	}
@@ -987,21 +989,21 @@ func TestAddOffsetChildBaseType(t *testing.T) {
 		Name:          "ST_Outer",
 		DatatypeEntry: datatypeEntry{Size: 93, SubItems: 4},
 		Children: map[string]*SymbolUploadDataType{
-			"bError":   {Name: "bError", DataType: "BOOL", DatatypeEntry: datatypeEntry{Size: 1, Offs: 0, DataType: uint32(ADSTBool)}},
-			"sMachine": {Name: "sMachine", DataType: "STRING", DatatypeEntry: datatypeEntry{Size: 81, Offs: 4, DataType: uint32(ADSTString)}},
-			"[0]":      {Name: "[0]", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4, Offs: 85, DataType: uint32(ADSTInt32)}},
-			"stInner":  {Name: "stInner", DataType: "ST_Inner", DatatypeEntry: datatypeEntry{Size: 4, Offs: 89, DataType: uint32(ADSTBigType)}},
+			"bError":   {Name: "bError", DataType: "BOOL", DatatypeEntry: datatypeEntry{Size: 1, Offs: 0, DataType: uint32(ams.DataTypeBool)}},
+			"sMachine": {Name: "sMachine", DataType: "STRING", DatatypeEntry: datatypeEntry{Size: 81, Offs: 4, DataType: uint32(ams.DataTypeString)}},
+			"[0]":      {Name: "[0]", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4, Offs: 85, DataType: uint32(ams.DataTypeInt32)}},
+			"stInner":  {Name: "stInner", DataType: "ST_Inner", DatatypeEntry: datatypeEntry{Size: 4, Offs: 89, DataType: uint32(ams.DataTypeBigType)}},
 		},
 	}
 
 	parent := &symbol{Name: "outer", FullName: "MAIN.outer", DataType: "ST_Outer", Length: 93}
 	children := dt.addOffset(parent, datatypes, 0x4040, nil)
 
-	want := map[string]ADSDataType{
-		"bError":   ADSTBool,
-		"sMachine": ADSTString,
-		"[0]":      ADSTInt32,
-		"stInner":  ADSTBigType,
+	want := map[string]ams.DataType{
+		"bError":   ams.DataTypeBool,
+		"sMachine": ams.DataTypeString,
+		"[0]":      ams.DataTypeInt32,
+		"stInner":  ams.DataTypeBigType,
 	}
 	for key, wantType := range want {
 		child, ok := children[key]
@@ -1019,8 +1021,8 @@ func TestAddOffsetChildBaseType(t *testing.T) {
 	if !ok {
 		t.Fatal("missing grandchild 'nDeep'")
 	}
-	if deep.BaseType != ADSTInt32 {
-		t.Errorf("grandchild nDeep BaseType = %d, want %d (DINT)", deep.BaseType, ADSTInt32)
+	if deep.BaseType != ams.DataTypeInt32 {
+		t.Errorf("grandchild nDeep BaseType = %d, want %d (DINT)", deep.BaseType, ams.DataTypeInt32)
 	}
 }
 
@@ -1036,9 +1038,9 @@ func TestBaseTypeName_StructMemberWithTableLoaded(t *testing.T) {
 			Name:          "ST_Status",
 			DatatypeEntry: datatypeEntry{Size: 93, SubItems: 3},
 			Children: map[string]*SymbolUploadDataType{
-				"sMachineName": {Name: "sMachineName", DataType: "STRING", DatatypeEntry: datatypeEntry{Size: 81, Offs: 0, DataType: uint32(ADSTString)}},
-				"fSpeed":       {Name: "fSpeed", DataType: "LREAL", DatatypeEntry: datatypeEntry{Size: 8, Offs: 84, DataType: uint32(ADSTReal64)}},
-				"bError":       {Name: "bError", DataType: "BOOL", DatatypeEntry: datatypeEntry{Size: 1, Offs: 92, DataType: uint32(ADSTBool)}},
+				"sMachineName": {Name: "sMachineName", DataType: "STRING", DatatypeEntry: datatypeEntry{Size: 81, Offs: 0, DataType: uint32(ams.DataTypeString)}},
+				"fSpeed":       {Name: "fSpeed", DataType: "LREAL", DatatypeEntry: datatypeEntry{Size: 8, Offs: 84, DataType: uint32(ams.DataTypeReal64)}},
+				"bError":       {Name: "bError", DataType: "BOOL", DatatypeEntry: datatypeEntry{Size: 1, Offs: 92, DataType: uint32(ams.DataTypeBool)}},
 			},
 		},
 		// The controllers key BOOL to its storage type, which is the lookup
@@ -1050,7 +1052,7 @@ func TestBaseTypeName_StructMemberWithTableLoaded(t *testing.T) {
 	root := addSymbol(symbolUploadSymbol{
 		Name:        "MAIN.stStatus",
 		DataType:    "ST_Status",
-		SymbolEntry: symbolEntry{Size: 93, DataType: uint32(ADSTBigType)},
+		SymbolEntry: symbolEntry{Size: 93, DataType: uint32(ams.DataTypeBigType)},
 	}, datatypes, nil)
 	sess.cache.symbols[symbolKey(root.FullName)] = root
 	addChildren(root, sess.cache.symbols)

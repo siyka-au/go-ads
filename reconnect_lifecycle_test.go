@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // reconnect_lifecycle_test.go — how a reconnect ends, and the rule that it can
@@ -242,10 +244,10 @@ func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
 	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		return buildSumDeleteNotifPayload(make([]ReturnCode, len(req)/4))
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+		return buildSumDeleteNotifPayload(make([]ams.ReturnCode, len(req)/4))
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	// State as it stands when a reconnect begins: one subscription, and the
 	// config + channel that a resubscribe will need.
@@ -255,7 +257,7 @@ func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
 	sess.notifications.lock.Lock()
 	sess.notifications.activeNotifications[handle] = activeNotification{Sym: sym, Ch: ch}
 	sess.notifications.notificationChannel = ch
-	sess.notifications.addConfig(NotificationConfig{SymbolName: "MAIN.keepchan", TransmissionMode: TransModeServerOnChange})
+	sess.notifications.addConfig(NotificationConfig{SymbolName: "MAIN.keepchan", TransmissionMode: ams.TransModeServerOnChange})
 	sess.notifications.lock.Unlock()
 
 	// Exactly what Reconnect does: snapshot the handles, wipe the map, then
@@ -313,24 +315,24 @@ func TestReconnect_FailedHandleReleaseIsRetried(t *testing.T) {
 	var releaseAttempts atomic.Int32
 	// Refuse every delete with a code that is NOT success-equivalent, so no
 	// attempt ever lands and the snapshot must survive for the next one.
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		releaseAttempts.Add(1)
-		codes := make([]ReturnCode, len(req)/4)
+		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
-			codes[i] = ReturnCodeDeviceError
+			codes[i] = ams.ReturnCodeDeviceError
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		releaseAttempts.Add(1)
-		return ReturnCodeDeviceError
+		return ams.ReturnCodeDeviceError
 	})
 	// Route probe fine, reload always fails: the loop runs its full budget.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{9}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.onRead(GroupSymbolUploadInfo, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeDeviceError, nil
+	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeDeviceError, nil
 	})
 
 	sess.notifications.lock.Lock()
@@ -366,23 +368,23 @@ func TestReconnect_HandleReleaseRetryIsBounded(t *testing.T) {
 	sess := newDialableTestSession(t, srv.host, srv.port, preReconnectReleaseAttempts+4)
 
 	var releaseAttempts atomic.Int32
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		releaseAttempts.Add(1)
-		codes := make([]ReturnCode, len(req)/4)
+		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
-			codes[i] = ReturnCodeDeviceError
+			codes[i] = ams.ReturnCodeDeviceError
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		releaseAttempts.Add(1)
-		return ReturnCodeDeviceError
+		return ams.ReturnCodeDeviceError
 	})
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{9}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.onRead(GroupSymbolUploadInfo, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeDeviceError, nil
+	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeDeviceError, nil
 	})
 
 	sess.notifications.lock.Lock()
@@ -428,29 +430,29 @@ func TestReconnect_PreReconnectHandlesReleasedWhenTransportIsUp(t *testing.T) {
 	var deletedMu sync.Mutex
 	var deleted []uint32
 	// The release goes out as a sum-delete; record the handles it carries.
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		deletedMu.Lock()
 		for i := 0; i+4 <= len(req); i += 4 {
 			deleted = append(deleted, binary.LittleEndian.Uint32(req[i:i+4]))
 		}
 		deletedMu.Unlock()
-		codes := make([]ReturnCode, len(req)/4)
+		codes := make([]ams.ReturnCode, len(req)/4)
 		return buildSumDeleteNotifPayload(codes)
 	})
 	// Per-handle fallback, in case the sum path is unavailable.
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 	// Route probe succeeds every attempt, so the transport is routed and usable;
 	// the symbol reload is what fails, so the loop exhausts.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{9}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{9}
 	})
-	srv.onRead(GroupSymbolUploadInfo, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeDeviceError, nil
+	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeDeviceError, nil
 	})
 
 	// A subscription for Reconnect to snapshot.
@@ -494,8 +496,8 @@ func TestReconnect_UnservedPLCTriggersCooldown(t *testing.T) {
 	// silence has to land on a step AFTER the dial, so route registration is
 	// skipped (it is UDP and there is no responder here, which would be a
 	// different failure) and the symbol reload is what goes unanswered.
-	srv.delayBefore(CommandIDRead, uint32(GroupSymbolUploadInfo), time.Hour)
-	srv.delayBefore(CommandIDReadWrite, uint32(GroupSymbolUploadInfo), time.Hour)
+	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolUploadInfo), time.Hour)
+	srv.delayBefore(ams.CommandReadWrite, uint32(ams.GroupSymbolUploadInfo), time.Hour)
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 0) // unbounded attempts
 	sess.route = &routeManager{skipRegistration: true}
@@ -563,10 +565,10 @@ func TestConnect_VerifiesTheLinkAnswersEvenWithoutRouteRegistration(t *testing.T
 	defer srv.stop()
 
 	// Accepts the connection; answers nothing.
-	srv.delayBefore(CommandIDRead, uint32(GroupSymbolVersion), time.Hour)
+	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(300*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithAutoReconnect(false),
@@ -626,7 +628,7 @@ func TestReconnect_DoesNotReRegisterRouteEveryAttempt(t *testing.T) {
 	router := startRouteResponder(t)
 
 	// The PLC accepts TCP and answers no ADS request, so every probe fails.
-	srv.delayBefore(CommandIDRead, uint32(GroupSymbolVersion), time.Hour)
+	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 6)
 	sess.routerPort = router.port
@@ -676,14 +678,14 @@ func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
 
 	// The device answers only once it has seen a SECOND registration: the first is
 	// the session establishing its route, the second is the healing one.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		if router.registrations() < 2 {
 			// Outlast the client's request timeout without answering: silence, not
 			// a malformed reply, is what a router in this state produces — and only
 			// a plain deadline counts as "unserved".
 			time.Sleep(400 * time.Millisecond)
 		}
-		return ReturnCodeNoErrors, []byte{12}
+		return ams.ReturnCodeNoErrors, []byte{12}
 	})
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 40)
@@ -744,8 +746,8 @@ func TestReconnect_ForceRegistrationRegistersOnEveryReconnect(t *testing.T) {
 
 	// Always answered, so the probe and awaitRouteActive both succeed: this
 	// isolates the force flag from the probe-failure fallback path.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{12}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{12}
 	})
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 6)
@@ -859,8 +861,8 @@ func (g *gateOnLog) WithGroup(name string) slog.Handler {
 func TestReconnect_DropWhileFinishingIsNotLost(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{7}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 40)
@@ -954,13 +956,13 @@ func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 
 	// The router ACKs the registration, but the device never serves the route:
 	// silence, which is what awaitRouteActive is there to catch.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		time.Sleep(400 * time.Millisecond)
-		return ReturnCodeNoErrors, []byte{3}
+		return ams.ReturnCodeNoErrors, []byte{3}
 	})
 
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(150*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		WithRoute("go-ads-test", "Administrator", "1"),
@@ -1038,9 +1040,9 @@ func TestOrphanDelete_NotStartedAfterClose(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 	var deletes atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
@@ -1077,25 +1079,25 @@ func TestOrphanDelete_NotStartedAfterClose(t *testing.T) {
 func TestReconnect_RuntimeNotRunningDoesNotBurnAttempts(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{4}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{4}
 	})
 	// The resubscribe uses the batch path, so this group has to answer or the second
 	// phase fails on a parse error long before reaching the behaviour under test —
 	// the same stub gap that made three earlier tests pass for the wrong reason.
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x4200)
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
 		items := make([]sumNotifResponse, len(req)/40)
 		for i := range items {
-			items[i] = sumNotifResponse{Error: ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
+			items[i] = sumNotifResponse{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
 		}
 		return buildSumAddNotifPayload(items)
 	})
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		codes := make([]ReturnCode, len(req)/4)
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
@@ -1109,9 +1111,9 @@ func TestReconnect_RuntimeNotRunningDoesNotBurnAttempts(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.waiting", 0x4100)
 	sess.notifications.lock.Lock()
 	sess.notifications.notificationChannel = ch
-	sess.notifications.addConfig(NotificationConfig{SymbolName: "MAIN.waiting", TransmissionMode: TransModeServerOnChange})
+	sess.notifications.addConfig(NotificationConfig{SymbolName: "MAIN.waiting", TransmissionMode: ams.TransModeServerOnChange})
 	sess.notifications.lock.Unlock()
-	sess.recordRuntimeState(ADSStateConfig)
+	sess.recordRuntimeState(ams.StateConfig)
 
 	sess.lifecycle.state.transitionTo(SessionStateDisconnected)
 	done := make(chan error, 1)
@@ -1129,7 +1131,7 @@ func TestReconnect_RuntimeNotRunningDoesNotBurnAttempts(t *testing.T) {
 	}
 
 	// And it recovers by itself once the runtime is back, without being rebuilt.
-	sess.recordRuntimeState(ADSStateRun)
+	sess.recordRuntimeState(ams.StateRun)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -1181,7 +1183,7 @@ func TestTearDownAndReset_ReleasesWaitersImmediately(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 	// Answers nothing, so the request is still in flight when teardown happens.
-	srv.delayBefore(CommandIDRead, uint32(GroupSymbolVersion), time.Hour)
+	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 1)
 	sess.requestTimeout = 30 * time.Second // far longer than this test may take
@@ -1308,13 +1310,13 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 	defer srv.stop()
 	// A rival reconnect has to be able to SUCCEED, or "no second dial" and "a
 	// second dial that failed" would look the same from the outside.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{7}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 	// Close without answering the very GetSymbolVersion the liveness probe issues:
 	// a real reset inside the armed window, not a timeout. Disarms afterwards, so
 	// the reconnect this used to spawn gets a working link.
-	srv.dropConnAfter(CommandIDRead, 1)
+	srv.dropConnAfter(ams.CommandRead, 1)
 
 	// "attempting reconnect" is logged before the rival's tearDownAndReset, so
 	// gating on it parks the rival at the start of the damage instead of leaving
@@ -1323,7 +1325,7 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 
 	var disconnects atomic.Int64
 	sess, err := NewSession(context.Background(),
-		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
+		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(500*time.Millisecond),
 		WithTargetCheck(TargetCheckOff),
 		// No WithRoute: that is what routes Connect through the armed liveness
@@ -1417,8 +1419,8 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{7}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{7}
 	})
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 40)
@@ -1509,7 +1511,7 @@ func TestConnect_ResetNamesTheRouteAsALikelyCause(t *testing.T) {
 	defer srv.stop()
 	// Accept the TCP connection, then drop it on the first request — the wire
 	// signature of a PLC with no route for our NetID.
-	srv.dropConnAfter(CommandIDRead, 1)
+	srv.dropConnAfter(ams.CommandRead, 1)
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 1)
 	t.Cleanup(func() { _ = sess.Close() })

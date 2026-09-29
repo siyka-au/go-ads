@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // SessionOption configures optional parameters for NewSession.
@@ -53,7 +55,7 @@ func WithLocalBindIP(ip string) SessionOption {
 	}
 }
 
-// WithLocalAMS sets the local (source) AMSAddress in outgoing ADS headers. NetID
+// WithLocalAMS sets the local (source) Address in outgoing ADS headers. NetID
 // defaults to the local TCP source IP, Port to a random dynamic-range value. The
 // AMS port is a logical id in the header, not the TCP source or destination port.
 //
@@ -61,7 +63,7 @@ func WithLocalBindIP(ip string) SessionOption {
 // for one address take the router out of service for every client until it is
 // cleared by hand. Safe: a NetID matching the address, or
 // WithSkipRouteRegistration. Avoid two sessions from one host under different ones.
-func WithLocalAMS(local AMSAddress) SessionOption {
+func WithLocalAMS(local ams.Address) SessionOption {
 	return func(s *Session) {
 		if local.NetID != [6]byte{} {
 			s.source.NetID = local.NetID

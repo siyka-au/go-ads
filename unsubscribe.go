@@ -2,6 +2,8 @@ package ads
 
 import (
 	"context"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // DeleteDeviceNotification on Session wraps the raw Client RPC with
@@ -70,7 +72,7 @@ func (sess *Session) DeleteDeviceNotification(ctx context.Context, handle uint32
 // are still flushed and both the partial slice and the error are returned, so
 // in-memory state matches what the PLC saw rather than leaving phantom entries for
 // the next reconnect to re-clean.
-func (sess *Session) SumDeleteDeviceNotification(ctx context.Context, handles []uint32) ([]ReturnCode, error) {
+func (sess *Session) SumDeleteDeviceNotification(ctx context.Context, handles []uint32) ([]ams.ReturnCode, error) {
 	return sess.sumDeleteDeviceNotification(ctx, handles, true)
 }
 
@@ -79,7 +81,7 @@ func (sess *Session) SumDeleteDeviceNotification(ctx context.Context, handles []
 // reconnect and reload, which wipe activeNotifications before deleting, so the
 // empty-map rule would fire every reconnect, clear notificationChannel and leave
 // resubscribe returning early on a nil channel with the FSM reporting Connected.
-func (sess *Session) sumDeleteDeviceNotification(ctx context.Context, handles []uint32, userTeardown bool) ([]ReturnCode, error) {
+func (sess *Session) sumDeleteDeviceNotification(ctx context.Context, handles []uint32, userTeardown bool) ([]ams.ReturnCode, error) {
 	codes, rpcErr := sess.client.Load().SumDeleteDeviceNotification(ctx, handles)
 	if len(codes) == 0 {
 		return codes, rpcErr

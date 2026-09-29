@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/ams"
+
 	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
@@ -84,7 +86,7 @@ func addRemoteRouteFrom(logger *slog.Logger, localIP net.IP, remoteHost string, 
 	}
 	logger.Info("registering route",
 		"remoteHost", remoteHost,
-		"localNetID", AMSAddress{NetID: localNetID}.NetIDString(),
+		"localNetID", ams.Address{NetID: localNetID}.NetID.String(),
 		"computerName", computerName,
 		"routeName", routeName,
 		"hasAuth", username != "")

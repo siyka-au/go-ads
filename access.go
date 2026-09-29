@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // WriteValue writes value, a Go value of the type ReadValue returns for the
@@ -37,10 +39,10 @@ func (sess *Session) writeValueRetry(ctx context.Context, symbolName string, val
 	}
 
 	// Network I/O without lock
-	err = sess.client.Load().Write(ctx, uint32(GroupSymbolValueByHandle), handle, data)
+	err = sess.client.Load().Write(ctx, uint32(ams.GroupSymbolValueByHandle), handle, data)
 	if err != nil {
 		// Online-change detection (R-CACHE-009).
-		var rc ReturnCode
+		var rc ams.ReturnCode
 		if errors.As(err, &rc) {
 			sess.handleStaleDetection(rc)
 		}
@@ -95,10 +97,10 @@ func (sess *Session) readValueRetry(ctx context.Context, symbolName string, retr
 	sess.cache.lock.Unlock()
 
 	// Network I/O without lock
-	data, err := sess.client.Load().Read(ctx, uint32(GroupSymbolValueByHandle), handle, length)
+	data, err := sess.client.Load().Read(ctx, uint32(ams.GroupSymbolValueByHandle), handle, length)
 	if err != nil {
 		// Online-change detection (R-CACHE-009).
-		var rc ReturnCode
+		var rc ams.ReturnCode
 		if errors.As(err, &rc) {
 			sess.handleStaleDetection(rc)
 		}
@@ -120,8 +122,8 @@ func (sess *Session) readValueRetry(ctx context.Context, symbolName string, retr
 	// configured strategy. Returns a ReturnCode-typed error so chained
 	// errors.As on the caller side keeps matching.
 	if data != nil && length > 0 && uint32(len(data)) != length {
-		sess.handleStaleDetection(ReturnCodeDeviceInvalidSize)
-		return nil, fmt.Errorf("read %q: %w", symbolName, ReturnCodeDeviceInvalidSize)
+		sess.handleStaleDetection(ams.ReturnCodeDeviceInvalidSize)
+		return nil, fmt.Errorf("read %q: %w", symbolName, ams.ReturnCodeDeviceInvalidSize)
 	}
 
 	// decode() mutates symbol fields (Value, Valid, etc.) so it must
@@ -148,7 +150,7 @@ func (sess *Session) readValueRetry(ctx context.Context, symbolName string, retr
 // cache.lock -- it reads sym.Handle.
 func symbolSumAddress(sym *symbol) (group, offset uint32) {
 	if sym.Handle != 0 {
-		return uint32(GroupSymbolValueByHandle), sym.Handle
+		return uint32(ams.GroupSymbolValueByHandle), sym.Handle
 	}
 	if sym.Group != 0 {
 		absOffset := sym.Offset
@@ -159,7 +161,7 @@ func symbolSumAddress(sym *symbol) (group, offset uint32) {
 	}
 	// Handle and Group both zero — shouldn't happen in normal operation.
 	// Return handle-based addressing; PLC will return an error for handle 0.
-	return uint32(GroupSymbolValueByHandle), sym.Handle
+	return uint32(ams.GroupSymbolValueByHandle), sym.Handle
 }
 
 // ReadValues reads several symbols in one round-trip, returning a map of name
@@ -184,7 +186,7 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 		symbol *symbol
 	}
 	var infos []symbolInfo
-	var requests []SumReadRequest
+	var requests []ams.SumReadRequest
 	// failed accumulates one entry per symbol that yields no value, from every
 	// site that can drop one: resolve failure here, then per-item PLC code,
 	// cache swap and parse failure in the decode loop below. All of them ride
@@ -210,7 +212,7 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 		length := symbol.Length
 		sess.cache.lock.Unlock()
 		infos = append(infos, symbolInfo{name: name, symbol: symbol})
-		requests = append(requests, SumReadRequest{Group: group, Offset: offset, Length: length})
+		requests = append(requests, ams.SumReadRequest{Group: group, Offset: offset, Length: length})
 	}
 
 	if len(requests) == 0 {
@@ -235,7 +237,7 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 	// the same response carry the same stale code (R-SES-011 "once per
 	// detection").
 	for _, r := range results {
-		if r.Error == ReturnCodeNoErrors {
+		if r.Error == ams.ReturnCodeNoErrors {
 			continue
 		}
 		if stale, _ := detectStaleCache(r.Error); stale {
@@ -254,7 +256,7 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 			// symbols, so stop rather than guess.
 			break
 		}
-		if result.Error != ReturnCodeNoErrors {
+		if result.Error != ams.ReturnCodeNoErrors {
 			sess.logger.Warn("symbol read error in batch",
 				"symbol", infos[i].name,
 				"errorCode", uint32(result.Error))
@@ -303,11 +305,11 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 // in a *BatchError (errors.As), which says whether the PLC rejected it or the
 // library never sent it; any other error means the transport failed and no
 // outcome is known. Writing none returns nil, nil.
-func (sess *Session) WriteValues(ctx context.Context, values map[string]any) (map[string]ReturnCode, error) {
+func (sess *Session) WriteValues(ctx context.Context, values map[string]any) (map[string]ams.ReturnCode, error) {
 	return sess.writeValuesRetry(ctx, values, 1)
 }
 
-func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any, retriesLeft int) (map[string]ReturnCode, error) {
+func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any, retriesLeft int) (map[string]ams.ReturnCode, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -324,7 +326,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 		symbol *symbol
 	}
 	var infos []symbolInfo
-	var requests []SumWriteRequest
+	var requests []ams.SumWriteRequest
 	// failed accumulates one entry per symbol that was not written: the two
 	// pre-flight drops here, plus the per-item PLC codes below. Without it a
 	// dropped write is absent from codes and reads as the zero value, i.e. as
@@ -356,7 +358,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 		sess.cache.lock.Lock()
 		group, offset := symbolSumAddress(symbol)
 		sess.cache.lock.Unlock()
-		req := SumWriteRequest{Group: group, Offset: offset, Data: data}
+		req := ams.SumWriteRequest{Group: group, Offset: offset, Data: data}
 
 		infos = append(infos, symbolInfo{name: name, symbol: symbol})
 		requests = append(requests, req)
@@ -380,7 +382,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 	// R-CACHE-009: fire online-change detection for first stale per-item code.
 	// Once-per-batch semantics — see readValuesRetry for rationale.
 	for _, r := range results {
-		if r.Error == ReturnCodeNoErrors {
+		if r.Error == ams.ReturnCodeNoErrors {
 			continue
 		}
 		if stale, _ := detectStaleCache(r.Error); stale {
@@ -389,7 +391,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 		}
 	}
 
-	codes := make(map[string]ReturnCode, len(results))
+	codes := make(map[string]ams.ReturnCode, len(results))
 	succeeded := 0
 	sess.cache.lock.Lock()
 	for i, result := range results {
@@ -397,7 +399,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 			break // more results than requests; cannot attribute them
 		}
 		codes[infos[i].name] = result.Error
-		if result.Error == ReturnCodeNoErrors {
+		if result.Error == ams.ReturnCodeNoErrors {
 			succeeded++
 		} else {
 			failed = append(failed, BatchItemError{Symbol: infos[i].name, Error: result.Error})
@@ -406,7 +408,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 		// Re-resolve via cache.symbols: infos[i].symbol may be stranded if
 		// loadSymbols swapped during the SumWrite roundtrip; clearing the
 		// orphan would leave the live entry showing stale Value.
-		if result.Error == ReturnCodeNoErrors {
+		if result.Error == ams.ReturnCodeNoErrors {
 			if live := sess.cache.symbols[symbolKey(infos[i].name)]; live != nil {
 				live.invalidate()
 			}

@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 func (c *Client) listen() {
@@ -57,7 +59,7 @@ func (c *Client) readFrames(conn net.Conn, primary bool) {
 			c.callOnDrop()
 			return
 		}
-		var tcpHeader amsTCPHeader
+		var tcpHeader ams.TCPHeader
 		if err := binary.Read(bytes.NewReader(hdrBytes[:]), binary.LittleEndian, &tcpHeader); err != nil {
 			c.logger.Error("listen header decode error, transport down", "error", err, "primary", primary)
 			if primary {
@@ -144,7 +146,7 @@ func (c *Client) handleReceive(ctx context.Context, data []byte) {
 		return
 	}
 	buff := bytes.NewBuffer(data)
-	header := AMSHeader{}
+	header := ams.Header{}
 	if err := binary.Read(buff, binary.LittleEndian, &header); err != nil {
 		c.logger.Error("Error parsing header", "error", err)
 		return
@@ -156,7 +158,7 @@ func (c *Client) handleReceive(ctx context.Context, data []byte) {
 		return
 	}
 	switch header.Command {
-	case CommandIDDeviceNotification:
+	case ams.CommandDeviceNotification:
 		if err := c.deviceNotification(ctx, adsData); err != nil {
 			c.logger.Error("device notification decode failed", "error", err)
 		}
@@ -171,7 +173,7 @@ func (c *Client) handleReceive(ctx context.Context, data []byte) {
 				c.logger.Info("receive channel timed out",
 					"id", header.InvokeID, "command", header.Command)
 				return
-			case response <- amsReply{data: adsData, amsErr: ReturnCode(header.ErrorCode)}:
+			case response <- amsReply{data: adsData, amsErr: ams.ReturnCode(header.ErrorCode)}:
 				c.logger.Log(context.Background(), LevelTrace, "Successfully delivered answer",
 					"id", header.InvokeID, "command", header.Command)
 			}

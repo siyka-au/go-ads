@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // transport_fault_level_test.go — the handshake log-level gating.
@@ -82,7 +84,7 @@ func TestHandshakeDropLogsBelowError(t *testing.T) {
 	defer srv.stop()
 
 	logs := &testLogHandler{}
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, time.Second,
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, time.Second,
 		WithClientLogger(slog.New(logs)))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -92,7 +94,7 @@ func TestHandshakeDropLogsBelowError(t *testing.T) {
 	c.beginHandshake()
 	// Answer nothing and drop the connection on the first request, the shape of
 	// a PLC rejecting an unrouted NetID mid-probe.
-	srv.dropConnAfter(CommandIDRead, 1)
+	srv.dropConnAfter(ams.CommandRead, 1)
 	if _, err := c.GetSymbolVersion(t.Context()); err == nil {
 		t.Fatal("probe unexpectedly succeeded against a server that drops the connection")
 	}
@@ -133,25 +135,25 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 	}{
 		{
 			name:    "read request times out",
-			arm:     func(srv *scriptableServer) { srv.delayBefore(CommandIDRead, uint32(GroupSymbolVersion), stall) },
+			arm:     func(srv *scriptableServer) { srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), stall) },
 			provoke: func(t *testing.T, c *Client) error { _, err := c.GetSymbolVersion(t.Context()); return err },
 			wantMsg: "send request failed",
 		},
 		{
 			name:    "write request times out",
-			arm:     func(srv *scriptableServer) { srv.delayBefore(CommandIDWrite, 0x4020, stall) },
+			arm:     func(srv *scriptableServer) { srv.delayBefore(ams.CommandWrite, 0x4020, stall) },
 			provoke: func(t *testing.T, c *Client) error { return c.Write(t.Context(), 0x4020, 0, []byte{1}) },
 			wantMsg: "error during send request for write",
 		},
 		{
 			name:    "read state times out",
-			arm:     func(srv *scriptableServer) { srv.delayBefore(CommandIDReadState, 0, stall) },
+			arm:     func(srv *scriptableServer) { srv.delayBefore(ams.CommandReadState, 0, stall) },
 			provoke: func(t *testing.T, c *Client) error { _, err := c.ReadState(t.Context()); return err },
 			wantMsg: "error during read state",
 		},
 		{
 			name:    "connection dropped mid-request",
-			arm:     func(srv *scriptableServer) { srv.dropConnAfter(CommandIDRead, 1) },
+			arm:     func(srv *scriptableServer) { srv.dropConnAfter(ams.CommandRead, 1) },
 			provoke: func(t *testing.T, c *Client) error { _, err := c.GetSymbolVersion(t.Context()); return err },
 			wantMsg: "transport down",
 		},
@@ -170,7 +172,7 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 				defer srv.stop()
 
 				logs := &testLogHandler{}
-				c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, clientTimeout,
+				c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, clientTimeout,
 					WithClientLogger(slog.New(logs)))
 				if err != nil {
 					t.Fatalf("Dial: %v", err)

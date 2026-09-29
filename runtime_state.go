@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // defaultStateWatchInterval is how often the runtime-state poller runs. Fixed, not
@@ -23,41 +25,41 @@ func (sess *Session) stateWatchCycle() time.Duration {
 // RuntimeState reads the device's ADS state from the system service port. This is
 // the SYSTEM's state, not the runtime port's: ADSStateConfig means no runtime port
 // is serving. Answers while the runtime is unavailable, which is the point.
-func (sess *Session) RuntimeState(ctx context.Context) (ADSState, error) {
+func (sess *Session) RuntimeState(ctx context.Context) (ams.State, error) {
 	c := sess.client.Load()
 	if c == nil {
-		return ADSStateInvalid, ErrTransportClosed
+		return ams.StateInvalid, ErrTransportClosed
 	}
-	state, err := c.ReadStateOnPort(ctx, PortSystemService)
+	state, err := c.ReadStateOnPort(ctx, ams.PortSystemService)
 	if err != nil {
-		return ADSStateInvalid, err
+		return ams.StateInvalid, err
 	}
-	sess.recordRuntimeState(state.ADSState)
-	return state.ADSState, nil
+	sess.recordRuntimeState(state.State)
+	return state.State, nil
 }
 
 // runtimeStateQuietly is RuntimeState with the transport-fault logging suppressed,
 // for the probe at connect: a device without a system service port answers every one
 // of these with an AMS error, and readStateOn reports that at Error in steady state.
-func (sess *Session) runtimeStateQuietly(ctx context.Context) (ADSState, error) {
+func (sess *Session) runtimeStateQuietly(ctx context.Context) (ams.State, error) {
 	c := sess.client.Load()
 	if c == nil {
-		return ADSStateInvalid, ErrTransportClosed
+		return ams.StateInvalid, ErrTransportClosed
 	}
 	c.beginHandshake()
 	defer c.endHandshake()
-	state, err := c.ReadStateOnPort(ctx, PortSystemService)
+	state, err := c.ReadStateOnPort(ctx, ams.PortSystemService)
 	if err != nil {
-		return ADSStateInvalid, err
+		return ams.StateInvalid, err
 	}
-	sess.recordRuntimeState(state.ADSState)
-	return state.ADSState, nil
+	sess.recordRuntimeState(state.State)
+	return state.State, nil
 }
 
-func (sess *Session) recordRuntimeState(state ADSState) {
-	previous := ADSState(sess.runtimeState.Swap(uint32(state)))
+func (sess *Session) recordRuntimeState(state ams.State) {
+	previous := ams.State(sess.runtimeState.Swap(uint32(state)))
 	sess.runtimeStateNs.Store(time.Now().UnixNano())
-	if previous == state || previous == ADSStateInvalid {
+	if previous == state || previous == ams.StateInvalid {
 		return
 	}
 	sess.logger.Info("PLC runtime state changed", "from", previous, "to", state)
@@ -74,16 +76,16 @@ const runtimeStateTTL = 30 * time.Second
 
 // knownRuntimeState returns the last observed state and whether one was observed
 // recently enough to act on.
-func (sess *Session) knownRuntimeState() (ADSState, bool) {
-	state := ADSState(sess.runtimeState.Load())
-	if state == ADSStateInvalid {
+func (sess *Session) knownRuntimeState() (ams.State, bool) {
+	state := ams.State(sess.runtimeState.Load())
+	if state == ams.StateInvalid {
 		return state, false
 	}
 	// Wall clock, deliberately: a clock step here can only make a fresh reading look
 	// stale, which permits — the safe direction. (Contrast the heartbeat detector,
 	// where a step in either direction was harmful, so that one counts ticks.)
 	if at := sess.runtimeStateNs.Load(); at != 0 && time.Since(time.Unix(0, at)) > runtimeStateTTL {
-		return ADSStateInvalid, false
+		return ams.StateInvalid, false
 	}
 	return state, true
 }
@@ -92,9 +94,9 @@ func (sess *Session) knownRuntimeState() (ADSState, bool) {
 // no reading at all it permits rather than inventing a reason to fail. A
 // whitelist of provably-not-serving states, not "anything but RUN": refusing on
 // unfamiliar states would break a working device with no PLC error to explain it.
-func runtimeDefinitelyNotServing(state ADSState) bool {
+func runtimeDefinitelyNotServing(state ams.State) bool {
 	switch state {
-	case ADSStateConfig, ADSStateReconfig:
+	case ams.StateConfig, ams.StateReconfig:
 		// The measured cases. TC3.1.4024 in CONFIG reports 15 and answers every
 		// request to a runtime port with AMS ErrorCode 6 (target port not found).
 		return true
@@ -163,7 +165,7 @@ func (sess *Session) startRuntimeStateWatch() {
 				// is exactly the log-based health signal transportFaultLevel exists
 				// to protect.
 				c.beginHandshake()
-				state, err := c.ReadStateOnPort(ctx, PortSystemService)
+				state, err := c.ReadStateOnPort(ctx, ams.PortSystemService)
 				c.endHandshake()
 				cancel()
 				if err != nil {
@@ -183,15 +185,15 @@ func (sess *Session) startRuntimeStateWatch() {
 						// with nothing left to refresh it and every gated call keeps
 						// refusing. knownRuntimeState's TTL would eventually do this
 						// too; doing it here makes the hand-off immediate.
-						sess.runtimeState.Store(uint32(ADSStateInvalid))
+						sess.runtimeState.Store(uint32(ams.StateInvalid))
 						sess.logger.Info("this device does not answer on the system service port; runtime-state reporting is off for this session, and symbol calls will be attempted as before",
-							"port", uint32(PortSystemService), "attempts", failures)
+							"port", uint32(ams.PortSystemService), "attempts", failures)
 						return
 					}
 					continue
 				}
 				failures = 0
-				sess.recordRuntimeState(state.ADSState)
+				sess.recordRuntimeState(state.State)
 			}
 		})
 		if !started {

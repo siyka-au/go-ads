@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // TestZeroOldSymbolHandles validates R-CACHE-004 in full: loadSymbols
@@ -138,7 +140,7 @@ func TestNewSession_TotalConstruction(t *testing.T) {
 // Validates: R-SES-001, R-SES-006 (option apply-time validation).
 func TestNewSession_OptionsApplied(t *testing.T) {
 	sess, err := NewSession(context.Background(), testEndpoint(),
-		WithLocalAMS(AMSAddress{Port: 1234}),
+		WithLocalAMS(ams.Address{Port: 1234}),
 		WithRequestTimeout(11*time.Second))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -352,7 +354,7 @@ func TestSession_HandleStaleDetection_NoMatch(t *testing.T) {
 		versionStrategy: SymbolVersionIgnore,
 		logger:          slog.Default(),
 	}
-	stale, reason := sess.handleStaleDetection(ReturnCodeNoErrors)
+	stale, reason := sess.handleStaleDetection(ams.ReturnCodeNoErrors)
 	if stale || reason != "" {
 		t.Errorf("got (%v, %q), want (false, \"\")", stale, reason)
 	}
@@ -371,7 +373,7 @@ func TestSession_HandleStaleDetection_Ignore_FiresCallback(t *testing.T) {
 		logger:          slog.Default(),
 	}
 
-	stale, reason := sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+	stale, reason := sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 	if !stale || reason != ReasonSymbolVersionInvalid {
 		t.Errorf("got (%v, %q), want (true, %q)", stale, reason, ReasonSymbolVersionInvalid)
 	}
@@ -396,7 +398,7 @@ func TestSession_HandleStaleDetection_NilCallbackOK(t *testing.T) {
 		versionCallback: nil,
 		logger:          slog.Default(),
 	}
-	stale, _ := sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+	stale, _ := sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 	if !stale {
 		t.Error("expected stale=true")
 	}
@@ -422,7 +424,7 @@ func TestSession_HandleStaleDetection_Close(t *testing.T) {
 	// Trigger detection synthetically. Close strategy fires
 	// closeOnStaleDetection in a goroutine, so the test must wait for the
 	// disconnect signal rather than asserting immediately.
-	stale, reason := sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+	stale, reason := sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 	if !stale || reason != ReasonSymbolVersionInvalid {
 		t.Errorf("handleStaleDetection = (%v, %q), want (true, %q)",
 			stale, reason, ReasonSymbolVersionInvalid)
@@ -545,7 +547,7 @@ func TestSession_AutoReload_BumpsEpoch(t *testing.T) {
 
 	preEpoch := sess.epoch()
 
-	sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+	sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 
 	deadline := time.After(5 * time.Second)
 	for sess.epoch() == preEpoch {
@@ -585,7 +587,7 @@ func TestSession_AutoReload_CapExhaustion_FiresCallback(t *testing.T) {
 		WithOnSymbolVersionChanged(cb))
 
 	for i := 0; i < 4; i++ {
-		sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+		sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -616,7 +618,7 @@ func TestSession_AutoReload_SingleFlight(t *testing.T) {
 	// overlap a reload that fails in microseconds against the stub — so the test
 	// passed or failed on scheduling luck rather than on the guard, and it did
 	// flake (~1 in 16). The delay makes the overlap a property of the test.
-	srv.delayBefore(CommandIDRead, uint32(GroupSymbolUploadInfo), 300*time.Millisecond)
+	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolUploadInfo), 300*time.Millisecond)
 
 	preEpoch := sess.epoch()
 
@@ -626,7 +628,7 @@ func TestSession_AutoReload_SingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+			sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 		}()
 	}
 	wg.Wait()
@@ -678,12 +680,12 @@ func TestSession_ReadFromSymbol_LengthMismatchTriggersDetection(t *testing.T) {
 	// PLC returns 2 bytes (post-online-change INT size) on Read by handle.
 	// Cache will hold Length=8 (pre-change LREAL) — the mismatch is the
 	// detection trigger.
-	srv.onRead(GroupSymbolValueByHandle, func(_, offset, length uint32) (ReturnCode, []byte) {
+	srv.onRead(ams.GroupSymbolValueByHandle, func(_, offset, length uint32) (ams.ReturnCode, []byte) {
 		if offset != fakeHandle {
-			return ReturnCodeDeviceInvalidParam, nil
+			return ams.ReturnCodeDeviceInvalidParam, nil
 		}
 		_ = length // requested length is 8 (cached LREAL); we deliberately ship 2.
-		return ReturnCodeNoErrors, []byte{0x05, 0x00}
+		return ams.ReturnCodeNoErrors, []byte{0x05, 0x00}
 	})
 
 	cbReason := make(chan Reason, 1)
@@ -709,12 +711,12 @@ func TestSession_ReadFromSymbol_LengthMismatchTriggersDetection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from ReadValue on length mismatch, got nil")
 	}
-	var rc ReturnCode
+	var rc ams.ReturnCode
 	if !errors.As(err, &rc) {
 		t.Fatalf("error is not ReturnCode-typed: %v", err)
 	}
-	if rc != ReturnCodeDeviceInvalidSize {
-		t.Errorf("rc = 0x%X, want 0x%X (ReturnCodeDeviceInvalidSize)", uint32(rc), uint32(ReturnCodeDeviceInvalidSize))
+	if rc != ams.ReturnCodeDeviceInvalidSize {
+		t.Errorf("rc = 0x%X, want 0x%X (ReturnCodeDeviceInvalidSize)", uint32(rc), uint32(ams.ReturnCodeDeviceInvalidSize))
 	}
 
 	select {
@@ -775,15 +777,15 @@ func TestReleasePLCResources_NotificationCleanup(t *testing.T) {
 	// releasePLCResources calls bestEffortDeleteNotifications which prefers
 	// SumDeleteDeviceNotification; register that handler so the sum path
 	// completes instead of falling back. Count handles passed through.
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		nItems := len(req) / 4
-		codes := make([]ReturnCode, nItems)
+		codes := make([]ams.ReturnCode, nItems)
 		for i := 0; i < nItems; i++ {
 			h := binary.LittleEndian.Uint32(req[i*4:])
 			if h == stagedHandle {
 				deletes.Add(1)
 			}
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
@@ -812,9 +814,9 @@ func TestReleasePLCResources_SymbolHandleRelease_SkippedWhenDisconnected(t *test
 	defer srv.stop()
 
 	var writes atomic.Int32
-	srv.onWrite(GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ReturnCode {
+	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
 		writes.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -840,9 +842,9 @@ func TestReleasePLCResources_SymbolHandleRelease_FiredWhenConnected(t *testing.T
 
 	const stagedHandle uint32 = 0xABCD0001
 	var writes atomic.Int32
-	srv.onWrite(GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ReturnCode {
+	srv.onWrite(ams.GroupSymbolReleaseHandle, func(_, _ uint32, _ []byte) ams.ReturnCode {
 		writes.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -884,7 +886,7 @@ func TestHandleStaleDetection_Ignore_FiresCallbackPerTrigger(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+			sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 		}()
 	}
 	wg.Wait()
@@ -927,7 +929,7 @@ func TestNewSession_DefaultRandomLocalPort_InRange(t *testing.T) {
 // where the random source is mis-seeded and produces a constant port across
 // constructions. 100 sessions should observe at least 50 distinct ports.
 func TestNewSession_DefaultRandomLocalPort_Distribution(t *testing.T) {
-	seen := map[uint16]struct{}{}
+	seen := map[ams.Port]struct{}{}
 	const N = 100
 	for i := 0; i < N; i++ {
 		sess, err := NewSession(context.Background(), testEndpoint())
@@ -943,12 +945,12 @@ func TestNewSession_DefaultRandomLocalPort_Distribution(t *testing.T) {
 }
 
 // TestNewSession_WithLocalAMS_ZeroPort_KeepsRandomDefault verifies that
-// WithLocalAMS(AMSAddress{Port: 0}) does NOT clobber the random default port.
+// WithLocalAMS(Address{Port: 0}) does NOT clobber the random default port.
 // Port == 0 is the zero value; treating it as "explicit override to 0" would
 // produce an invalid AMS source. WithLocalAMS guards Port != 0 explicitly.
 func TestNewSession_WithLocalAMS_ZeroPort_KeepsRandomDefault(t *testing.T) {
 	sess, err := NewSession(context.Background(), testEndpoint(),
-		WithLocalAMS(AMSAddress{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 0}),
+		WithLocalAMS(ams.Address{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 0}),
 	)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -979,16 +981,16 @@ func TestAutoReload_DeletesOldHandlesBeforeResubscribe(t *testing.T) {
 
 	var mu sync.Mutex
 	var deletedHandles []uint32
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		n := len(req) / 4
 		mu.Lock()
 		for i := 0; i < n; i++ {
 			deletedHandles = append(deletedHandles, binary.LittleEndian.Uint32(req[i*4:]))
 		}
 		mu.Unlock()
-		codes := make([]ReturnCode, n)
+		codes := make([]ams.ReturnCode, n)
 		for i := range codes {
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
@@ -1039,9 +1041,9 @@ func TestAutoReload_NoOldHandles_SkipsDelete(t *testing.T) {
 	defer srv.stop()
 
 	var deleteCalls atomic.Int32
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
 		deleteCalls.Add(1)
-		return buildSumDeleteNotifPayload([]ReturnCode{ReturnCodeNoErrors})
+		return buildSumDeleteNotifPayload([]ams.ReturnCode{ams.ReturnCodeNoErrors})
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -1113,21 +1115,21 @@ func TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle(t *testing.T) {
 		freshHandle uint32 = 0x2222
 	)
 	var handleLookups, staleReads atomic.Int32
-	srv.onWriteRead(GroupSymbolHandleByName, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		handleLookups.Add(1)
 		return buildHandlePayload(freshHandle)
 	})
-	srv.onRead(GroupSymbolValueByHandle, func(_, offset, _ uint32) (ReturnCode, []byte) {
+	srv.onRead(ams.GroupSymbolValueByHandle, func(_, offset, _ uint32) (ams.ReturnCode, []byte) {
 		if offset == staleHandle {
 			staleReads.Add(1)
-			return ReturnCodeDeviceSymbolNoFound, nil
+			return ams.ReturnCodeDeviceSymbolNoFound, nil
 		}
-		return ReturnCodeNoErrors, []byte{7, 0}
+		return ams.ReturnCodeNoErrors, []byte{7, 0}
 	})
 	// A TC3 restart does not bump the symbol version, so the version must never be
 	// what rescues this. Refuse the upload too, so the reload cannot rescue it either.
-	srv.onRead(GroupSymbolUploadInfo, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeDeviceError, nil
+	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeDeviceError, nil
 	})
 
 	sess, _ := newWiredTestSession(t, srv)

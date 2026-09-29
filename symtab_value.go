@@ -505,8 +505,8 @@ func (s *symbol) scalarType(datatypes map[string]SymbolUploadDataType) (string, 
 		return dt.DataType, nil
 	}
 	// The ADST_ code is authoritative when present: the PLC sends the base type
-	// (e.g. ADSTReal32 for a REAL-based alias).
-	if resolved := adsTypeToString(s.BaseType); resolved != "" {
+	// (e.g. DataTypeReal32 for a REAL-based alias).
+	if resolved := s.BaseType.IECName(); resolved != "" {
 		// An array reports its element's ADST_ code with the whole array's
 		// Length, so resolving on BaseType alone would hand the scalar case
 		// 40 bytes to read a 4-byte DINT. That reports "DINT Size Wrong" --
@@ -514,7 +514,7 @@ func (s *symbol) scalarType(datatypes map[string]SymbolUploadDataType) (string, 
 		// table is what is missing. Children (and with them per-element
 		// parsing) are only linked when that table resolves the type, so
 		// name the real problem.
-		if w := adsTypeWidth(s.BaseType); w > 0 && w != s.Length {
+		if w := s.BaseType.Size(); w > 0 && w != s.Length {
 			return "", fmt.Errorf("cannot parse %s: %d bytes, but its base type %s is %d bytes — "+
 				"this looks like an array or struct, which needs the datatype table; call LoadSymbols()",
 				s.DataType, s.Length, resolved, w)

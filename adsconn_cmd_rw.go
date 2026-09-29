@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // Single-symbol ADS commands on *Client: Read, Write, WriteRead,
@@ -35,7 +37,7 @@ func (c *Client) Read(ctx context.Context, group uint32, offset uint32, length u
 	c.logger.Log(context.Background(), LevelTrace, "request", "request", content)
 
 	// Try to send the request
-	resp, err := c.sendRequest(ctx, CommandIDRead, request.Bytes())
+	resp, err := c.sendRequest(ctx, ams.CommandRead, request.Bytes())
 	if err != nil {
 		c.logger.Log(ctx, c.transportFaultLevel(), "send request failed", "error", err)
 		return
@@ -43,7 +45,7 @@ func (c *Client) Read(ctx context.Context, group uint32, offset uint32, length u
 
 	// Check the result error code
 	type readResponse struct {
-		Error  ReturnCode
+		Error  ams.ReturnCode
 		Length uint32
 	}
 	respBuff := bytes.NewBuffer(resp)
@@ -91,13 +93,13 @@ func (c *Client) Write(ctx context.Context, group uint32, offset uint32, data []
 	}
 
 	// Try to send the request
-	resp, err := c.sendRequest(ctx, CommandIDWrite, request.Bytes())
+	resp, err := c.sendRequest(ctx, ams.CommandWrite, request.Bytes())
 	if err != nil {
 		c.logger.Log(ctx, c.transportFaultLevel(), "error during send request for write", "error", err)
 		return err
 	}
 	respBuffer := bytes.NewBuffer(resp)
-	var respCode ReturnCode
+	var respCode ams.ReturnCode
 	// Check the result error code
 	if err = binary.Read(respBuffer, binary.LittleEndian, &respCode); err != nil {
 		return fmt.Errorf("failed to parse Write response: %w", err)
@@ -127,7 +129,7 @@ func (c *Client) WriteRead(ctx context.Context, group uint32, offset uint32, rea
 	}
 
 	type readResponse struct {
-		Error  ReturnCode
+		Error  ams.ReturnCode
 		Length uint32
 	}
 
@@ -143,7 +145,7 @@ func (c *Client) WriteRead(ctx context.Context, group uint32, offset uint32, rea
 	c.logger.Log(context.Background(), LevelTrace, "request", "request", request)
 
 	// Try to send the request
-	resp, err := c.sendRequest(ctx, CommandIDReadWrite, request.Bytes())
+	resp, err := c.sendRequest(ctx, ams.CommandReadWrite, request.Bytes())
 	if err != nil {
 		return
 	}
@@ -165,30 +167,30 @@ func (c *Client) WriteRead(ctx context.Context, group uint32, offset uint32, rea
 }
 
 // ReadState issues ADS ReadState (cmd 4) and returns the PLC's ADS+device state.
-func (c *Client) ReadState(ctx context.Context) (response States, err error) {
+func (c *Client) ReadState(ctx context.Context) (response ams.StateInfo, err error) {
 	return c.readStateOn(ctx, c.target)
 }
 
 // ReadStateOnPort reads the ADS state of another port on the same device. The
 // system service (PortSystemService) is the one that matters: it answers while the
 // system is in CONFIG, when the runtime ports do not exist at all.
-func (c *Client) ReadStateOnPort(ctx context.Context, port Port) (States, error) {
+func (c *Client) ReadStateOnPort(ctx context.Context, port ams.Port) (ams.StateInfo, error) {
 	target := c.target
-	target.Port = uint16(port)
+	target.Port = port
 	return c.readStateOn(ctx, target)
 }
 
-func (c *Client) readStateOn(ctx context.Context, target AMSAddress) (response States, err error) {
+func (c *Client) readStateOn(ctx context.Context, target ams.Address) (response ams.StateInfo, err error) {
 	// Try to send the request
-	resp, err := c.sendRequestTo(ctx, target, CommandIDReadState, []byte{})
+	resp, err := c.sendRequestTo(ctx, target, ams.CommandReadState, []byte{})
 	if err != nil {
 		c.logger.Log(ctx, c.transportFaultLevel(), "error during read state", "error", err)
 		return
 	}
 	c.logger.Log(context.Background(), LevelTrace, "response from plc for state", "data", resp)
 	type readStateResponse struct {
-		Error ReturnCode
-		States
+		Error ams.ReturnCode
+		ams.StateInfo
 	}
 	stateResponse := &readStateResponse{}
 	buff := bytes.NewBuffer(resp)
@@ -199,16 +201,16 @@ func (c *Client) readStateOn(ctx context.Context, target AMSAddress) (response S
 		return response, fmt.Errorf("ADS error in ReadState: %w", stateResponse.Error)
 	}
 	c.logger.Debug("read state response",
-		"ADSState", uint16(stateResponse.ADSState),
+		"ADSState", uint16(stateResponse.State),
 		"deviceState", stateResponse.DeviceState)
 
-	return stateResponse.States, nil
+	return stateResponse.StateInfo, nil
 }
 
 // ReadDeviceInfo issues ADS ReadDeviceInfo (cmd 1).
-func (c *Client) ReadDeviceInfo(ctx context.Context) (response DeviceInfo, err error) {
+func (c *Client) ReadDeviceInfo(ctx context.Context) (response ams.DeviceInfo, err error) {
 	// Try to send the request
-	resp, err := c.sendRequest(ctx, CommandIDReadDeviceInfo, []byte{})
+	resp, err := c.sendRequest(ctx, ams.CommandReadDeviceInfo, []byte{})
 	if err != nil {
 		return
 	}
@@ -218,8 +220,11 @@ func (c *Client) ReadDeviceInfo(ctx context.Context) (response DeviceInfo, err e
 		return response, fmt.Errorf("wrong length of response! Got %d bytes and it should be 24", len(resp))
 	}
 	type readDeviceInfoResponse struct {
-		Error      ReturnCode
-		DeviceInfo DeviceInfo
+		Error      ams.ReturnCode
+		Major      uint8
+		Minor      uint8
+		Build      uint16
+		DeviceName [16]byte // NUL-padded
 	}
 	respBuffer := bytes.NewBuffer(resp)
 	deviceInfoResponse := readDeviceInfoResponse{}
@@ -231,7 +236,16 @@ func (c *Client) ReadDeviceInfo(ctx context.Context) (response DeviceInfo, err e
 		return
 	}
 
-	return deviceInfoResponse.DeviceInfo, nil
+	name := deviceInfoResponse.DeviceName[:]
+	if i := bytes.IndexByte(name, 0); i >= 0 {
+		name = name[:i]
+	}
+	return ams.DeviceInfo{
+		Name:  string(name),
+		Major: deviceInfoResponse.Major,
+		Minor: deviceInfoResponse.Minor,
+		Build: deviceInfoResponse.Build,
+	}, nil
 }
 
 // ReleaseHandle releases a symbol handle previously acquired via
@@ -240,5 +254,5 @@ func (c *Client) ReadDeviceInfo(ctx context.Context) (response DeviceInfo, err e
 func (c *Client) ReleaseHandle(ctx context.Context, handle uint32) error {
 	handleBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(handleBytes, handle)
-	return c.Write(ctx, uint32(GroupSymbolReleaseHandle), 0, handleBytes)
+	return c.Write(ctx, uint32(ams.GroupSymbolReleaseHandle), 0, handleBytes)
 }

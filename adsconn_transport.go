@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // transport owns the TCP socket, per-invoke request multiplexing, and the
@@ -52,17 +54,17 @@ const recvQueueSize = 256
 // reporting "0xF008: unknown error code", which is the group, not a code.
 type amsReply struct {
 	data   []byte
-	amsErr ReturnCode
+	amsErr ams.ReturnCode
 }
 
 // payload returns the response body, or the AMS-level error the router reported --
 // in which case the request never reached a service that could answer, so the body
-// is not a response. Returned as an AMSError, not a bare ReturnCode: this is where
+// is not a response. Returned as an RouterError, not a bare ReturnCode: this is where
 // the two provenances used to become indistinguishable, and the abort guards tell
 // them apart by type.
 func (r amsReply) payload() ([]byte, error) {
 	if r.amsErr != 0 {
-		return nil, AMSError{Code: r.amsErr}
+		return nil, ams.RouterError{Code: r.amsErr}
 	}
 	return r.data, nil
 }

@@ -101,13 +101,13 @@ func symbolVersionSession(t *testing.T, strategy string, extraOpts ...SessionOpt
 	opts = append(opts, WithOnSymbolVersionChanged(func(reason Reason) {
 		t.Logf("symbol-version-changed callback: reason=%s", reason)
 	}))
-	target, err := NewAMSAddress(targetAMS, uint16(targetPort))
+	target, err := NewAddress(targetAMS, uint16(targetPort))
 	if err != nil {
 		t.Fatalf("invalid target AMS: %v", err)
 	}
-	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAMS(AMSAddress{Port: 11000}))
+	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAMS(Address{Port: 11000}))
 	if localAMS != "auto" && localAMS != "" {
-		local, err := NewAMSAddress(localAMS, 11000)
+		local, err := NewAddress(localAMS, 11000)
 		if err != nil {
 			t.Fatalf("invalid local AMS: %v", err)
 		}

@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // symbolKey normalizes a symbol name for use as an internal map key.
@@ -46,8 +48,8 @@ type symbol struct {
 	Group          uint32
 	Offset         uint32
 	Length         uint32
-	BaseType       ADSDataType // protocol ADST_ code (e.g., ADSTReal32=4 for REAL)
-	Flags          SymbolFlag
+	BaseType       ams.DataType // protocol ADST_ code (e.g., DataTypeReal32=4 for REAL)
+	Flags          ams.SymbolFlag
 	ContextMask    uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
 
 	Value       any // decoded to its Go type; see value.go

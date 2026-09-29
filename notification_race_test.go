@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // notification_race_test.go — subscribe-race regression tests.
@@ -76,9 +78,9 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 	defer srv.stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -105,7 +107,7 @@ func TestSubscribeRace_EarlySampleReplayedAfterCommit(t *testing.T) {
 	})
 
 	ch := make(chan *Update, 4)
-	handle, err := sess.AddSymbolNotification(context.Background(), "MAIN.sMachineName", 0, 0, TransModeServerOnChange, ch)
+	handle, err := sess.AddSymbolNotification(context.Background(), "MAIN.sMachineName", 0, 0, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
@@ -145,15 +147,15 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 	var deleted atomic.Int32
 	var deletedHandles []uint32
 	var delMu sync.Mutex
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		delMu.Lock()
 		deletedHandles = append(deletedHandles, h)
 		delMu.Unlock()
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 	// 40ms per Add over 5 symbols puts the batch well past the 100ms window.
-	srv.delayBefore(CommandIDAddDeviceNotification, 0, 40*time.Millisecond)
+	srv.delayBefore(ams.CommandAddDeviceNotification, 0, 40*time.Millisecond)
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
@@ -170,7 +172,7 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.tag" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xC000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -194,7 +196,7 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 		if r.Skipped != nil {
 			t.Fatalf("results[%d] (%s) Skipped = %v", i, names[i], r.Skipped)
 		}
-		if r.Error != ReturnCodeNoErrors {
+		if r.Error != ams.ReturnCodeNoErrors {
 			t.Fatalf("results[%d] (%s) Error = 0x%X", i, names[i], uint32(r.Error))
 		}
 	}
@@ -246,7 +248,7 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.bind" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xD000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var mu sync.Mutex
@@ -281,7 +283,7 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 		t.Fatalf("AddSymbolNotifications: %v", err)
 	}
 	for i, r := range results {
-		if r.Skipped != nil || r.Error != ReturnCodeNoErrors {
+		if r.Skipped != nil || r.Error != ams.ReturnCodeNoErrors {
 			t.Fatalf("results[%d] (%s): Skipped=%v Error=0x%X", i, names[i], r.Skipped, uint32(r.Error))
 		}
 	}
@@ -322,7 +324,7 @@ func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.reload" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xE000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var adds atomic.Int32
@@ -411,16 +413,16 @@ func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.plain" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xC100+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	var nextHandle atomic.Uint32
@@ -494,16 +496,16 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.post" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xD200+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	var adds atomic.Int32
@@ -574,7 +576,7 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 	if !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumDeleteNotif into the unsupported state")
 	}
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	const symbolCount = 2
 	names := make([]string, symbolCount)
@@ -582,7 +584,7 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.retry" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xD400+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var adds atomic.Int32
@@ -608,7 +610,7 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 	}
 
 	// The documented response to a stranded entry: subscribe it again.
-	if _, err := sess.AddSymbolNotification(context.Background(), names[0], 0, 0, TransModeServerOnChange, ch); err != nil {
+	if _, err := sess.AddSymbolNotification(context.Background(), names[0], 0, 0, ams.TransModeServerOnChange, ch); err != nil {
 		if errors.Is(err, ErrNotificationDuplicate) || strings.Contains(err.Error(), "already") {
 			t.Errorf("retry of a stranded symbol rejected as a duplicate: %v", err)
 		} else {
@@ -648,16 +650,16 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.abort" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xB000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	var adds atomic.Int32
@@ -749,11 +751,11 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	const symbolCount = 3
@@ -761,7 +763,7 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 	for i := range configs {
 		name := fmt.Sprintf("MAIN.reaped%d", i)
 		preSeedTypedSymbol(sess, name, uint32(0xD600+i))
-		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var adds atomic.Int32
@@ -839,7 +841,7 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 	for i := range names {
 		names[i] = "MAIN.drop" + string(rune('A'+i))
 		preSeedTypedSymbol(sess, names[i], uint32(0xF000+i))
-		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: names[i], TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -848,7 +850,7 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	// Answer two Adds, then vanish mid-request on the third.
-	srv.dropConnAfter(CommandIDAddDeviceNotification, 3)
+	srv.dropConnAfter(ams.CommandAddDeviceNotification, 3)
 
 	ch := make(chan *Update, symbolCount)
 	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
@@ -863,7 +865,7 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 		switch {
 		case r.Skipped != nil:
 			// fine: refused, with the handle surfaced if the PLC made one
-		case r.Error != ReturnCodeNoErrors:
+		case r.Error != ams.ReturnCodeNoErrors:
 			// fine: PLC-side rejection
 		case r.Handle != 0:
 			successes++
@@ -909,7 +911,7 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 	for i := range configs {
 		name := fmt.Sprintf("MAIN.scale%02d", i)
 		preSeedTypedSymbol(sess, name, uint32(0xA000+i))
-		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -920,7 +922,7 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	// Die after the third Add: 37 requests still to go.
-	srv.dropConnAfter(CommandIDAddDeviceNotification, 3)
+	srv.dropConnAfter(ams.CommandAddDeviceNotification, 3)
 
 	ch := make(chan *Update, symbolCount)
 	start := time.Now()
@@ -939,7 +941,7 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 			transportFailures++
 		case r.Skipped != nil:
 			other++
-		case r.Handle != 0 && r.Error == ReturnCodeNoErrors:
+		case r.Handle != 0 && r.Error == ams.ReturnCodeNoErrors:
 			successes++
 		default:
 			other++
@@ -990,7 +992,7 @@ func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
 	for i := range configs {
 		name := fmt.Sprintf("MAIN.router%02d", i)
 		preSeedTypedSymbol(sess, name, uint32(0xB000+i))
-		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: TransModeServerOnChange}
+		configs[i] = NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange}
 	}
 
 	var nextHandle atomic.Uint32
@@ -1002,7 +1004,7 @@ func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
 	})
 	// Items 0-2 get handles; from item 3 on, the router refuses. Sticky, as
 	// CONFIG mode is.
-	srv.amsErrorAfter(CommandIDAddDeviceNotification, 4, ReturnCodeGlobalTargetPortNotFound)
+	srv.amsErrorAfter(ams.CommandAddDeviceNotification, 4, ams.ReturnCodeGlobalTargetPortNotFound)
 
 	ch := make(chan *Update, symbolCount)
 	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
@@ -1019,9 +1021,9 @@ func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
 		switch {
 		case r.Skipped != nil && errors.Is(r.Skipped, ErrNotificationTransportFailure):
 			transportFailures++
-		case r.Skipped == nil && r.Error == ReturnCodeGlobalTargetPortNotFound:
+		case r.Skipped == nil && r.Error == ams.ReturnCodeGlobalTargetPortNotFound:
 			routerCodeAsVerdict++
-		case r.Skipped == nil && r.Handle != 0 && r.Error == ReturnCodeNoErrors:
+		case r.Skipped == nil && r.Handle != 0 && r.Error == ams.ReturnCodeNoErrors:
 			successes++
 		default:
 			other++
@@ -1114,9 +1116,9 @@ func TestOrphanDelete_BuffersRatherThanReapsWhileSubscribing(t *testing.T) {
 	defer srv.stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -1154,11 +1156,11 @@ func TestSubscribeRace_UncommittedSamplesDiscarded(t *testing.T) {
 		if err := sess.drivePacket(sess.lifecycle.ctx, buildNotificationPacket(0x555, 0, intSample(7))); err != nil {
 			t.Errorf("drivePacket from Add handler: %v", err)
 		}
-		return addNotifResponse{Error: ReturnCodeDeviceInvalidParam}
+		return addNotifResponse{Error: ams.ReturnCodeDeviceInvalidParam}
 	})
 
 	ch := make(chan *Update, 1)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.rejected", 0, 0, TransModeServerOnChange, ch); err == nil {
+	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.rejected", 0, 0, ams.TransModeServerOnChange, ch); err == nil {
 		t.Fatal("AddSymbolNotification: err = nil, want PLC rejection")
 	}
 

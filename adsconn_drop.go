@@ -8,6 +8,8 @@ import (
 	"net"
 	"syscall"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // resetAfterConnectHint explains a reset landing right after a successful connect.
@@ -18,14 +20,14 @@ import (
 // All five causes stay, in the order worth checking: naming only the route one has
 // sent people after a mistyped NetID, and eviction by another client on this IP
 // (Beckhoff #49) looks identical on the wire to a missing route.
-func resetAfterConnectHint(source, target AMSAddress) string {
+func resetAfterConnectHint(source, target ams.Address) string {
 	return fmt.Sprintf("a reset right after TCP connect means one of: "+
 		"no route is registered on the PLC for our NetID (%s), "+
 		"the target NetID (%s) does not exist on this PLC, "+
 		"the route credentials were rejected, "+
 		"AMS port %d addresses no running runtime (expect 851 on TwinCAT 3, 801 on TwinCAT 2), "+
 		"or another client on this host IP took the router's single per-host TCP slot and evicted us",
-		source.NetIDString(), target.NetIDString(), target.Port)
+		source.NetID.String(), target.NetID.String(), target.Port)
 }
 
 // framesSeen reports how many AMS frames this client has decoded across both
@@ -94,8 +96,8 @@ func (c *Client) logDropVerdict(err error) {
 			"PLC dropped an established connection, transport down",
 			append(attrs,
 				"hint", establishedDropHint(),
-				"sourceNetID", c.sourceAddr().NetIDString(),
-				"targetNetID", c.target.NetIDString(),
+				"sourceNetID", c.sourceAddr().NetID.String(),
+				"targetNetID", c.target.NetID.String(),
 				"targetPort", c.target.Port)...)
 		return
 	}
@@ -103,8 +105,8 @@ func (c *Client) logDropVerdict(err error) {
 		c.logger.Log(c.ctx, c.transportFaultLevel(), "PLC closed connection, transport down",
 			append(attrs,
 				"hint", resetAfterConnectHint(c.sourceAddr(), c.target),
-				"sourceNetID", c.sourceAddr().NetIDString(),
-				"targetNetID", c.target.NetIDString(),
+				"sourceNetID", c.sourceAddr().NetID.String(),
+				"targetNetID", c.target.NetID.String(),
 				"targetPort", c.target.Port)...)
 		return
 	}

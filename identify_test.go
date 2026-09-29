@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // buildIdentifyResponse assembles a response of the shape a TwinCAT router
@@ -50,7 +52,7 @@ func TestParseIdentifyResponse_RealShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseIdentifyResponse: %v", err)
 	}
-	if got, want := id.AMS.NetIDString(), "5.66.133.203.1.1"; got != want {
+	if got, want := id.AMS.NetID.String(), "5.66.133.203.1.1"; got != want {
 		t.Errorf("NetID = %q, want %q", got, want)
 	}
 	if id.AMS.Port != 10000 {
@@ -129,7 +131,7 @@ func TestRemoteIdentity_RuntimePort(t *testing.T) {
 	tests := []struct {
 		name  string
 		major uint8
-		want  uint16
+		want  ams.Port
 	}{
 		{name: "TwinCAT 2 uses 801", major: 2, want: 801},
 		{name: "TwinCAT 3 uses 851", major: 3, want: 851},
@@ -244,7 +246,7 @@ func TestIdentifyRemote_RetransmitsOnPacketLoss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("identify with one dropped request: %v", err)
 	}
-	if got := id.AMS.NetIDString(); got != "5.1.2.3.1.1" {
+	if got := id.AMS.NetID.String(); got != "5.1.2.3.1.1" {
 		t.Errorf("NetID = %s, want 5.1.2.3.1.1", got)
 	}
 }

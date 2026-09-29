@@ -3,6 +3,8 @@ package ads
 import (
 	"encoding/binary"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // releasePLCResources frees notifications and, while the transport is alive,
@@ -46,7 +48,7 @@ func (sess *Session) releasePLCResources(wasDisconnected bool) {
 		}
 		handleBytes := make([]byte, 4)
 		binary.LittleEndian.PutUint32(handleBytes, h)
-		if err := sess.client.Load().Write(sess.currentLifecycleCtx(), uint32(GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
+		if err := sess.client.Load().Write(sess.currentLifecycleCtx(), uint32(ams.GroupSymbolReleaseHandle), 0, handleBytes); err != nil {
 			sess.logger.Warn("failed to release symbol handle", "error", err, "handle", h)
 		} else {
 			// Per handle. The notification-delete path was demoted in 6fc9b14; this is

@@ -1,4 +1,4 @@
-package ads
+package ams
 
 // SymbolFlag represents bits in the symbol flags field returned by INFOBYNAMEEX (0xF009)
 // and the bulk symbol upload. These flags control how extended symbol info is parsed

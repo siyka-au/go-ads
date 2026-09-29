@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // reconnect_storm_test.go — the P1b/P2b hardening from the 2026-08-27 field
@@ -332,15 +334,15 @@ func TestLogDropVerdict_EstablishedDropDoesNotBlameTheRoute(t *testing.T) {
 func TestAwaitRouteActive_ConfigFallbackStillRunsWhileRedialling(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.setADSState(ADSStateConfig)
+	srv.setADSState(ams.StateConfig)
 
 	sess := activationTestSession(t, srv, 3*time.Second)
 
 	// The runtime port answers nothing (the probe reads the symbol version there),
 	// while the system service still reports CONFIG — the real shape of a PLC that
 	// is up but not running.
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeDeviceError, nil
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeDeviceError, nil
 	})
 
 	_, err := sess.awaitRouteActive(sess.currentLifecycleCtx)
@@ -367,8 +369,8 @@ func TestNestedRedial_DoesNotDeadlock(t *testing.T) {
 	defer srv.stop()
 
 	sess := activationTestSession(t, srv, time.Second)
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{4}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{4}
 	})
 
 	done := make(chan error, 1)

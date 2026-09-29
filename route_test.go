@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // F-24: parseRouteResponse must reject a response whose invokeID does not
@@ -287,7 +289,7 @@ func TestAddRoute_ReadsTheSourceNetIDUnderItsLock(t *testing.T) {
 	first := [6]byte{10, 0, 0, 1, 1, 1}
 	second := [6]byte{192, 168, 3, 52, 1, 1}
 	sess.tx.connMu.Lock()
-	sess.source = AMSAddress{NetID: first, Port: 10500}
+	sess.source = ams.Address{NetID: first, Port: 10500}
 	sess.tx.connMu.Unlock()
 
 	// The writer, doing exactly what localHandshake does: replace the whole address
@@ -302,7 +304,7 @@ func TestAddRoute_ReadsTheSourceNetIDUnderItsLock(t *testing.T) {
 				next = second
 			}
 			sess.tx.connMu.Lock()
-			sess.source = AMSAddress{NetID: next, Port: 10500}
+			sess.source = ams.Address{NetID: next, Port: 10500}
 			sess.tx.connMu.Unlock()
 		}
 	}()

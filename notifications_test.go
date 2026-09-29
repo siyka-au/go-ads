@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // notifications_test.go — Session.AddSymbolNotification(s) + DeleteDeviceNotification
@@ -86,7 +88,7 @@ func TestAddSymbolNotification_ChannelMismatchRejected(t *testing.T) {
 
 	// Attempt AddSymbolNotification with chB ≠ chA.
 	chB := make(chan *Update, 1)
-	_, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, TransModeServerOnChange, chB)
+	_, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, chB)
 	if err == nil {
 		t.Fatal("AddSymbolNotification with mismatched channel: err = nil, want error")
 	}
@@ -117,7 +119,7 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 		seedLiveNotification(sess, "MAIN.x", 0x1001, ch)
 
 		results, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.x", TransmissionMode: TransModeServerOnChange},
+			{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
 		}, ch)
 		if err != nil {
 			t.Fatalf("AddSymbolNotifications: %v", err)
@@ -144,8 +146,8 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 		seedLiveNotification(sess, "MAIN.dup", 0x1002, ch)
 
 		results, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.dup", TransmissionMode: TransModeServerOnChange},
-			{SymbolName: "MAIN.dup", TransmissionMode: TransModeServerOnChange},
+			{SymbolName: "MAIN.dup", TransmissionMode: ams.TransModeServerOnChange},
+			{SymbolName: "MAIN.dup", TransmissionMode: ams.TransModeServerOnChange},
 		}, ch)
 		if err != nil {
 			t.Fatalf("AddSymbolNotifications: %v", err)
@@ -178,7 +180,7 @@ func TestAddSymbolNotifications_DuplicateRejected(t *testing.T) {
 
 		chB := make(chan *Update, 1)
 		_, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.x", TransmissionMode: TransModeServerOnChange},
+			{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
 		}, chB)
 		if err == nil {
 			t.Errorf("AddSymbolNotifications with mismatched channel: err = nil, want error")
@@ -217,18 +219,18 @@ func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
 	const fakeHandle uint32 = 0xBEEF0001
 
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: fakeHandle, Error: ReturnCodeNoErrors}
+		return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 	})
 	// 100ms server-side delay gives the test goroutine time to bump epoch
 	// + delete the symbol before the response is sent.
-	srv.delayBefore(CommandIDAddDeviceNotification, 0, 100*time.Millisecond)
+	srv.delayBefore(ams.CommandAddDeviceNotification, 0, 100*time.Millisecond)
 
 	var deletes atomic.Int32
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		if h == fakeHandle {
 			deletes.Add(1)
 		}
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -237,7 +239,7 @@ func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
 	ch := make(chan *Update, 1)
 	addErr := make(chan error, 1)
 	go func() {
-		_, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, TransModeServerOnChange, ch)
+		_, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 		addErr <- err
 	}()
 
@@ -303,14 +305,14 @@ func TestAddSymbolNotification_TOCTOURecheck(t *testing.T) {
 	nextHandle.Store(0xAB000001)
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
 		h := nextHandle.Add(1) - 1
-		return addNotifResponse{Handle: h, Error: ReturnCodeNoErrors}
+		return addNotifResponse{Handle: h, Error: ams.ReturnCodeNoErrors}
 	})
-	srv.delayBefore(CommandIDAddDeviceNotification, 0, 100*time.Millisecond)
+	srv.delayBefore(ams.CommandAddDeviceNotification, 0, 100*time.Millisecond)
 
 	var deletes atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -324,7 +326,7 @@ func TestAddSymbolNotification_TOCTOURecheck(t *testing.T) {
 	resCh := make(chan result, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
-			h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, TransModeServerOnChange, ch)
+			h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 			resCh <- result{handle: h, err: err}
 		}()
 	}
@@ -392,17 +394,17 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 
 		const fakeHandle uint32 = 0x11110001
 		srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-			return addNotifResponse{Handle: fakeHandle, Error: ReturnCodeNoErrors}
+			return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 		})
-		srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
-			return ReturnCodeNoErrors
+		srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+			return ams.ReturnCodeNoErrors
 		})
 
 		sess, _ := newWiredTestSession(t, srv)
 		preSeedSymbol(sess, "MAIN.x")
 
 		ch := make(chan *Update, 1)
-		h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, TransModeServerOnChange, ch)
+		h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 		if err != nil {
 			t.Fatalf("AddSymbolNotification: %v", err)
 		}
@@ -452,17 +454,17 @@ func TestDeleteDeviceNotification_ClearsState(t *testing.T) {
 
 		const fakeHandle uint32 = 0x22220001
 		srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-			return addNotifResponse{Handle: fakeHandle, Error: ReturnCodeNoErrors}
+			return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 		})
-		srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
-			return ReturnCodeDeviceNotifyHandleInvalid
+		srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+			return ams.ReturnCodeDeviceNotifyHandleInvalid
 		})
 
 		sess, _ := newWiredTestSession(t, srv)
 		preSeedSymbol(sess, "MAIN.x")
 
 		ch := make(chan *Update, 1)
-		h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, TransModeServerOnChange, ch)
+		h, err := sess.AddSymbolNotification(context.Background(), "MAIN.x", 0, 0, ams.TransModeServerOnChange, ch)
 		if err != nil {
 			t.Fatalf("AddSymbolNotification: %v", err)
 		}
@@ -509,7 +511,7 @@ func TestNotificationChannel_SetOnFirstSuccess(t *testing.T) {
 		ch := make(chan *Update, 1)
 
 		_, _ = sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-			{SymbolName: "MAIN.dup", TransmissionMode: TransModeServerOnChange},
+			{SymbolName: "MAIN.dup", TransmissionMode: ams.TransModeServerOnChange},
 		}, ch)
 		// Channel was never set by AddSymbolNotifications since all entries
 		// were Skipped pre-flight (no roundtrip even occurred — len(requests)==0
@@ -542,7 +544,7 @@ func TestNotificationChannel_SetOnFirstSuccess(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				_, _ = sess.AddSymbolNotifications(context.Background(), []NotificationConfig{
-					{SymbolName: "MAIN.x", TransmissionMode: TransModeServerOnChange},
+					{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
 				}, ch)
 			}()
 		}
@@ -584,7 +586,7 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 	ch := make(chan *Update, 1)
 	sess.notifications.lock.Lock()
 	sess.notifications.pending = []pendingNotification{
-		{Config: NotificationConfig{SymbolName: "MAIN.x", TransmissionMode: TransModeServerOnChange}},
+		{Config: NotificationConfig{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange}},
 	}
 	sess.notifications.configsByKey[symbolKey("MAIN.x")] = struct{}{}
 	sess.notifications.notificationChannel = ch
@@ -595,20 +597,20 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 
 	// Sum-add request: respond with a fresh handle but FIRST swap the cache
 	// to empty so the post-roundtrip re-fetch finds nil and Skipped fires.
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		sess.cache.lock.Lock()
 		sess.cache.symbols = map[string]*symbol{}
 		sess.cache.lock.Unlock()
 		h := sumHandle.Add(1) - 1
-		return buildSumAddNotifPayload([]sumNotifResponse{{Handle: h, Error: ReturnCodeNoErrors}})
+		return buildSumAddNotifPayload([]sumNotifResponse{{Handle: h, Error: ams.ReturnCodeNoErrors}})
 	})
 	// bestEffortDelete after Skipped+Handle uses SumDeleteDeviceNotification.
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		// One handle per request (4 bytes). Always succeed.
 		nItems := len(req) / 4
-		codes := make([]ReturnCode, nItems)
+		codes := make([]ams.ReturnCode, nItems)
 		for i := range codes {
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
@@ -671,11 +673,11 @@ func TestBestEffortDeleteNotifications_MixedSuccess(t *testing.T) {
 		// Sum-delete returns [NoErrors, NotifyHandleInvalid, DeviceError].
 		// Per bestEffortDeleteNotifications: NoErrors + NotifyHandleInvalid
 		// count as success (handle gone PLC-side); DeviceError does NOT.
-		srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
-			return buildSumDeleteNotifPayload([]ReturnCode{
-				ReturnCodeNoErrors,
-				ReturnCodeDeviceNotifyHandleInvalid,
-				ReturnCodeDeviceError,
+		srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(_ []byte) []byte {
+			return buildSumDeleteNotifPayload([]ams.ReturnCode{
+				ams.ReturnCodeNoErrors,
+				ams.ReturnCodeDeviceNotifyHandleInvalid,
+				ams.ReturnCodeDeviceError,
 			})
 		})
 
@@ -698,7 +700,7 @@ func TestBestEffortDeleteNotifications_MixedSuccess(t *testing.T) {
 // Sanity: TransModeServerOnChange is a valid mode; we use it in tests to
 // ensure pre-checks fire BEFORE the in-context-mode auto-fallback (which
 // would emit a Warn log otherwise).
-var _ TransMode = TransModeServerOnChange
+var _ ams.TransMode = ams.TransModeServerOnChange
 
 // Compile-anchor for atomic + errors: keep imports honest if any
 // path above is later trimmed.
@@ -742,35 +744,35 @@ func TestSumNotificationResultTriState(t *testing.T) {
 	// Item 2 (z) succeeds with handle 0x1003 — but the test mutates
 	// the cache mid-handler so the post-roundtrip re-fetch finds the
 	// orphan and reports Skipped+Handle (TOCTOU race).
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
 		// Mid-roundtrip: delete z from the cache so the post-roundtrip
 		// re-resolve fails for that handle, triggering the TOCTOU branch.
 		sess.cache.lock.Lock()
 		delete(sess.cache.symbols, symbolKey("MAIN.z"))
 		sess.cache.lock.Unlock()
 		return buildSumAddNotifPayload([]sumNotifResponse{
-			{Handle: 0x1001, Error: ReturnCodeNoErrors},
-			{Handle: 0, Error: ReturnCodeDeviceInvalidParam},
-			{Handle: 0x1003, Error: ReturnCodeNoErrors},
+			{Handle: 0x1001, Error: ams.ReturnCodeNoErrors},
+			{Handle: 0, Error: ams.ReturnCodeDeviceInvalidParam},
+			{Handle: 0x1003, Error: ams.ReturnCodeNoErrors},
 		})
 	})
 	// bestEffortDelete uses SumDelete for the orphan release.
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
 		nItems := len(req) / 4
-		codes := make([]ReturnCode, nItems)
+		codes := make([]ams.ReturnCode, nItems)
 		for i := range codes {
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
 
 	ch := make(chan *Update, 4)
 	configs := []NotificationConfig{
-		{SymbolName: "MAIN.x", TransmissionMode: TransModeServerOnChange},
+		{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
 		// Library-skip case: duplicate name within the batch.
-		{SymbolName: "MAIN.x", TransmissionMode: TransModeServerOnChange},
-		{SymbolName: "MAIN.y", TransmissionMode: TransModeServerOnChange},
-		{SymbolName: "MAIN.z", TransmissionMode: TransModeServerOnChange},
+		{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange},
+		{SymbolName: "MAIN.y", TransmissionMode: ams.TransModeServerOnChange},
+		{SymbolName: "MAIN.z", TransmissionMode: ams.TransModeServerOnChange},
 	}
 
 	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
@@ -783,7 +785,7 @@ func TestSumNotificationResultTriState(t *testing.T) {
 
 	// Assert: configs[0] success
 	r0 := results[0]
-	if r0.Skipped != nil || r0.Error != ReturnCodeNoErrors || r0.Handle == 0 {
+	if r0.Skipped != nil || r0.Error != ams.ReturnCodeNoErrors || r0.Handle == 0 {
 		t.Errorf("config[0] (success): got Handle=%d Error=%v Skipped=%v",
 			r0.Handle, r0.Error, r0.Skipped)
 	}
@@ -794,7 +796,7 @@ func TestSumNotificationResultTriState(t *testing.T) {
 	}
 	// Assert: configs[2] PLC error (Skipped nil, Error != NoErrors, Handle == 0)
 	r2 := results[2]
-	if r2.Skipped != nil || r2.Error == ReturnCodeNoErrors || r2.Handle != 0 {
+	if r2.Skipped != nil || r2.Error == ams.ReturnCodeNoErrors || r2.Handle != 0 {
 		t.Errorf("config[2] (PLC error): got Handle=%d Error=%v Skipped=%v",
 			r2.Handle, r2.Error, r2.Skipped)
 	}
@@ -825,7 +827,7 @@ func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
 
 	// Truncated response: claims n=1 item but returns 0 bytes of item data.
 	// executeSumCommand asserts len(resp) >= n*itemReadSize (n*8 for Add).
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		return []byte{} // too short — outer parse will fail
 	})
 
@@ -833,7 +835,7 @@ func TestResubscribeNotifications_RollbackOnError(t *testing.T) {
 	preSeedSymbol(sess, "MAIN.x")
 	ch := make(chan *Update, 1)
 	saved := []pendingNotification{
-		{Config: NotificationConfig{SymbolName: "MAIN.x", TransmissionMode: TransModeServerOnChange, MaxDelay: 0, CycleTime: 0}},
+		{Config: NotificationConfig{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange, MaxDelay: 0, CycleTime: 0}},
 	}
 
 	sess.notifications.lock.Lock()
@@ -925,7 +927,7 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 
 	const fakeHandle uint32 = 0x22220002
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
-		return addNotifResponse{Handle: fakeHandle, Error: ReturnCodeNoErrors}
+		return addNotifResponse{Handle: fakeHandle, Error: ams.ReturnCodeNoErrors}
 	})
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -937,7 +939,7 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 	sess.notifications.lock.Unlock()
 
 	ch := make(chan *Update, 1)
-	h, err := sess.AddSymbolNotification(context.Background(), "MAIN.stranded", 0, 0, TransModeServerOnChange, ch)
+	h, err := sess.AddSymbolNotification(context.Background(), "MAIN.stranded", 0, 0, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification on a declared-but-not-live symbol: %v — the caller cannot clear a pending-only entry, so this is a permanently dead symbol", err)
 	}
@@ -965,7 +967,7 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 
 	// And a genuine duplicate — the symbol now HAS a live handle — must still be
 	// refused, or this fix has simply deleted the duplicate check.
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.stranded", 0, 0, TransModeServerOnChange, ch); err == nil {
+	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.stranded", 0, 0, ams.TransModeServerOnChange, ch); err == nil {
 		t.Error("a second subscribe of a LIVE symbol succeeded; duplicate detection is gone")
 	}
 }
@@ -980,20 +982,20 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 // counts reload attempts, which is how the no-storm assertions are made.
 func seedStaleSymbol(t *testing.T, srv *scriptableServer, handleLookups, staleAdds, uploadInfoReads *atomic.Int32, opts ...SessionOption) (*Session, *symbol) {
 	t.Helper()
-	srv.onWriteRead(GroupSymbolHandleByName, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		handleLookups.Add(1)
 		return buildHandlePayload(staleTestFreshHandle)
 	})
 	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
 		if req.Offset == staleTestStaleHandle {
 			staleAdds.Add(1)
-			return addNotifResponse{Error: ReturnCodeDeviceSymbolNoFound}
+			return addNotifResponse{Error: ams.ReturnCodeDeviceSymbolNoFound}
 		}
 		return addNotifResponse{Handle: staleTestNotifHandle}
 	})
-	srv.onRead(GroupSymbolUploadInfo, func(_, _, _ uint32) (ReturnCode, []byte) {
+	srv.onRead(ams.GroupSymbolUploadInfo, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
 		uploadInfoReads.Add(1)
-		return ReturnCodeDeviceError, nil
+		return ams.ReturnCodeDeviceError, nil
 	})
 
 	// The heartbeat is off so the only AddDeviceNotification traffic in the test is
@@ -1070,13 +1072,13 @@ func TestAddSymbolNotification_SymbolNotFoundInvalidatesTheCachedHandle(t *testi
 	ctx := context.Background()
 	ch := make(chan *Update, 1)
 
-	_, err := sess.AddSymbolNotification(ctx, "MAIN.a", 0, time.Second, TransModeServerOnChange, ch)
+	_, err := sess.AddSymbolNotification(ctx, "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch)
 	if err == nil {
 		t.Fatal("subscribe against the stale handle succeeded; the stub was supposed to refuse it with 0x710")
 	}
-	var rc ReturnCode
-	if !errors.As(err, &rc) || rc != ReturnCodeDeviceSymbolNoFound {
-		t.Fatalf("first subscribe error = %v, want one carrying %v", err, ReturnCodeDeviceSymbolNoFound)
+	var rc ams.ReturnCode
+	if !errors.As(err, &rc) || rc != ams.ReturnCodeDeviceSymbolNoFound {
+		t.Fatalf("first subscribe error = %v, want one carrying %v", err, ams.ReturnCodeDeviceSymbolNoFound)
 	}
 	if got := staleAdds.Load(); got != 1 {
 		t.Fatalf("subscribes against the stale handle = %d, want 1", got)
@@ -1085,7 +1087,7 @@ func TestAddSymbolNotification_SymbolNotFoundInvalidatesTheCachedHandle(t *testi
 	awaitHandleZeroed(t, sess, sym)
 
 	// And the recovery has to be real: the next subscribe re-resolves and succeeds.
-	handle, err := sess.AddSymbolNotification(ctx, "MAIN.a", 0, time.Second, TransModeServerOnChange, ch)
+	handle, err := sess.AddSymbolNotification(ctx, "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("subscribe after invalidation: %v", err)
 	}
@@ -1119,23 +1121,23 @@ func TestAddSymbolNotifications_SymbolNotFoundInvalidatesTheCachedHandle(t *test
 	sess, sym := seedStaleSymbol(t, srv, &handleLookups, &staleAdds, &uploadInfoReads)
 
 	var sumAdds atomic.Int32
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		if sumAdds.Add(1) == 1 {
-			return buildSumAddNotifPayload([]sumNotifResponse{{Error: ReturnCodeDeviceSymbolNoFound}})
+			return buildSumAddNotifPayload([]sumNotifResponse{{Error: ams.ReturnCodeDeviceSymbolNoFound}})
 		}
 		return buildSumAddNotifPayload([]sumNotifResponse{{Handle: staleTestNotifHandle}})
 	})
 
 	ctx := context.Background()
 	ch := make(chan *Update, 1)
-	cfg := NotificationConfig{SymbolName: "MAIN.a", CycleTime: time.Second, TransmissionMode: TransModeServerOnChange}
+	cfg := NotificationConfig{SymbolName: "MAIN.a", CycleTime: time.Second, TransmissionMode: ams.TransModeServerOnChange}
 
 	results, err := sess.AddSymbolNotifications(ctx, []NotificationConfig{cfg}, ch)
 	if err != nil {
 		t.Fatalf("batch subscribe: %v", err)
 	}
-	if len(results) != 1 || results[0].Error != ReturnCodeDeviceSymbolNoFound {
-		t.Fatalf("batch results = %+v, want one entry carrying %v", results, ReturnCodeDeviceSymbolNoFound)
+	if len(results) != 1 || results[0].Error != ams.ReturnCodeDeviceSymbolNoFound {
+		t.Fatalf("batch results = %+v, want one entry carrying %v", results, ams.ReturnCodeDeviceSymbolNoFound)
 	}
 
 	awaitHandleZeroed(t, sess, sym)
@@ -1144,7 +1146,7 @@ func TestAddSymbolNotifications_SymbolNotFoundInvalidatesTheCachedHandle(t *test
 	if err != nil {
 		t.Fatalf("batch subscribe after invalidation: %v", err)
 	}
-	if len(results) != 1 || results[0].Error != ReturnCodeNoErrors || results[0].Handle != staleTestNotifHandle {
+	if len(results) != 1 || results[0].Error != ams.ReturnCodeNoErrors || results[0].Handle != staleTestNotifHandle {
 		t.Fatalf("batch results after invalidation = %+v, want one committed entry with handle 0x%X", results, staleTestNotifHandle)
 	}
 	if n := handleLookups.Load(); n != 1 {
@@ -1173,7 +1175,7 @@ func TestAddSymbolNotification_SymbolNotFoundIgnoreKeepsTheCachedHandle(t *testi
 		WithOnSymbolVersionChanged(func(r Reason) { reasons <- r }))
 
 	ch := make(chan *Update, 1)
-	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.a", 0, time.Second, TransModeServerOnChange, ch); err == nil {
+	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.a", 0, time.Second, ams.TransModeServerOnChange, ch); err == nil {
 		t.Fatal("subscribe against the stale handle succeeded; the stub was supposed to refuse it with 0x710")
 	}
 
@@ -1205,15 +1207,15 @@ func TestAddSymbolNotification_SymbolNotFoundIgnoreKeepsTheCachedHandle(t *testi
 func TestIsBestEffortDeleteSuccess(t *testing.T) {
 	cases := []struct {
 		name string
-		code ReturnCode
+		code ams.ReturnCode
 		want bool
 	}{
-		{"NoErrors", ReturnCodeNoErrors, true},
-		{"NotifyHandleInvalid", ReturnCodeDeviceNotifyHandleInvalid, true},
-		{"DeviceClientUnknown", ReturnCodeDeviceClientUnknown, true},
-		{"DeviceError", ReturnCodeDeviceError, false},
-		{"DeviceNotReady", ReturnCodeDeviceNotReady, false},
-		{"GlobalTargetNotFound", ReturnCodeGlobalTargetNotFound, false},
+		{"NoErrors", ams.ReturnCodeNoErrors, true},
+		{"NotifyHandleInvalid", ams.ReturnCodeDeviceNotifyHandleInvalid, true},
+		{"DeviceClientUnknown", ams.ReturnCodeDeviceClientUnknown, true},
+		{"DeviceError", ams.ReturnCodeDeviceError, false},
+		{"DeviceNotReady", ams.ReturnCodeDeviceNotReady, false},
+		{"GlobalTargetNotFound", ams.ReturnCodeGlobalTargetNotFound, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1239,25 +1241,25 @@ func TestIsBestEffortDeleteSuccess(t *testing.T) {
 func TestAddSymbolNotifications_StaleItemLogsAtWarnNotError(t *testing.T) {
 	cases := []struct {
 		name      string
-		code      ReturnCode
+		code      ams.ReturnCode
 		wantLevel slog.Level
 		why       string
 	}{
 		{
 			name:      "stale handle after a runtime restart",
-			code:      ReturnCodeDeviceSymbolNoFound, // 0x710, in the stale-detection set
+			code:      ams.ReturnCodeDeviceSymbolNoFound, // 0x710, in the stale-detection set
 			wantLevel: slog.LevelWarn,
 			why:       "the library invalidates the handle and the next call re-resolves it",
 		},
 		{
 			name:      "symbol version invalid",
-			code:      ReturnCodeDeviceSymbolVersionInvalid, // 0x711, also self-healing
+			code:      ams.ReturnCodeDeviceSymbolVersionInvalid, // 0x711, also self-healing
 			wantLevel: slog.LevelWarn,
 			why:       "same: detection fires and the cache reloads",
 		},
 		{
 			name:      "service not supported",
-			code:      ReturnCodeDeviceServiceNotSupported, // 0x701, not recoverable here
+			code:      ams.ReturnCodeDeviceServiceNotSupported, // 0x701, not recoverable here
 			wantLevel: slog.LevelError,
 			why:       "nothing in the library can make this succeed; an operator has to look",
 		},
@@ -1273,12 +1275,12 @@ func TestAddSymbolNotifications_StaleItemLogsAtWarnNotError(t *testing.T) {
 			sess, _ := seedStaleSymbol(t, srv, &handleLookups, &staleAdds, &uploadInfoReads,
 				WithLogger(slog.New(logs)))
 
-			srv.onWriteRead(GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+			srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 				return buildSumAddNotifPayload([]sumNotifResponse{{Error: tc.code}})
 			})
 
 			ch := make(chan *Update, 1)
-			cfg := NotificationConfig{SymbolName: "MAIN.a", CycleTime: time.Second, TransmissionMode: TransModeServerOnChange}
+			cfg := NotificationConfig{SymbolName: "MAIN.a", CycleTime: time.Second, TransmissionMode: ams.TransModeServerOnChange}
 			if _, err := sess.AddSymbolNotifications(context.Background(), []NotificationConfig{cfg}, ch); err != nil {
 				t.Fatalf("batch subscribe: %v", err)
 			}

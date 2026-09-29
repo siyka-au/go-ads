@@ -11,13 +11,15 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // scriptableServer is a programmable wire-level ADS PLC stub.
 //
 // Unlike echoServer (client_test.go), which always returns an empty Read
 // response with InvokeID echoed, scriptableServer dispatches each inbound
-// AMS frame to a per-test handler keyed by (CommandID, group). Tests
+// AMS frame to a per-test handler keyed by (Command, group). Tests
 // register handlers per command (or per WriteRead group) and the server
 // constructs a canonical response from the handler's return value.
 //
@@ -42,19 +44,19 @@ type addNotifRequest struct {
 // addNotifResponse is what the test handler returns for AddDeviceNotification.
 type addNotifResponse struct {
 	Handle uint32
-	Error  ReturnCode
+	Error  ams.ReturnCode
 }
 
 // sumNotifResponse — per-item response for SumAddDeviceNotification.
 type sumNotifResponse struct {
-	Error  ReturnCode
+	Error  ams.ReturnCode
 	Handle uint32
 }
 
 type (
 	writeReadHandler func(req []byte) []byte
-	writeHandler     func(group, offset uint32, data []byte) ReturnCode
-	readHandler      func(group, offset, length uint32) (ReturnCode, []byte)
+	writeHandler     func(group, offset uint32, data []byte) ams.ReturnCode
+	readHandler      func(group, offset, length uint32) (ams.ReturnCode, []byte)
 )
 
 type scriptableServer struct {
@@ -83,7 +85,7 @@ type scriptableServer struct {
 	// fires, so a probe can only be made to fail at transport level ONCE. A
 	// redial loop that dials on every failed probe needs the failure to repeat,
 	// which is exactly the storm condition awaitRouteActive's cap exists to bound.
-	dropAlways map[CommandID]bool
+	dropAlways map[ams.Command]bool
 
 	mu sync.Mutex // guards every field below
 
@@ -100,7 +102,7 @@ type scriptableServer struct {
 	readHandlers      map[uint32]readHandler
 
 	addNotifFn    func(req addNotifRequest) addNotifResponse
-	deleteNotifFn func(handle uint32) ReturnCode
+	deleteNotifFn func(handle uint32) ams.ReturnCode
 
 	// Optional artificial latency, keyed by (cmd, group). For commands that
 	// don't carry a group (AddDeviceNotification etc.) the group is 0.
@@ -108,27 +110,27 @@ type scriptableServer struct {
 
 	// dropAfter/dropSeen implement dropConnAfter: close the connection instead
 	// of answering the nth occurrence of a command.
-	dropAfter map[CommandID]int
-	dropSeen  map[CommandID]int
+	dropAfter map[ams.Command]int
+	dropSeen  map[ams.Command]int
 
 	// amsErrAfter/amsErrCode/amsErrSeen implement amsErrorAfter: answer the nth
 	// and every later occurrence of a command with an AMS-header ErrorCode
 	// instead of a normal reply. Models a TwinCAT system dropping into CONFIG —
 	// the router keeps answering, the runtime port stops existing.
-	amsErrAfter map[CommandID]int
-	amsErrCode  map[CommandID]uint32
-	amsErrSeen  map[CommandID]int
+	amsErrAfter map[ams.Command]int
+	amsErrCode  map[ams.Command]uint32
+	amsErrSeen  map[ams.Command]int
 
 	// closeAfterReply implements answerThenClose: answer the nth occurrence of a
 	// command normally, then close the connection. Models the PLC behaviour that
 	// matters most here — a reply followed immediately by a route-idle close, a
 	// runtime restart, or an RST.
-	closeAfterReply map[CommandID]int
+	closeAfterReply map[ams.Command]int
 
 	// adsState is what ReadState reports; zero means RUN. Lets a test put the stub
 	// "in CONFIG" the way a real system service reports it.
-	adsState  ADSState
-	replySeen map[CommandID]int
+	adsState  ams.State
+	replySeen map[ams.Command]int
 
 	// Recorded inbound frames (full bytes including TCP header).
 	frameBuf [][]byte
@@ -153,7 +155,7 @@ type scriptableServer struct {
 }
 
 type delayKey struct {
-	cmd   CommandID
+	cmd   ams.Command
 	group uint32 // 0 for non-group cmds
 }
 
@@ -177,7 +179,7 @@ func startScriptableServer(t *testing.T) *scriptableServer {
 		readHandlers:      map[uint32]readHandler{},
 		delays:            map[delayKey]time.Duration{},
 		conns:             map[net.Conn]struct{}{},
-		dropAlways:        map[CommandID]bool{},
+		dropAlways:        map[ams.Command]bool{},
 		quit:              make(chan struct{}),
 	}
 	s.wg.Add(1)
@@ -234,22 +236,22 @@ func (s *scriptableServer) closeClientConns() {
 	}
 }
 
-// onWriteRead registers a handler for the given group on CommandIDReadWrite.
-func (s *scriptableServer) onWriteRead(group Group, fn writeReadHandler) {
+// onWriteRead registers a handler for the given group on CommandReadWrite.
+func (s *scriptableServer) onWriteRead(group ams.Group, fn writeReadHandler) {
 	s.mu.Lock()
 	s.writeReadHandlers[uint32(group)] = fn
 	s.mu.Unlock()
 }
 
-// onWrite registers a handler for the given group on CommandIDWrite.
-func (s *scriptableServer) onWrite(group Group, fn writeHandler) {
+// onWrite registers a handler for the given group on CommandWrite.
+func (s *scriptableServer) onWrite(group ams.Group, fn writeHandler) {
 	s.mu.Lock()
 	s.writeHandlers[uint32(group)] = fn
 	s.mu.Unlock()
 }
 
-// onRead registers a handler for the given group on CommandIDRead.
-func (s *scriptableServer) onRead(group Group, fn readHandler) {
+// onRead registers a handler for the given group on CommandRead.
+func (s *scriptableServer) onRead(group ams.Group, fn readHandler) {
 	s.mu.Lock()
 	s.readHandlers[uint32(group)] = fn
 	s.mu.Unlock()
@@ -263,7 +265,7 @@ func (s *scriptableServer) onAddDeviceNotification(fn func(req addNotifRequest) 
 }
 
 // onDeleteDeviceNotification registers the DeleteDeviceNotification handler.
-func (s *scriptableServer) onDeleteDeviceNotification(fn func(handle uint32) ReturnCode) {
+func (s *scriptableServer) onDeleteDeviceNotification(fn func(handle uint32) ams.ReturnCode) {
 	s.mu.Lock()
 	s.deleteNotifFn = fn
 	s.mu.Unlock()
@@ -272,13 +274,13 @@ func (s *scriptableServer) onDeleteDeviceNotification(fn func(handle uint32) Ret
 // delayBefore injects artificial latency for a particular (cmd, group)
 // before the handler runs. Pass group=0 for commands without an index group
 // (AddDeviceNotification, DeleteDeviceNotification, ReadDeviceInfo, ReadState).
-func (s *scriptableServer) setADSState(state ADSState) {
+func (s *scriptableServer) setADSState(state ams.State) {
 	s.mu.Lock()
 	s.adsState = state
 	s.mu.Unlock()
 }
 
-func (s *scriptableServer) delayBefore(cmd CommandID, group uint32, d time.Duration) {
+func (s *scriptableServer) delayBefore(cmd ams.Command, group uint32, d time.Duration) {
 	s.mu.Lock()
 	s.delays[delayKey{cmd: cmd, group: group}] = d
 	s.mu.Unlock()
@@ -292,7 +294,7 @@ func (s *scriptableServer) delayBefore(cmd CommandID, group uint32, d time.Durat
 // Sticky on purpose. dropConnAfter disarms itself on its first firing
 // (see dropAlways), so it cannot reproduce a probe that keeps failing at
 // transport level.
-func (s *scriptableServer) dropConnAlways(cmd CommandID) {
+func (s *scriptableServer) dropConnAlways(cmd ams.Command) {
 	s.dropAlwaysMu.Lock()
 	s.dropAlways[cmd] = true
 	s.dropAlwaysMu.Unlock()
@@ -300,14 +302,14 @@ func (s *scriptableServer) dropConnAlways(cmd CommandID) {
 
 // stopDroppingConn disarms dropConnAlways for cmd, so a test can let the
 // session recover and assert on what it does next.
-func (s *scriptableServer) stopDroppingConn(cmd CommandID) {
+func (s *scriptableServer) stopDroppingConn(cmd ams.Command) {
 	s.dropAlwaysMu.Lock()
 	delete(s.dropAlways, cmd)
 	s.dropAlwaysMu.Unlock()
 }
 
 // droppingAlways reports whether cmd is currently armed for a sticky drop.
-func (s *scriptableServer) droppingAlways(cmd CommandID) bool {
+func (s *scriptableServer) droppingAlways(cmd ams.Command) bool {
 	s.dropAlwaysMu.Lock()
 	defer s.dropAlwaysMu.Unlock()
 	return s.dropAlways[cmd]
@@ -378,7 +380,7 @@ func (s *scriptableServer) handle(c net.Conn) {
 		s.frameBuf = append(s.frameBuf, frame)
 		s.mu.Unlock()
 
-		cmd := CommandID(binary.LittleEndian.Uint16(body[16:18]))
+		cmd := ams.Command(binary.LittleEndian.Uint16(body[16:18]))
 		invokeID := binary.LittleEndian.Uint32(body[28:32])
 		payload := body[32:] // ADS request payload
 
@@ -386,7 +388,7 @@ func (s *scriptableServer) handle(c net.Conn) {
 		// start with Group(4) Offset(4) ...
 		var group uint32
 		switch cmd {
-		case CommandIDRead, CommandIDWrite, CommandIDReadWrite:
+		case ams.CommandRead, ams.CommandWrite, ams.CommandReadWrite:
 			if len(payload) >= 4 {
 				group = binary.LittleEndian.Uint32(payload[0:4])
 			}
@@ -519,11 +521,11 @@ func (s *scriptableServer) discardPeerConn(failed net.Conn) {
 
 // answerThenClose answers the nth occurrence of cmd (1-based) and then closes
 // the connection, then disarms.
-func (s *scriptableServer) answerThenClose(cmd CommandID, n int) {
+func (s *scriptableServer) answerThenClose(cmd ams.Command, n int) {
 	s.mu.Lock()
 	if s.closeAfterReply == nil {
-		s.closeAfterReply = map[CommandID]int{}
-		s.replySeen = map[CommandID]int{}
+		s.closeAfterReply = map[ams.Command]int{}
+		s.replySeen = map[ams.Command]int{}
 	}
 	s.closeAfterReply[cmd] = n
 	s.replySeen[cmd] = 0
@@ -533,11 +535,11 @@ func (s *scriptableServer) answerThenClose(cmd CommandID, n int) {
 // dropConnAfter closes the connection without answering the nth occurrence of
 // cmd (1-based), then disarms. Use to land a transport failure in the middle of
 // a multi-request operation.
-func (s *scriptableServer) dropConnAfter(cmd CommandID, n int) {
+func (s *scriptableServer) dropConnAfter(cmd ams.Command, n int) {
 	s.mu.Lock()
 	if s.dropAfter == nil {
-		s.dropAfter = map[CommandID]int{}
-		s.dropSeen = map[CommandID]int{}
+		s.dropAfter = map[ams.Command]int{}
+		s.dropSeen = map[ams.Command]int{}
 	}
 	s.dropAfter[cmd] = n
 	s.dropSeen[cmd] = 0
@@ -551,12 +553,12 @@ func (s *scriptableServer) dropConnAfter(cmd CommandID, n int) {
 //
 // Deliberately sticky: unlike dropConnAfter this never disarms, because the
 // condition it models does not clear itself.
-func (s *scriptableServer) amsErrorAfter(cmd CommandID, n int, code ReturnCode) {
+func (s *scriptableServer) amsErrorAfter(cmd ams.Command, n int, code ams.ReturnCode) {
 	s.mu.Lock()
 	if s.amsErrAfter == nil {
-		s.amsErrAfter = map[CommandID]int{}
-		s.amsErrCode = map[CommandID]uint32{}
-		s.amsErrSeen = map[CommandID]int{}
+		s.amsErrAfter = map[ams.Command]int{}
+		s.amsErrCode = map[ams.Command]uint32{}
+		s.amsErrSeen = map[ams.Command]int{}
 	}
 	s.amsErrAfter[cmd] = n
 	s.amsErrCode[cmd] = uint32(code)
@@ -564,45 +566,45 @@ func (s *scriptableServer) amsErrorAfter(cmd CommandID, n int, code ReturnCode) 
 	s.mu.Unlock()
 }
 
-func (s *scriptableServer) dispatch(cmd CommandID, group uint32, payload []byte) []byte {
+func (s *scriptableServer) dispatch(cmd ams.Command, group uint32, payload []byte) []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	switch cmd {
-	case CommandIDReadWrite:
+	case ams.CommandReadWrite:
 		// payload: Group(4) Offset(4) ReadLen(4) WriteLen(4) Data...
 		if fn := s.writeReadHandlers[group]; fn != nil {
 			if len(payload) < 16 {
-				return respondErrorBytes(ReturnCodeDeviceInvalidSize)
+				return respondErrorBytes(ams.ReturnCodeDeviceInvalidSize)
 			}
 			writeLen := binary.LittleEndian.Uint32(payload[12:16])
 			if uint64(16+writeLen) > uint64(len(payload)) {
-				return respondErrorBytes(ReturnCodeDeviceInvalidSize)
+				return respondErrorBytes(ams.ReturnCodeDeviceInvalidSize)
 			}
 			req := payload[16 : 16+writeLen]
 			data := fn(req)
-			return buildReadResponse(ReturnCodeNoErrors, data)
+			return buildReadResponse(ams.ReturnCodeNoErrors, data)
 		}
-		return respondErrorBytes(ReturnCodeDeviceServiceNotSupported)
+		return respondErrorBytes(ams.ReturnCodeDeviceServiceNotSupported)
 
-	case CommandIDRead:
+	case ams.CommandRead:
 		// payload: Group(4) Offset(4) Length(4)
 		if fn := s.readHandlers[group]; fn != nil {
 			if len(payload) < 12 {
-				return respondErrorBytes(ReturnCodeDeviceInvalidSize)
+				return respondErrorBytes(ams.ReturnCodeDeviceInvalidSize)
 			}
 			offset := binary.LittleEndian.Uint32(payload[4:8])
 			length := binary.LittleEndian.Uint32(payload[8:12])
 			rc, data := fn(group, offset, length)
 			return buildReadResponse(rc, data)
 		}
-		return respondErrorBytes(ReturnCodeDeviceServiceNotSupported)
+		return respondErrorBytes(ams.ReturnCodeDeviceServiceNotSupported)
 
-	case CommandIDWrite:
+	case ams.CommandWrite:
 		// payload: Group(4) Offset(4) Length(4) Data...
 		if fn := s.writeHandlers[group]; fn != nil {
 			if len(payload) < 12 {
-				return respondErrorBytes(ReturnCodeDeviceInvalidSize)
+				return respondErrorBytes(ams.ReturnCodeDeviceInvalidSize)
 			}
 			offset := binary.LittleEndian.Uint32(payload[4:8])
 			length := binary.LittleEndian.Uint32(payload[8:12])
@@ -613,58 +615,58 @@ func (s *scriptableServer) dispatch(cmd CommandID, group uint32, payload []byte)
 			rc := fn(group, offset, data)
 			return respondErrorBytes(rc)
 		}
-		return respondErrorBytes(ReturnCodeDeviceServiceNotSupported)
+		return respondErrorBytes(ams.ReturnCodeDeviceServiceNotSupported)
 
-	case CommandIDAddDeviceNotification:
+	case ams.CommandAddDeviceNotification:
 		if s.addNotifFn != nil {
 			req := decodeAddNotifRequest(payload)
 			r := s.addNotifFn(req)
 			return buildAddNotifResponse(r.Handle, r.Error)
 		}
-		return buildAddNotifResponse(0, ReturnCodeDeviceServiceNotSupported)
+		return buildAddNotifResponse(0, ams.ReturnCodeDeviceServiceNotSupported)
 
-	case CommandIDDeleteDeviceNotification:
+	case ams.CommandDeleteDeviceNotification:
 		if s.deleteNotifFn != nil {
 			if len(payload) < 4 {
-				return respondErrorBytes(ReturnCodeDeviceInvalidSize)
+				return respondErrorBytes(ams.ReturnCodeDeviceInvalidSize)
 			}
 			h := binary.LittleEndian.Uint32(payload[0:4])
 			rc := s.deleteNotifFn(h)
 			return respondErrorBytes(rc)
 		}
-		return respondErrorBytes(ReturnCodeDeviceServiceNotSupported)
+		return respondErrorBytes(ams.ReturnCodeDeviceServiceNotSupported)
 
-	case CommandIDReadDeviceInfo:
+	case ams.CommandReadDeviceInfo:
 		// 24-byte canned response: 4 errCode + 1 major + 1 minor + 2 version + 16 name
 		out := make([]byte, 24)
 		copy(out[8:24], []byte("scriptableStub\x00\x00"))
 		return out
 
-	case CommandIDReadState:
+	case ams.CommandReadState:
 		// 8 bytes: 4 errCode + 2 ADSState + 2 DeviceState
 		out := make([]byte, 8)
-		state := ADSStateRun
+		state := ams.StateRun
 		if s.adsState != 0 {
 			state = s.adsState
 		}
 		binary.LittleEndian.PutUint16(out[4:6], uint16(state))
 		return out
 	}
-	return respondErrorBytes(ReturnCodeDeviceServiceNotSupported)
+	return respondErrorBytes(ams.ReturnCodeDeviceServiceNotSupported)
 }
 
 // --- response builders ---
 
 // respondErrorBytes returns a 4-byte ReturnCode payload.
-func respondErrorBytes(rc ReturnCode) []byte {
+func respondErrorBytes(rc ams.ReturnCode) []byte {
 	out := make([]byte, 4)
 	binary.LittleEndian.PutUint32(out, uint32(rc))
 	return out
 }
 
 // buildReadResponse builds an 8-byte (errCode + length) header followed by data.
-// Used for both CommandIDRead and CommandIDReadWrite.
-func buildReadResponse(rc ReturnCode, data []byte) []byte {
+// Used for both CommandRead and CommandReadWrite.
+func buildReadResponse(rc ams.ReturnCode, data []byte) []byte {
 	out := make([]byte, 8+len(data))
 	binary.LittleEndian.PutUint32(out[0:4], uint32(rc))
 	binary.LittleEndian.PutUint32(out[4:8], uint32(len(data)))
@@ -673,7 +675,7 @@ func buildReadResponse(rc ReturnCode, data []byte) []byte {
 }
 
 // buildAddNotifResponse builds the 8-byte AddDeviceNotification response payload.
-func buildAddNotifResponse(handle uint32, rc ReturnCode) []byte {
+func buildAddNotifResponse(handle uint32, rc ams.ReturnCode) []byte {
 	out := make([]byte, 8)
 	binary.LittleEndian.PutUint32(out[0:4], uint32(rc))
 	binary.LittleEndian.PutUint32(out[4:8], handle)
@@ -693,7 +695,7 @@ func buildSumAddNotifPayload(items []sumNotifResponse) []byte {
 
 // buildSumDeleteNotifPayload returns the data section for a SumDeleteDeviceNotification
 // WriteRead response (per-item: 4 errCode).
-func buildSumDeleteNotifPayload(codes []ReturnCode) []byte {
+func buildSumDeleteNotifPayload(codes []ams.ReturnCode) []byte {
 	out := make([]byte, 4*len(codes))
 	for i, c := range codes {
 		binary.LittleEndian.PutUint32(out[i*4:i*4+4], uint32(c))
@@ -703,7 +705,7 @@ func buildSumDeleteNotifPayload(codes []ReturnCode) []byte {
 
 // buildSymbolInfoPayload encodes a GetSymbolInfoByName response: symbolEntry
 // struct followed by name+0, datatype+0, comment+0.
-func buildSymbolInfoPayload(name, dataType, comment string, group, offset, size uint32, baseType ADSDataType, flags SymbolFlag) []byte {
+func buildSymbolInfoPayload(name, dataType, comment string, group, offset, size uint32, baseType ams.DataType, flags ams.SymbolFlag) []byte {
 	entry := symbolEntry{
 		IGroup:        group,
 		IOffs:         offset,
@@ -757,7 +759,7 @@ func decodeAddNotifRequest(payload []byte) addNotifRequest {
 // amsErr, when non-zero, goes into the AMS header's ErrorCode field and the body
 // is dropped: an AMS rejection never carries a response, and client.go rejects
 // the frame outright unless Length matches the body actually written.
-func writeResponse(c net.Conn, reqBody []byte, cmd CommandID, invokeID uint32, respPayload []byte, amsErr uint32) error {
+func writeResponse(c net.Conn, reqBody []byte, cmd ams.Command, invokeID uint32, respPayload []byte, amsErr uint32) error {
 	if amsErr != 0 {
 		respPayload = nil
 	}
@@ -790,17 +792,17 @@ func TestScriptableServer_Smoke(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{0x42}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{0x42}
 	})
 
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 2*time.Second)
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
 	defer c.Close()
 
-	got, err := c.Read(context.Background(), uint32(GroupSymbolVersion), 0, 1)
+	got, err := c.Read(context.Background(), uint32(ams.GroupSymbolVersion), 0, 1)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -825,7 +827,7 @@ func TestScriptableServer_Smoke(t *testing.T) {
 // Caller is responsible for c.Close() at end of test (typically via t.Cleanup).
 func newWiredTestSession(t *testing.T, srv *scriptableServer, opts ...SessionOption) (*Session, *Client) {
 	t.Helper()
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 5*time.Second)
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 5*time.Second)
 	if err != nil {
 		t.Fatalf("Dial scriptable server: %v", err)
 	}

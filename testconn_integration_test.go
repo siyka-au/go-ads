@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // connDefaults holds default values for integration test connections.
@@ -76,13 +78,13 @@ func setupConnectionWithDefaults(t *testing.T, d connDefaults, extra ...SessionO
 		opts = append(opts, WithRoute(routeName, routeUser, routePass))
 	}
 
-	target, err := NewAMSAddress(targetAMS, uint16(targetPort))
+	target, err := ams.NewAddress(targetAMS, ams.Port(targetPort))
 	if err != nil {
 		t.Fatalf("invalid target AMS: %v", err)
 	}
-	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAMS(AMSAddress{Port: 10500}))
+	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAMS(ams.Address{Port: 10500}))
 	if localAMS != "auto" && localAMS != "" {
-		local, err := NewAMSAddress(localAMS, 10500)
+		local, err := ams.NewAddress(localAMS, 10500)
 		if err != nil {
 			t.Fatalf("invalid local AMS: %v", err)
 		}

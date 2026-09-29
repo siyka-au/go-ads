@@ -1,4 +1,4 @@
-package ads
+package ams
 
 import (
 	"bytes"
@@ -6,41 +6,41 @@ import (
 )
 
 func TestAMSHeaderSize_Constant(t *testing.T) {
-	if AMSHeaderSize != 32 {
-		t.Errorf("AMSHeaderSize = %d, want 32", AMSHeaderSize)
+	if HeaderSize != 32 {
+		t.Errorf("HeaderSize = %d, want 32", HeaderSize)
 	}
 }
 
 func TestEncodeAMSHeader_LengthIs32(t *testing.T) {
-	h := AMSHeader{
-		Target:    AMSAddress{NetID: [6]byte{5, 154, 236, 19, 1, 1}, Port: 851},
-		Source:    AMSAddress{NetID: [6]byte{192, 168, 3, 52, 1, 1}, Port: 40000},
-		Command:   CommandIDRead,
+	h := Header{
+		Target:    Address{NetID: [6]byte{5, 154, 236, 19, 1, 1}, Port: 851},
+		Source:    Address{NetID: [6]byte{192, 168, 3, 52, 1, 1}, Port: 40000},
+		Command:   CommandRead,
 		State:     4,
 		Length:    12,
 		ErrorCode: 0,
 		InvokeID:  42,
 	}
-	got := EncodeAMSHeader(h)
-	if len(got) != AMSHeaderSize {
-		t.Errorf("EncodeAMSHeader returned %d bytes, want %d", len(got), AMSHeaderSize)
+	got := EncodeHeader(h)
+	if len(got) != HeaderSize {
+		t.Errorf("EncodeHeader returned %d bytes, want %d", len(got), HeaderSize)
 	}
 }
 
 func TestEncodeAMSHeader_ParseRoundTrip(t *testing.T) {
-	original := AMSHeader{
-		Target:    AMSAddress{NetID: [6]byte{5, 154, 236, 19, 1, 1}, Port: 851},
-		Source:    AMSAddress{NetID: [6]byte{192, 168, 3, 52, 1, 1}, Port: 40000},
-		Command:   CommandIDDeviceNotification,
+	original := Header{
+		Target:    Address{NetID: [6]byte{5, 154, 236, 19, 1, 1}, Port: 851},
+		Source:    Address{NetID: [6]byte{192, 168, 3, 52, 1, 1}, Port: 40000},
+		Command:   CommandDeviceNotification,
 		State:     5,
 		Length:    256,
 		ErrorCode: 0,
 		InvokeID:  0xDEADBEEF,
 	}
-	encoded := EncodeAMSHeader(original)
-	parsed, err := ParseAMSHeader(encoded)
+	encoded := EncodeHeader(original)
+	parsed, err := ParseHeader(encoded)
 	if err != nil {
-		t.Fatalf("ParseAMSHeader: %v", err)
+		t.Fatalf("ParseHeader: %v", err)
 	}
 	if parsed != original {
 		t.Errorf("round-trip mismatch:\n got  %+v\n want %+v", parsed, original)
@@ -55,7 +55,7 @@ func TestParseAMSHeader_RejectsShort(t *testing.T) {
 	}
 	for i, b := range cases {
 		t.Run("", func(t *testing.T) {
-			if _, err := ParseAMSHeader(b); err == nil {
+			if _, err := ParseHeader(b); err == nil {
 				t.Errorf("case %d (len=%d): expected error, got nil", i, len(b))
 			}
 		})
@@ -63,21 +63,21 @@ func TestParseAMSHeader_RejectsShort(t *testing.T) {
 }
 
 func TestParseAMSHeader_IgnoresTrailingBytes(t *testing.T) {
-	h := AMSHeader{
-		Target:   AMSAddress{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
-		Source:   AMSAddress{NetID: [6]byte{5, 6, 7, 8, 1, 1}, Port: 40000},
-		Command:  CommandIDRead,
+	h := Header{
+		Target:   Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
+		Source:   Address{NetID: [6]byte{5, 6, 7, 8, 1, 1}, Port: 40000},
+		Command:  CommandRead,
 		State:    4,
 		Length:   8,
 		InvokeID: 1,
 	}
-	header := EncodeAMSHeader(h)
+	header := EncodeHeader(h)
 	withPayload := make([]byte, 0, len(header)+6)
 	withPayload = append(withPayload, header...)
 	withPayload = append(withPayload, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF)
-	got, err := ParseAMSHeader(withPayload)
+	got, err := ParseHeader(withPayload)
 	if err != nil {
-		t.Fatalf("ParseAMSHeader with trailing payload: %v", err)
+		t.Fatalf("ParseHeader with trailing payload: %v", err)
 	}
 	if got != h {
 		t.Errorf("header mismatch:\n got  %+v\n want %+v", got, h)
@@ -88,16 +88,16 @@ func TestEncodeAMSHeader_WireFormat(t *testing.T) {
 	// Verify wire-level field layout against Beckhoff spec:
 	// offset 0-7  target, 8-15 source, 16-17 command, 18-19 state,
 	// offset 20-23 length, 24-27 errorcode, 28-31 invokeID.
-	h := AMSHeader{
-		Target:    AMSAddress{NetID: [6]byte{1, 2, 3, 4, 5, 6}, Port: 0x0851},
-		Source:    AMSAddress{NetID: [6]byte{0xA, 0xB, 0xC, 0xD, 0xE, 0xF}, Port: 0x9C40},
+	h := Header{
+		Target:    Address{NetID: [6]byte{1, 2, 3, 4, 5, 6}, Port: 0x0851},
+		Source:    Address{NetID: [6]byte{0xA, 0xB, 0xC, 0xD, 0xE, 0xF}, Port: 0x9C40},
 		Command:   0x0009,
 		State:     0x0004,
 		Length:    0x00000020,
 		ErrorCode: 0x00000000,
 		InvokeID:  0x00000001,
 	}
-	b := EncodeAMSHeader(h)
+	b := EncodeHeader(h)
 
 	// Target NetID at 0..5
 	if !bytes.Equal(b[0:6], []byte{1, 2, 3, 4, 5, 6}) {
@@ -122,31 +122,31 @@ func TestEncodeAMSHeader_WireFormat(t *testing.T) {
 }
 
 func TestParseAMSHeader_RejectsOversizedLength(t *testing.T) {
-	h := AMSHeader{
-		Target:   AMSAddress{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
-		Source:   AMSAddress{NetID: [6]byte{5, 6, 7, 8, 1, 1}, Port: 40000},
-		Command:  CommandIDRead,
+	h := Header{
+		Target:   Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
+		Source:   Address{NetID: [6]byte{5, 6, 7, 8, 1, 1}, Port: 40000},
+		Command:  CommandRead,
 		State:    4,
-		Length:   MaxAMSPayloadSize + 1, // one byte over the cap
+		Length:   MaxPayloadSize + 1, // one byte over the cap
 		InvokeID: 1,
 	}
-	bad := EncodeAMSHeader(h)
-	if _, err := ParseAMSHeader(bad); err == nil {
-		t.Errorf("ParseAMSHeader should reject Length=%d > MaxAMSPayloadSize=%d", h.Length, MaxAMSPayloadSize)
+	bad := EncodeHeader(h)
+	if _, err := ParseHeader(bad); err == nil {
+		t.Errorf("ParseHeader should reject Length=%d > MaxPayloadSize=%d", h.Length, MaxPayloadSize)
 	}
 }
 
 func TestParseAMSHeader_AcceptsExactCapLength(t *testing.T) {
-	h := AMSHeader{
-		Target:   AMSAddress{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
-		Source:   AMSAddress{NetID: [6]byte{5, 6, 7, 8, 1, 1}, Port: 40000},
-		Command:  CommandIDRead,
+	h := Header{
+		Target:   Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
+		Source:   Address{NetID: [6]byte{5, 6, 7, 8, 1, 1}, Port: 40000},
+		Command:  CommandRead,
 		State:    4,
-		Length:   MaxAMSPayloadSize, // exact cap is allowed
+		Length:   MaxPayloadSize, // exact cap is allowed
 		InvokeID: 1,
 	}
-	ok := EncodeAMSHeader(h)
-	if _, err := ParseAMSHeader(ok); err != nil {
-		t.Errorf("ParseAMSHeader rejected exact-cap Length=%d: %v", h.Length, err)
+	ok := EncodeHeader(h)
+	if _, err := ParseHeader(ok); err != nil {
+		t.Errorf("ParseHeader rejected exact-cap Length=%d: %v", h.Length, err)
 	}
 }

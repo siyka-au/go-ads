@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // notificationManager owns the connection-level notification state: the per-handle
@@ -330,7 +332,7 @@ type NotificationConfig struct {
 	SymbolName       string
 	MaxDelay         time.Duration
 	CycleTime        time.Duration
-	TransmissionMode TransMode
+	TransmissionMode ams.TransMode
 }
 
 // pendingNotification wraps a user-supplied NotificationConfig with internal

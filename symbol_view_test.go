@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // symbol_view_test.go — SymbolView snapshot + iteration unit tests.
@@ -283,14 +285,14 @@ func TestCollectSubtreeDepthCap(t *testing.T) {
 // for symbols where layers disagree (TC2 enums, type aliases).
 func TestBaseTypeName_LayeredResolution(t *testing.T) {
 	t.Run("layer1_adst_primitive_wins", func(t *testing.T) {
-		// BaseType=ADSTReal32 should resolve to "REAL" regardless of any
+		// BaseType=DataTypeReal32 should resolve to "REAL" regardless of any
 		// table entry or size that might disagree.
 		sess := newViewTestSession()
 		sess.cache.datatypes = map[string]SymbolUploadDataType{
 			"FakeAlias": {DataType: "INT"}, // would mis-resolve if layer 2 ran
 		}
 		view := SymbolView{
-			BaseType: ADSTReal32,
+			BaseType: ams.DataTypeReal32,
 			DataType: "FakeAlias",
 			Length:   4,
 			conn:     sess,
@@ -301,14 +303,14 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 	})
 
 	t.Run("layer2_datatype_table_for_bigtype", func(t *testing.T) {
-		// BaseType=ADSTBigType (composite) forces layer 1 to return "";
+		// BaseType=DataTypeBigType (composite) forces layer 1 to return "";
 		// layer 2 looks up "MyAlias" in the table and returns its DataType.
 		sess := newViewTestSession()
 		sess.cache.datatypes = map[string]SymbolUploadDataType{
 			"MyAlias": {DataType: "DINT"},
 		}
 		view := SymbolView{
-			BaseType: ADSTBigType,
+			BaseType: ams.DataTypeBigType,
 			DataType: "MyAlias",
 			Length:   4,
 			conn:     sess,
@@ -322,7 +324,7 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 		// No table loaded; BaseType=BigType. Size=1 → SINT.
 		sess := newViewTestSession()
 		view := SymbolView{
-			BaseType: ADSTBigType,
+			BaseType: ams.DataTypeBigType,
 			DataType: "UnknownType",
 			Length:   1,
 			conn:     sess,
@@ -335,7 +337,7 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 	t.Run("layer3_size_inference_2byte", func(t *testing.T) {
 		sess := newViewTestSession()
 		view := SymbolView{
-			BaseType: ADSTBigType,
+			BaseType: ams.DataTypeBigType,
 			DataType: "UnknownType",
 			Length:   2,
 			conn:     sess,
@@ -350,7 +352,7 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 		// Returns "" so caller surfaces a clear error.
 		sess := newViewTestSession()
 		view := SymbolView{
-			BaseType: ADSTBigType,
+			BaseType: ams.DataTypeBigType,
 			DataType: "UnknownType",
 			Length:   4,
 			conn:     sess,
@@ -363,7 +365,7 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 	t.Run("layer3_refuses_8byte", func(t *testing.T) {
 		sess := newViewTestSession()
 		view := SymbolView{
-			BaseType: ADSTBigType,
+			BaseType: ams.DataTypeBigType,
 			DataType: "UnknownType",
 			Length:   8,
 			conn:     sess,
@@ -376,7 +378,7 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 	t.Run("nil_conn_falls_through_to_inference", func(t *testing.T) {
 		// Detached SymbolView (no Session) — layer 2 silently skipped.
 		view := SymbolView{
-			BaseType: ADSTBigType,
+			BaseType: ams.DataTypeBigType,
 			DataType: "UnknownType",
 			Length:   2,
 			conn:     nil,
@@ -407,12 +409,12 @@ func TestBaseTypeName_UnresolvableWarnsOnceWithARemedy(t *testing.T) {
 	sess.cache.symbols[symbolKey(name)] = &symbol{
 		FullName: name,
 		DataType: "E_MachineState",
-		BaseType: ADSTBigType,
+		BaseType: ams.DataTypeBigType,
 		Length:   4,
 	}
 	view := SymbolView{
 		FullName: name,
-		BaseType: ADSTBigType,
+		BaseType: ams.DataTypeBigType,
 		DataType: "E_MachineState",
 		Length:   4,
 		conn:     sess,
@@ -454,18 +456,18 @@ func TestBaseTypeName_UnresolvableWarnsOnceWithARemedy(t *testing.T) {
 func TestBaseTypeName_ResolvableDoesNotWarn(t *testing.T) {
 	tests := []struct {
 		name     string
-		baseType ADSDataType
+		baseType ams.DataType
 		length   uint32
 		table    map[string]SymbolUploadDataType
 		want     string
 	}{
-		{name: "protocol base type", baseType: ADSTReal32, length: 4, want: "REAL"},
+		{name: "protocol base type", baseType: ams.DataTypeReal32, length: 4, want: "REAL"},
 		{
-			name: "datatype table", baseType: ADSTBigType, length: 4,
+			name: "datatype table", baseType: ams.DataTypeBigType, length: 4,
 			table: map[string]SymbolUploadDataType{"MyAlias": {DataType: "DINT"}}, want: "DINT",
 		},
-		{name: "inferred from a 1-byte width", baseType: ADSTBigType, length: 1, want: "SINT"},
-		{name: "inferred from a 2-byte width", baseType: ADSTBigType, length: 2, want: "INT"},
+		{name: "inferred from a 1-byte width", baseType: ams.DataTypeBigType, length: 1, want: "SINT"},
+		{name: "inferred from a 2-byte width", baseType: ams.DataTypeBigType, length: 2, want: "INT"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -500,7 +502,7 @@ func TestWarnUnresolvedBaseType_SubscribeThenReadWarnsOnce(t *testing.T) {
 
 	const name = "MAIN.eState"
 	sess.cache.symbols[symbolKey(name)] = &symbol{
-		FullName: name, DataType: "E_State", BaseType: ADSTBigType, Length: 4,
+		FullName: name, DataType: "E_State", BaseType: ams.DataTypeBigType, Length: 4,
 	}
 
 	// Subscribe-time call.
@@ -510,7 +512,7 @@ func TestWarnUnresolvedBaseType_SubscribeThenReadWarnsOnce(t *testing.T) {
 	}
 
 	// Read-path calls afterwards.
-	view := SymbolView{FullName: name, DataType: "E_State", BaseType: ADSTBigType, Length: 4, conn: sess}
+	view := SymbolView{FullName: name, DataType: "E_State", BaseType: ams.DataTypeBigType, Length: 4, conn: sess}
 	for i := 0; i < 3; i++ {
 		_ = view.BaseTypeName()
 	}
@@ -529,7 +531,7 @@ func TestWarnUnresolvedBaseType_QuietOnceTheTableArrives(t *testing.T) {
 
 	const name = "MAIN.eState"
 	sess.cache.symbols[symbolKey(name)] = &symbol{
-		FullName: name, DataType: "E_State", BaseType: ADSTBigType, Length: 4,
+		FullName: name, DataType: "E_State", BaseType: ams.DataTypeBigType, Length: 4,
 	}
 	sess.cache.datatypes = map[string]SymbolUploadDataType{"E_State": {DataType: "DINT"}}
 

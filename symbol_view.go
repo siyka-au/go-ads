@@ -3,6 +3,8 @@ package ads
 import (
 	"log/slog"
 	"slices"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // connLogger returns a session's logger, or the package default for a nil or
@@ -36,8 +38,8 @@ type SymbolView struct {
 	Group       uint32
 	Offset      uint32
 	Length      uint32
-	BaseType    ADSDataType // protocol ADST_ code; see adsTypeToString
-	Flags       SymbolFlag
+	BaseType    ams.DataType // protocol ADST_ code; see DataType.IECName
+	Flags       ams.SymbolFlag
 	ContextMask uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
 	Parsed      bool  // true if Value has been decoded at least once at snapshot time
 	IsRoot      bool  // true if this symbol has no parent (top-level program/global var)
@@ -67,7 +69,7 @@ func (v SymbolView) BaseTypeName() string {
 	if slices.Contains(parseableTypes, v.DataType) {
 		return v.DataType
 	}
-	if name := adsTypeToString(v.BaseType); name != "" {
+	if name := v.BaseType.IECName(); name != "" {
 		return name
 	}
 	if v.conn != nil {
@@ -124,7 +126,7 @@ func (sess *Session) warnUnresolvedBaseType(symbolName string) {
 	_, inTable := sess.cache.datatypes[dataType]
 	sess.cache.lock.Unlock()
 
-	if adsTypeToString(baseType) != "" || inTable || inferBaseType(length, baseType) != "" ||
+	if baseType.IECName() != "" || inTable || inferBaseType(length, baseType) != "" ||
 		slices.Contains(parseableTypes, dataType) {
 		return
 	}

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // notificationReleaseTimeout bounds the cleanup delete a batch issues for
@@ -93,7 +95,7 @@ func (sess *Session) releaseNotificationHandles(ctx context.Context, handles []u
 // The caller MUST NOT close updateReceiver while any notification is active -- a
 // recover guards against it, but samples are silently dropped. Delete them or
 // Close first.
-func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName string, maxDelay time.Duration, cycleTime time.Duration, transMode TransMode, updateReceiver chan *Update) (uint32, error) {
+func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName string, maxDelay time.Duration, cycleTime time.Duration, transMode ams.TransMode, updateReceiver chan *Update) (uint32, error) {
 	// Refuse outside RUN rather than produce a misleading failure: in CONFIG the
 	// runtime port does not exist, so this cannot succeed, and the PLC's answer is
 	// an AMS "port not found" rather than anything about symbols. Permits when no
@@ -122,7 +124,7 @@ func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName strin
 	// If ContextMask is 0 (single-task PLC, TC2, or variable not bound to a task),
 	// downgrade to the regular mode (3/4) to avoid 0x070B errors or silent failures.
 	actualMode := transMode
-	if (transMode == TransModeServerCycle2 || transMode == TransModeServerOnChange2) && symbol.ContextMask == 0 {
+	if (transMode == ams.TransModeServerCycle2 || transMode == ams.TransModeServerOnChange2) && symbol.ContextMask == 0 {
 		actualMode = downgradeTransMode(transMode)
 		sess.logger.Warn("InContext mode not available for symbol (ContextMask=0), falling back",
 			"symbol", symbolName,
@@ -141,7 +143,7 @@ func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName strin
 	defer func() { sess.endSubscribe(ctx, subTok, committed) }()
 
 	handle, err := sess.client.Load().AddDeviceNotification(ctx,
-		uint32(GroupSymbolValueByHandle),
+		uint32(ams.GroupSymbolValueByHandle),
 		symbol.Handle,
 		symbol.Length,
 		actualMode,
@@ -153,7 +155,7 @@ func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName strin
 		// without bumping the symbol version, making this the only signal there is.
 		// Detection only -- subscribe is not idempotent, and a retry racing the
 		// reload's own resubscribe would double-register the symbol.
-		var rc ReturnCode
+		var rc ams.ReturnCode
 		if errors.As(err, &rc) {
 			sess.handleStaleDetection(rc)
 		}
@@ -242,7 +244,7 @@ func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName strin
 // Partial outcomes are normal. Skipped != nil means the library did not commit it
 // (match the ErrNotification* sentinels), otherwise Error is the PLC's verdict and
 // NoErrors means Handle is valid. Do not close ch while notifications are active.
-func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []NotificationConfig, ch chan *Update) ([]SumNotificationResult, error) {
+func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []NotificationConfig, ch chan *Update) ([]ams.SumNotificationResult, error) {
 	// Refuse outside RUN rather than produce a misleading failure: in CONFIG the
 	// runtime port does not exist, so this cannot succeed, and the PLC's answer is
 	// an AMS "port not found" rather than anything about symbols. Permits when no
@@ -254,7 +256,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 		return nil, nil
 	}
 
-	results := make([]SumNotificationResult, len(configs))
+	results := make([]ams.SumNotificationResult, len(configs))
 
 	// Snapshot already-subscribed symbol names so we can reject duplicates
 	// pre-flight; the same check is repeated under the post-PLC lock to close
@@ -280,7 +282,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 		symbol      *symbol
 	}
 	var infos []symbolInfo
-	var requests []SumNotificationRequest
+	var requests []ams.SumNotificationRequest
 	batchSeen := make(map[string]struct{}, len(configs))
 
 	for i, cfg := range configs {
@@ -306,7 +308,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 		infos = append(infos, symbolInfo{configIndex: i, config: cfg, symbol: symbol})
 
 		actualMode := cfg.TransmissionMode
-		if (actualMode == TransModeServerCycle2 || actualMode == TransModeServerOnChange2) && symbol.ContextMask == 0 {
+		if (actualMode == ams.TransModeServerCycle2 || actualMode == ams.TransModeServerOnChange2) && symbol.ContextMask == 0 {
 			actualMode = downgradeTransMode(actualMode)
 			sess.logger.Warn("InContext mode not available for symbol (ContextMask=0), falling back",
 				"symbol", cfg.SymbolName,
@@ -315,8 +317,8 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 				"flags", fmt.Sprintf("0x%04X", uint32(symbol.Flags)))
 		}
 
-		requests = append(requests, SumNotificationRequest{
-			Group:            uint32(GroupSymbolValueByHandle),
+		requests = append(requests, ams.SumNotificationRequest{
+			Group:            uint32(ams.GroupSymbolValueByHandle),
 			Offset:           symbol.Handle,
 			Length:           symbol.Length,
 			TransmissionMode: actualMode,
@@ -353,7 +355,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 	// recognisable while symbol #40 is still being registered — instead of the
 	// whole batch becoming recognisable at the end. Called synchronously on
 	// this goroutine, so results/committed need no extra guarding.
-	onItem := func(i int, r SumNotificationResult) {
+	onItem := func(i int, r ams.SumNotificationResult) {
 		if i < 0 || i >= len(infos) {
 			// Defensive: the index crosses a layer boundary. One bad index would
 			// otherwise panic inside the RPC call.
@@ -370,13 +372,13 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 			results[info.configIndex] = r
 			return
 		}
-		if r.Handle == 0 && r.Error == ReturnCodeNoErrors {
+		if r.Handle == 0 && r.Error == ams.ReturnCodeNoErrors {
 			results[info.configIndex].Skipped = fmt.Errorf("symbol %q: PLC reported success without a handle", info.config.SymbolName)
 			sess.logger.Error("notification batch: success with a zero handle",
 				"symbol", info.config.SymbolName)
 			return
 		}
-		if r.Error != ReturnCodeNoErrors {
+		if r.Error != ams.ReturnCodeNoErrors {
 			results[info.configIndex] = r
 			// Level by whether anyone has to act: a stale-detection code is the
 			// expected answer after a runtime restart and heals itself, and logging
@@ -446,7 +448,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 			sess.notifications.lock.Unlock()
 
 			for _, idx := range stranded {
-				results[idx] = SumNotificationResult{
+				results[idx] = ams.SumNotificationResult{
 					Handle:  results[idx].Handle,
 					Skipped: fmt.Errorf("symbol %q: %w", configs[idx].SymbolName, ErrNotificationStrandedByReload),
 				}
@@ -491,7 +493,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 		// Error and a live Handle).
 		for _, info := range infos {
 			r := results[info.configIndex]
-			reported := r.Skipped != nil || r.Handle != 0 || r.Error != ReturnCodeNoErrors
+			reported := r.Skipped != nil || r.Handle != 0 || r.Error != ams.ReturnCodeNoErrors
 			if reported {
 				continue
 			}
@@ -505,7 +507,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 	// items in the same response carry the same stale code (R-SES-011
 	// "once per detection").
 	for _, r := range subResults {
-		if r.Error == ReturnCodeNoErrors {
+		if r.Error == ams.ReturnCodeNoErrors {
 			continue
 		}
 		if stale, _ := detectStaleCache(r.Error); stale {

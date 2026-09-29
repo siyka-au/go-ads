@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // notification_scale_integration_test.go — batch-notification scale test on
@@ -69,7 +71,7 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 			SymbolName:       name,
 			MaxDelay:         100 * time.Millisecond,
 			CycleTime:        100 * time.Millisecond,
-			TransmissionMode: TransModeServerOnChange,
+			TransmissionMode: ams.TransModeServerOnChange,
 		}
 	}
 
@@ -84,7 +86,7 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 		switch {
 		case r.Skipped != nil:
 			t.Errorf("subscribe skipped for %s: %v", names[i], r.Skipped)
-		case r.Error != ReturnCodeNoErrors:
+		case r.Error != ams.ReturnCodeNoErrors:
 			t.Errorf("PLC rejected %s: 0x%04X (%v)", names[i], uint32(r.Error), r.Error)
 		default:
 			subscribed[names[i]] = true

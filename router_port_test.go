@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // router_port_test.go — AMSEndpoint.RouterPort.
@@ -23,7 +25,7 @@ import (
 func TestNewSession_RouterPortDefaultsToProtocolPort(t *testing.T) {
 	sess, err := NewSession(context.Background(), AMSEndpoint{
 		IP:  "127.0.0.1",
-		AMS: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
+		AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 	}, WithTargetCheck(TargetCheckOff))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -44,7 +46,7 @@ func TestNewSession_RouterPortIndependentOfTCPPort(t *testing.T) {
 		IP:         "127.0.0.1",
 		Port:       5534, // external TCP -> 48898 on the PLC
 		RouterPort: 6499, // external UDP -> 48899 on the PLC
-		AMS:        AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
+		AMS:        ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 	}, WithTargetCheck(TargetCheckOff))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -181,7 +183,7 @@ func TestSessionUsesRouterPortForIdentify(t *testing.T) {
 	}
 	t.Cleanup(func() { sess.Close() })
 
-	if got := sess.target.NetIDString(); got != "5.9.8.7.1.1" {
+	if got := sess.target.NetID.String(); got != "5.9.8.7.1.1" {
 		t.Errorf("discovered NetID = %s, want 5.9.8.7.1.1", got)
 	}
 	if sess.target.Port != 851 {

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/ams"
+
 	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
@@ -61,13 +63,13 @@ func (c *Client) send(data []byte) ([]byte, error) {
 // The caller's ctx is merged with requestTimeout, whichever fires first. Returns
 // ErrTransportClosed at once on a known-dead transport; otherwise no retry, and
 // mid-flight drops surface as ctx errors for Session to handle.
-func (c *Client) sendRequest(ctx context.Context, command CommandID, data []byte) ([]byte, error) {
+func (c *Client) sendRequest(ctx context.Context, command ams.Command, data []byte) ([]byte, error) {
 	return c.sendRequestTo(ctx, c.target, command, data)
 }
 
 // sendRequestTo is sendRequest addressed to an explicit AMS target — used to reach
 // another port on the same device (the system service) over this one connection.
-func (c *Client) sendRequestTo(ctx context.Context, target AMSAddress, command CommandID, data []byte) ([]byte, error) {
+func (c *Client) sendRequestTo(ctx context.Context, target ams.Address, command ams.Command, data []byte) ([]byte, error) {
 	if c.tx.disconnected.Load() {
 		return nil, ErrTransportClosed
 	}
@@ -142,7 +144,7 @@ func (c *Client) sendRequestTo(ctx context.Context, target AMSAddress, command C
 
 // encode lives on *Client. Session callers reach it via s.client.encode
 // at the rare sites still on Session.
-func (c *Client) encode(command CommandID, data []byte, invokeID uint32) ([]byte, error) {
+func (c *Client) encode(command ams.Command, data []byte, invokeID uint32) ([]byte, error) {
 	return c.encodeTo(c.target, command, data, invokeID)
 }
 
@@ -150,7 +152,7 @@ func (c *Client) encode(command CommandID, data []byte, invokeID uint32) ([]byte
 // port on the same device (the system service, say) travel over this same
 // connection: the AMS header carries the port, and the router allows only one TCP
 // connection per remote IP, so opening a second one is not an option.
-func (c *Client) encodeTo(target AMSAddress, command CommandID, data []byte, invokeID uint32) ([]byte, error) {
+func (c *Client) encodeTo(target ams.Address, command ams.Command, data []byte, invokeID uint32) ([]byte, error) {
 	// Snapshot source under lock: setSource replaces it after a local-mode
 	// handshake, which can land while requests are already in flight. target is set
 	// at construction and never mutated after that.
@@ -163,12 +165,12 @@ func (c *Client) encodeTo(target AMSAddress, command CommandID, data []byte, inv
 		"source", source,
 		"ID", invokeID,
 		"length of data", len(data))
-	tcpHeader := &amsTCPHeader{
+	tcpHeader := &ams.TCPHeader{
 		Unknown1: 0,
 		System:   0,
-		Length:   uint32(AMSHeaderSize + len(data)),
+		Length:   uint32(ams.HeaderSize + len(data)),
 	}
-	header := &AMSHeader{
+	header := &ams.Header{
 		Target:    target,
 		Source:    source,
 		Command:   command,

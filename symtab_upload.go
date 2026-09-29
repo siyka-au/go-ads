@@ -9,6 +9,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/ams"
+
 	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
@@ -125,7 +127,7 @@ func addChildren(s *symbol, symbols map[string]*symbol) {
 }
 
 func addSymbol(uploadSym symbolUploadSymbol, datatypes map[string]SymbolUploadDataType, lg *slog.Logger) *symbol {
-	flags := SymbolFlag(uploadSym.SymbolEntry.Flags)
+	flags := ams.SymbolFlag(uploadSym.SymbolEntry.Flags)
 	sym := &symbol{
 		Name:           uploadSym.Name,
 		LastUpdateTime: time.Now(),
@@ -133,7 +135,7 @@ func addSymbol(uploadSym symbolUploadSymbol, datatypes map[string]SymbolUploadDa
 		DataType:       uploadSym.DataType,
 		Comment:        uploadSym.Comment,
 		Length:         uploadSym.SymbolEntry.Size,
-		BaseType:       ADSDataType(uploadSym.SymbolEntry.DataType),
+		BaseType:       ams.DataType(uploadSym.SymbolEntry.DataType),
 		Group:          uploadSym.SymbolEntry.IGroup,
 		Offset:         uploadSym.SymbolEntry.IOffs,
 		Flags:          flags,
@@ -192,9 +194,9 @@ func (data *SymbolUploadDataType) addOffsetDepth(parent *symbol, datatypes map[s
 			DataType:       segment.DataType,
 			Comment:        segment.Comment,
 			Length:         segment.DatatypeEntry.Size,
-			// Left at ADSTVoid, a member resolved by guess instead: BOOL became
-			// BYTE on TC3, SINT on TC2. Composites still report ADSTBigType.
-			BaseType: ADSDataType(segment.DatatypeEntry.DataType),
+			// Left at DataTypeVoid, a member resolved by guess instead: BOOL became
+			// BYTE on TC3, SINT on TC2. Composites still report DataTypeBigType.
+			BaseType: ams.DataType(segment.DatatypeEntry.DataType),
 			// Update with area and offset
 			Group:     group,
 			Offset:    segment.DatatypeEntry.Offs,

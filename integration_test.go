@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/ams"
+
 	"cloud.google.com/go/civil"
 )
 
@@ -181,7 +183,7 @@ func TestIntegrationReadDeviceInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDeviceInfo failed: %v", err)
 	}
-	t.Logf("Device: %s (version %d.%d.%d)", info.DeviceName, info.Major, info.Minor, info.Version)
+	t.Logf("Device: %s (version %d.%d.%d)", info.Name, info.Major, info.Minor, info.Build)
 }
 
 func TestIntegrationReadState(t *testing.T) {
@@ -190,9 +192,9 @@ func TestIntegrationReadState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState failed: %v", err)
 	}
-	t.Logf("ADS state: %d, Device state: %d", state.ADSState, state.DeviceState)
-	if state.ADSState != ADSStateRun {
-		t.Logf("warning: PLC not in Run state (got %d)", state.ADSState)
+	t.Logf("ADS state: %d, Device state: %d", state.State, state.DeviceState)
+	if state.State != ams.StateRun {
+		t.Logf("warning: PLC not in Run state (got %d)", state.State)
 	}
 }
 
@@ -475,7 +477,7 @@ func TestIntegrationNotification(t *testing.T) {
 	}
 
 	ch := make(chan *Update, 10)
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification(%q) failed: %v", symbolName, err)
 	}
@@ -539,7 +541,7 @@ func TestIntegrationSubscribeUnsubscribe(t *testing.T) {
 	conn.notifications.lock.Unlock()
 
 	// Subscribe
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification(%q) failed: %v", symbolName, err)
 	}
@@ -614,7 +616,7 @@ func TestIntegrationHandleLeakMultipleSubscriptions(t *testing.T) {
 	// Subscribe to multiple symbols
 	var handles []uint32
 	for _, name := range symbolNames {
-		handle, err := conn.AddSymbolNotification(context.Background(), name, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch)
+		handle, err := conn.AddSymbolNotification(context.Background(), name, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch)
 		if err != nil {
 			t.Fatalf("AddSymbolNotification(%q) failed: %v", name, err)
 		}
@@ -667,13 +669,13 @@ func TestIntegrationCloseReleasesNotificationHandles(t *testing.T) {
 	}
 	localAMS := getEnvOrDefault("ADS_LOCAL_AMS", "auto")
 
-	target, err := NewAMSAddress(targetAMS, uint16(targetPort))
+	target, err := ams.NewAddress(targetAMS, ams.Port(targetPort))
 	if err != nil {
 		t.Fatalf("invalid target AMS: %v", err)
 	}
-	opts := []SessionOption{WithRequestTimeout(5 * time.Second), WithLocalAMS(AMSAddress{Port: 10500})}
+	opts := []SessionOption{WithRequestTimeout(5 * time.Second), WithLocalAMS(ams.Address{Port: 10500})}
 	if localAMS != "auto" && localAMS != "" {
-		local, err := NewAMSAddress(localAMS, 10500)
+		local, err := ams.NewAddress(localAMS, 10500)
 		if err != nil {
 			t.Fatalf("invalid local AMS: %v", err)
 		}
@@ -705,7 +707,7 @@ func TestIntegrationCloseReleasesNotificationHandles(t *testing.T) {
 	ch := make(chan *Update, 100)
 	var handles []uint32
 	for _, name := range symbolNames {
-		handle, err := conn.AddSymbolNotification(context.Background(), name, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch)
+		handle, err := conn.AddSymbolNotification(context.Background(), name, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch)
 		if err != nil {
 			conn.Close()
 			t.Fatalf("AddSymbolNotification(%q) failed: %v", name, err)
@@ -729,9 +731,9 @@ func TestIntegrationCloseReleasesNotificationHandles(t *testing.T) {
 	// Reconnect and verify no stale handles exist by subscribing to the same
 	// symbols again — if Close() didn't release, the PLC would eventually
 	// run out of handles.
-	opts2 := []SessionOption{WithRequestTimeout(5 * time.Second), WithLocalAMS(AMSAddress{Port: 10501})}
+	opts2 := []SessionOption{WithRequestTimeout(5 * time.Second), WithLocalAMS(ams.Address{Port: 10501})}
 	if localAMS != "auto" && localAMS != "" {
-		local, err := NewAMSAddress(localAMS, 10501)
+		local, err := ams.NewAddress(localAMS, 10501)
 		if err != nil {
 			t.Fatalf("invalid local AMS: %v", err)
 		}
@@ -764,7 +766,7 @@ func TestIntegrationCloseReleasesNotificationHandles(t *testing.T) {
 	// Subscribe to same symbols on new connection to confirm PLC accepts them
 	ch2 := make(chan *Update, 100)
 	for _, name := range symbolNames {
-		handle, err := conn2.AddSymbolNotification(context.Background(), name, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch2)
+		handle, err := conn2.AddSymbolNotification(context.Background(), name, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch2)
 		if err != nil {
 			t.Errorf("re-subscribe to %s on fresh connection failed: %v (possible PLC handle leak)", name, err)
 		} else {
@@ -989,7 +991,7 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 
 	// 4. Check per-symbol return codes
 	for name, code := range codes {
-		if code != ReturnCodeNoErrors {
+		if code != ams.ReturnCodeNoErrors {
 			t.Errorf("WriteMultipleSymbols: %s returned error code %d", name, code)
 		}
 	}
@@ -1017,7 +1019,7 @@ func TestIntegrationWriteMultipleSymbols(t *testing.T) {
 	restoreCodes, err := conn.WriteValues(context.Background(), originals)
 	reportFailedRestore(t, err)
 	for name, code := range restoreCodes {
-		if code != ReturnCodeNoErrors {
+		if code != ams.ReturnCodeNoErrors {
 			t.Errorf("restore %s returned error code %d", name, code)
 		}
 	}
@@ -1258,7 +1260,7 @@ func TestIntegrationReconnect(t *testing.T) {
 
 	// 2. Subscribe to notification
 	ch := make(chan *Update, 10)
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification failed: %v", err)
 	}
@@ -1362,7 +1364,7 @@ func TestIntegrationRouteForceRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadState after a forced re-registration: %v (the route may have been left in a state the router does not serve)", err)
 	}
-	t.Logf("ADS state after the forced re-registration: %d", state.ADSState)
+	t.Logf("ADS state after the forced re-registration: %d", state.State)
 }
 
 func TestIntegrationReconnectDuringBatchRead(t *testing.T) {
@@ -1497,7 +1499,7 @@ func TestIntegrationBatchNotification(t *testing.T) {
 			SymbolName:       name,
 			MaxDelay:         100 * time.Millisecond,
 			CycleTime:        100 * time.Millisecond,
-			TransmissionMode: TransModeServerOnChange,
+			TransmissionMode: ams.TransModeServerOnChange,
 		})
 	}
 
@@ -1536,7 +1538,7 @@ func TestIntegrationBatchNotification(t *testing.T) {
 		t.Fatalf("SumDeleteDeviceNotification failed: %v", err)
 	}
 	for i, code := range codes {
-		if code != ReturnCodeNoErrors {
+		if code != ams.ReturnCodeNoErrors {
 			t.Errorf("delete handle %d returned error: 0x%X", handles[i], uint32(code))
 		}
 	}
@@ -1597,21 +1599,21 @@ func TestIntegrationProbeSumCommands(t *testing.T) {
 	// Probe each sum read command
 	sumCommands := []struct {
 		name  string
-		group Group
+		group ams.Group
 		// readLen for SumRead (0xF080): N*4 (errors) + data
 		// readLen for SumReadEx2 (0xF084): N*8 (error+length pairs) + data
 	}{
-		{"SumRead (0xF080)", GroupSumupRead},
-		{"SumReadEx (0xF083)", GroupSumupReadEx},
-		{"SumReadEx2 (0xF084)", GroupSumupReadEx2},
+		{"SumRead (0xF080)", ams.GroupSumupRead},
+		{"SumReadEx (0xF083)", ams.GroupSumupReadEx},
+		{"SumReadEx2 (0xF084)", ams.GroupSumupReadEx2},
 	}
 
 	for _, cmd := range sumCommands {
 		var readLen uint32
 		switch cmd.group {
-		case GroupSumupRead:
+		case ams.GroupSumupRead:
 			readLen = uint32(n*4) + totalLen // [n errors][data]
-		case GroupSumupReadEx, GroupSumupReadEx2:
+		case ams.GroupSumupReadEx, ams.GroupSumupReadEx2:
 			readLen = uint32(n*8) + totalLen // [n*(error,length)][data]
 		}
 
@@ -1630,7 +1632,7 @@ func TestIntegrationProbeSumCommands(t *testing.T) {
 		t.Logf("  raw response (first %d bytes): %x", dumpLen, resp[:dumpLen])
 
 		// Try parsing as separate arrays (TC2 format): [n*error(4)][data]
-		if cmd.group == GroupSumupRead {
+		if cmd.group == ams.GroupSumupRead {
 			t.Log("  --- parsing as SumRead format [errors][data] ---")
 			for i := 0; i < n; i++ {
 				if (i+1)*4 <= len(resp) {
@@ -1649,7 +1651,7 @@ func TestIntegrationProbeSumCommands(t *testing.T) {
 		}
 
 		// Try parsing as interleaved (TC3 format): [n*(error,length)][data]
-		if cmd.group == GroupSumupReadEx2 {
+		if cmd.group == ams.GroupSumupReadEx2 {
 			t.Log("  --- parsing as interleaved [error,length] pairs ---")
 			for i := 0; i < n; i++ {
 				if (i+1)*8 <= len(resp) {
@@ -1669,11 +1671,11 @@ func TestIntegrationProbeSumCommands(t *testing.T) {
 	binary.LittleEndian.PutUint32(notifWriteData[0:], reqs[0].group)
 	binary.LittleEndian.PutUint32(notifWriteData[4:], reqs[0].offset)
 	binary.LittleEndian.PutUint32(notifWriteData[8:], reqs[0].symbol.Length)
-	binary.LittleEndian.PutUint32(notifWriteData[12:], uint32(TransModeServerOnChange))
+	binary.LittleEndian.PutUint32(notifWriteData[12:], uint32(ams.TransModeServerOnChange))
 	binary.LittleEndian.PutUint32(notifWriteData[16:], 1000000) // maxDelay 100ms in 100ns units
 	binary.LittleEndian.PutUint32(notifWriteData[20:], 1000000) // cycleTime 100ms in 100ns units
 
-	resp, err := conn.client.Load().WriteRead(context.Background(), uint32(GroupSumupAddDeviceNotification), 1, 8, notifWriteData)
+	resp, err := conn.client.Load().WriteRead(context.Background(), uint32(ams.GroupSumupAddDeviceNotification), 1, 8, notifWriteData)
 	if err != nil {
 		t.Logf("SumAddDeviceNotification (0xF085): NOT SUPPORTED (error: %v)", err)
 	} else {
@@ -1782,7 +1784,7 @@ func TestIntegrationSumWriteFallbackForced(t *testing.T) {
 	codes, err := conn.WriteValues(context.Background(), writeValues)
 	requireBatchOK(t, "WriteMultipleSymbols (fallback)", err)
 	for name, code := range codes {
-		if code != ReturnCodeNoErrors {
+		if code != ams.ReturnCodeNoErrors {
 			t.Errorf("write %s returned error: 0x%X", name, uint32(code))
 		}
 	}
@@ -1828,7 +1830,7 @@ func TestIntegrationSumNotifFallbackForced(t *testing.T) {
 			SymbolName:       name,
 			MaxDelay:         100 * time.Millisecond,
 			CycleTime:        100 * time.Millisecond,
-			TransmissionMode: TransModeServerOnChange,
+			TransmissionMode: ams.TransModeServerOnChange,
 		})
 	}
 
@@ -1865,7 +1867,7 @@ func TestIntegrationSumNotifFallbackForced(t *testing.T) {
 		t.Fatalf("SumDeleteDeviceNotification (fallback) failed: %v", err)
 	}
 	for i, code := range codes {
-		if code != ReturnCodeNoErrors {
+		if code != ams.ReturnCodeNoErrors {
 			t.Errorf("delete handle %d error: 0x%X", handles[i], uint32(code))
 		}
 	}
@@ -1898,7 +1900,7 @@ func TestIntegrationSumNotifFallbackDowngrade(t *testing.T) {
 		SymbolName:       symbolName,
 		MaxDelay:         100 * time.Millisecond,
 		CycleTime:        100 * time.Millisecond,
-		TransmissionMode: TransModeServerCycle2, // should be downgraded to ServerCycle
+		TransmissionMode: ams.TransModeServerCycle2, // should be downgraded to ServerCycle
 	}}
 
 	_, err = conn.AddSymbolNotifications(context.Background(), configs, ch)
@@ -1959,7 +1961,7 @@ func TestIntegrationSumReadPartialFailure(t *testing.T) {
 	}
 	validGroup, validOffset := symbolSumAddress(sym)
 
-	requests := []SumReadRequest{
+	requests := []ams.SumReadRequest{
 		{Group: validGroup, Offset: validOffset, Length: sym.Length}, // valid
 		{Group: 0xFFFF, Offset: 0xFFFFFFFF, Length: 4},               // bogus
 	}
@@ -1972,7 +1974,7 @@ func TestIntegrationSumReadPartialFailure(t *testing.T) {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
 
-	if results[0].Error != ReturnCodeNoErrors {
+	if results[0].Error != ams.ReturnCodeNoErrors {
 		t.Errorf("valid request returned error: 0x%X", uint32(results[0].Error))
 	}
 	if len(results[0].Data) != int(sym.Length) {
@@ -1980,7 +1982,7 @@ func TestIntegrationSumReadPartialFailure(t *testing.T) {
 	}
 	t.Logf("valid read: %d bytes, error=0x%X", len(results[0].Data), uint32(results[0].Error))
 
-	if results[1].Error == ReturnCodeNoErrors {
+	if results[1].Error == ams.ReturnCodeNoErrors {
 		t.Error("bogus request should have returned an error")
 	}
 	t.Logf("bogus read error: 0x%X", uint32(results[1].Error))
@@ -2014,7 +2016,7 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 	}
 	codes, err := conn.WriteValues(context.Background(), map[string]any{symbolName: writeVal})
 	requireBatchOK(t, "WriteMultipleSymbols (single-symbol control write)", err)
-	if codes[symbolName] != ReturnCodeNoErrors {
+	if codes[symbolName] != ams.ReturnCodeNoErrors {
 		t.Fatalf("WriteMultipleSymbols returned error: 0x%X", uint32(codes[symbolName]))
 	}
 	readBack, _ := conn.ReadValue(context.Background(), symbolName)
@@ -2036,7 +2038,7 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 	conn.cache.lock.Unlock()
 	mixedData, _ := sym.encode(mixedWriteVal, datatypes)
 
-	requests := []SumWriteRequest{
+	requests := []ams.SumWriteRequest{
 		{Group: validGroup, Offset: validOffset, Data: mixedData}, // valid
 		{Group: 0xFFFF, Offset: 0xFFFFFFFF, Data: []byte{0, 0}},   // bogus
 	}
@@ -2050,7 +2052,7 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 	}
 
 	// Bogus entry must have an error
-	if results[1].Error == ReturnCodeNoErrors {
+	if results[1].Error == ams.ReturnCodeNoErrors {
 		t.Error("bogus write should have returned an error")
 	}
 	t.Logf("mixed batch: valid=0x%X, bogus=0x%X", uint32(results[0].Error), uint32(results[1].Error))
@@ -2125,7 +2127,7 @@ func TestIntegrationSumWriteVerifyData(t *testing.T) {
 	codes, err := conn.WriteValues(context.Background(), writeValues)
 	requireBatchOK(t, "WriteMultipleSymbols", err)
 	for name, code := range codes {
-		if code != ReturnCodeNoErrors {
+		if code != ams.ReturnCodeNoErrors {
 			t.Errorf("write %s error: 0x%X", name, uint32(code))
 		}
 	}
@@ -2488,7 +2490,7 @@ func TestIntegrationNotificationServerCycle(t *testing.T) {
 	}
 
 	ch := make(chan *Update, 50)
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerCycle, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification (ServerCycle) failed: %v", err)
 	}
@@ -2538,7 +2540,7 @@ func TestIntegrationNotificationServerCycle2(t *testing.T) {
 	}
 
 	ch := make(chan *Update, 50)
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle2, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerCycle2, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification failed: %v", err)
 	}
@@ -2592,7 +2594,7 @@ func TestIntegrationNotificationServerOnChange2(t *testing.T) {
 	}
 
 	ch := make(chan *Update, 10)
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange2, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange2, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification failed: %v", err)
 	}
@@ -2653,9 +2655,9 @@ func TestIntegrationNotificationBatchTransModes(t *testing.T) {
 
 	ch := make(chan *Update, 100)
 	configs := []NotificationConfig{
-		{SymbolName: names[0], MaxDelay: 100 * time.Millisecond, CycleTime: 100 * time.Millisecond, TransmissionMode: TransModeServerCycle},
-		{SymbolName: names[1], MaxDelay: 100 * time.Millisecond, CycleTime: 100 * time.Millisecond, TransmissionMode: TransModeServerOnChange},
-		{SymbolName: names[2], MaxDelay: 100 * time.Millisecond, CycleTime: 200 * time.Millisecond, TransmissionMode: TransModeServerCycle2},
+		{SymbolName: names[0], MaxDelay: 100 * time.Millisecond, CycleTime: 100 * time.Millisecond, TransmissionMode: ams.TransModeServerCycle},
+		{SymbolName: names[1], MaxDelay: 100 * time.Millisecond, CycleTime: 100 * time.Millisecond, TransmissionMode: ams.TransModeServerOnChange},
+		{SymbolName: names[2], MaxDelay: 100 * time.Millisecond, CycleTime: 200 * time.Millisecond, TransmissionMode: ams.TransModeServerCycle2},
 	}
 
 	_, err = conn.AddSymbolNotifications(context.Background(), configs, ch)
@@ -2788,7 +2790,7 @@ func TestIntegrationLargeBatchNotification(t *testing.T) {
 			SymbolName:       name,
 			MaxDelay:         200 * time.Millisecond,
 			CycleTime:        200 * time.Millisecond,
-			TransmissionMode: TransModeServerCycle,
+			TransmissionMode: ams.TransModeServerCycle,
 		})
 	}
 
@@ -2861,7 +2863,7 @@ func TestIntegrationNotificationCycleTimes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := make(chan *Update, 500)
-			handle, err := conn.AddSymbolNotification(context.Background(), symbolName, time.Duration(tt.cycleTime)*time.Millisecond, time.Duration(tt.maxDelay)*time.Millisecond, TransModeServerCycle, ch)
+			handle, err := conn.AddSymbolNotification(context.Background(), symbolName, time.Duration(tt.cycleTime)*time.Millisecond, time.Duration(tt.maxDelay)*time.Millisecond, ams.TransModeServerCycle, ch)
 			if err != nil {
 				t.Fatalf("AddSymbolNotification (cycle=%dms) failed: %v", tt.cycleTime, err)
 			}
@@ -2902,7 +2904,7 @@ func TestIntegrationNotificationMaxDelay(t *testing.T) {
 
 	// Short cycle, long maxDelay — PLC may batch notifications
 	ch := make(chan *Update, 100)
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 50*time.Millisecond, 2000*time.Millisecond, TransModeServerCycle, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 50*time.Millisecond, 2000*time.Millisecond, ams.TransModeServerCycle, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification failed: %v", err)
 	}
@@ -2940,7 +2942,7 @@ func TestIntegrationNotificationZeroMaxDelay(t *testing.T) {
 	}
 
 	ch := make(chan *Update, 500)
-	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 0*time.Millisecond, TransModeServerCycle, ch)
+	handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 0*time.Millisecond, ams.TransModeServerCycle, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification (maxDelay=0) failed: %v", err)
 	}
@@ -3021,7 +3023,7 @@ func TestIntegrationRapidSubscribeUnsubscribe(t *testing.T) {
 	const iterations = 10
 	for i := 0; i < iterations; i++ {
 		ch := make(chan *Update, 5)
-		handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch)
+		handle, err := conn.AddSymbolNotification(context.Background(), symbolName, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerCycle, ch)
 		if err != nil {
 			t.Fatalf("iteration %d: AddSymbolNotification failed: %v", i, err)
 		}
@@ -3063,7 +3065,7 @@ func TestIntegrationDockerRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDeviceInfo failed: %v", err)
 	}
-	t.Logf("device: %s v%d.%d.%d", string(info.DeviceName[:]), info.Major, info.Minor, info.Version)
+	t.Logf("device: %s v%d.%d.%d", info.Name, info.Major, info.Minor, info.Build)
 
 	if err := conn.LoadSymbols(context.Background()); err != nil {
 		t.Fatalf("LoadSymbols failed: %v", err)
@@ -3162,7 +3164,7 @@ func TestIntegrationBitSymbol(t *testing.T) {
 	// Find a symbol with BitValue flag
 	var bitName string
 	for name, sym := range symbols {
-		if sym.Flags.Has(SymbolFlagBitValue) {
+		if sym.Flags.Has(ams.SymbolFlagBitValue) {
 			bitName = name
 			break
 		}

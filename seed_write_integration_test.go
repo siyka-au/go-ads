@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/ams"
+
 	"cloud.google.com/go/civil"
 )
 
@@ -377,10 +379,10 @@ func TestSeedMissingSymbol(t *testing.T) {
 	sess := seedSession(t)
 	ctx := context.Background()
 	const missing = writeFB + "nNoSuchVar"
-	if _, err := sess.ReadValue(ctx, missing); !errors.Is(err, ReturnCodeDeviceSymbolNoFound) {
+	if _, err := sess.ReadValue(ctx, missing); !errors.Is(err, ams.ReturnCodeDeviceSymbolNoFound) {
 		t.Errorf("ReadValue missing: err = %v, want symbol not found", err)
 	}
-	if err := sess.WriteValue(ctx, missing, int16(1)); !errors.Is(err, ReturnCodeDeviceSymbolNoFound) {
+	if err := sess.WriteValue(ctx, missing, int16(1)); !errors.Is(err, ams.ReturnCodeDeviceSymbolNoFound) {
 		t.Errorf("WriteValue missing: err = %v, want symbol not found", err)
 	}
 	got, err := sess.ReadValues(ctx, []string{missing, writeFB + "bBoolVar"})

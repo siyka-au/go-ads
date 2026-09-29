@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/siyka-au/go-ads/v3/ams"
+
 	"cloud.google.com/go/civil"
 )
 
@@ -79,8 +81,8 @@ func TestDecodeArrayWithoutDatatypeTable(t *testing.T) {
 	sym := &symbol{
 		Name:     "anCounters",
 		DataType: "ARRAY [0..9] OF DINT",
-		BaseType: ADSTInt32, // element type, not the aggregate
-		Length:   40,        // 10 * 4
+		BaseType: ams.DataTypeInt32, // element type, not the aggregate
+		Length:   40,                // 10 * 4
 	}
 	_, err := sym.decode(make([]byte, 40), 0, nil)
 	if err == nil {
@@ -99,7 +101,7 @@ func TestDecodeArrayWithoutDatatypeTable(t *testing.T) {
 // The width guard must not catch a plain scalar resolved through BaseType: a
 // type-aliased DINT has Length 4 and decodes as a DINT.
 func TestDecodeAliasScalarStillResolves(t *testing.T) {
-	sym := &symbol{Name: "aliased", DataType: "E_SomeAlias", BaseType: ADSTInt32, Length: 4}
+	sym := &symbol{Name: "aliased", DataType: "E_SomeAlias", BaseType: ams.DataTypeInt32, Length: 4}
 	if got := decodeOK(t, sym, le32(7), nil); got != int32(7) {
 		t.Errorf("got %#v, want int32(7)", got)
 	}
@@ -122,17 +124,17 @@ func TestAliasResolutionThroughDatatypeTable(t *testing.T) {
 func TestDecodeWithBaseType(t *testing.T) {
 	tests := []struct {
 		name     string
-		baseType ADSDataType
+		baseType ams.DataType
 		length   uint32
 		data     []byte
 		want     any
 	}{
 		// Unknown DataType with an ADST_ code decodes as that primitive.
-		{"REAL", ADSTReal32, 4, leF32(3.14), float32(3.14)},
+		{"REAL", ams.DataTypeReal32, 4, leF32(3.14), float32(3.14)},
 		// An unsigned code must decode unsigned, not signed.
-		{"UDINT", ADSTUint32, 4, leu32(3000000000), uint32(3000000000)},
+		{"UDINT", ams.DataTypeUint32, 4, leu32(3000000000), uint32(3000000000)},
 		// No ADST_ code: a 2-byte symbol falls through to inference as INT.
-		{"inferred INT", ADSTVoid, 2, le16(1337), int16(1337)},
+		{"inferred INT", ams.DataTypeVoid, 2, le16(1337), int16(1337)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -481,7 +483,7 @@ func TestBitValueFlagDoesNotAffectDecoding(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%s/%v", tt.dataType, tt.want), func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length, Flags: SymbolFlagBitValue}
+			sym := &symbol{DataType: tt.dataType, Length: tt.length, Flags: ams.SymbolFlagBitValue}
 			if got := decodeOK(t, sym, tt.data, nil); got != tt.want {
 				t.Errorf("got %#v, want %#v", got, tt.want)
 			}
@@ -492,7 +494,7 @@ func TestBitValueFlagDoesNotAffectDecoding(t *testing.T) {
 // Validates: R-PARSE-007.
 func TestEncodeBitSymbol(t *testing.T) {
 	for v, want := range map[bool]byte{true: 0x01, false: 0x00} {
-		data, err := (&symbol{DataType: "BOOL", Length: 1, Flags: SymbolFlagBitValue}).encode(v, nil)
+		data, err := (&symbol{DataType: "BOOL", Length: 1, Flags: ams.SymbolFlagBitValue}).encode(v, nil)
 		if err != nil || len(data) != 1 || data[0] != want {
 			t.Errorf("%v: got % x, %v; want %02x", v, data, err, want)
 		}

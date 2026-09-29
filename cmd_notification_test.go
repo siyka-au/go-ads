@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 func TestDurationToADSTicks(t *testing.T) {
@@ -589,7 +591,7 @@ func TestNotification_StaleFlag_IgnoreMarksAllHandles(t *testing.T) {
 	sess.notifications.lock.Unlock()
 
 	// Trigger detection through the strategy dispatcher.
-	stale, reason := sess.handleStaleDetection(ReturnCodeDeviceSymbolVersionInvalid)
+	stale, reason := sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolVersionInvalid)
 	if !stale {
 		t.Fatal("expected stale=true")
 	}
@@ -725,10 +727,10 @@ func TestOrphanDelete_FiresOnUnknownHandleOutsideRaceWindow(t *testing.T) {
 
 	var deleted atomic.Int32
 	var seenHandle atomic.Uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deleted.Add(1)
 		seenHandle.Store(h)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -761,9 +763,9 @@ func TestOrphanDelete_ThrottledOnRepeatedHandle(t *testing.T) {
 	defer srv.stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -791,12 +793,12 @@ func TestOrphanDelete_DistinctHandlesNotThrottled(t *testing.T) {
 	var deleted atomic.Int32
 	seen := make(map[uint32]bool)
 	var mu sync.Mutex
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		mu.Lock()
 		seen[h] = true
 		mu.Unlock()
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -832,9 +834,9 @@ func TestOrphanDelete_SuppressedDuringRaceWindow(t *testing.T) {
 	defer srv.stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -860,9 +862,9 @@ func TestOrphanDelete_SuppressedDuringReconnect(t *testing.T) {
 	defer srv.stop()
 
 	var deleted atomic.Int32
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -892,10 +894,10 @@ func TestOrphanDelete_AbortsWhenHandleReappearsInActiveNotifications(t *testing.
 	var deleted atomic.Int32
 	// Block the Delete RPC for 200ms so we can inject the handle back into
 	// activeNotifications before the goroutine's re-check fires.
-	srv.delayBefore(CommandIDDeleteDeviceNotification, 0, 200*time.Millisecond)
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.delayBefore(ams.CommandDeleteDeviceNotification, 0, 200*time.Millisecond)
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deleted.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv)
@@ -925,8 +927,8 @@ func TestOrphanDelete_RPCFailureNonFatal(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
-		return ReturnCodeDeviceError
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+		return ams.ReturnCodeDeviceError
 	})
 
 	sess, c := newWiredTestSession(t, srv)

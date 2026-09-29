@@ -12,11 +12,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // craftSumReadResponse builds a byte response in the [N×(error,length)][data] format.
 // errors[i] and dataLengths[i] go in the header section; data is the concatenated payload.
-func craftSumReadResponse(errs []ReturnCode, dataLengths []uint32, data []byte) []byte {
+func craftSumReadResponse(errs []ams.ReturnCode, dataLengths []uint32, data []byte) []byte {
 	n := len(errs)
 	buf := make([]byte, n*8+len(data))
 	for i := 0; i < n; i++ {
@@ -36,11 +38,11 @@ func TestParseSumReadResponse_LengthOverflow(t *testing.T) {
 	conn.client.Store(&Client{logger: conn.logger})
 
 	resp := craftSumReadResponse(
-		[]ReturnCode{ReturnCodeNoErrors},
+		[]ams.ReturnCode{ams.ReturnCodeNoErrors},
 		[]uint32{0xFFFFFFFE},
 		[]byte{0x01, 0x02, 0x03, 0x04},
 	)
-	requests := []SumReadRequest{{Length: 4}}
+	requests := []ams.SumReadRequest{{Length: 4}}
 
 	results, err := conn.client.Load().parseSumReadResponse(resp, 1, requests)
 	if err != nil {
@@ -49,7 +51,7 @@ func TestParseSumReadResponse_LengthOverflow(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].Error != ReturnCodeDeviceInvalidSize {
+	if results[0].Error != ams.ReturnCodeDeviceInvalidSize {
 		t.Errorf("expected ReturnCodeDeviceInvalidSize, got %v", results[0].Error)
 	}
 }
@@ -66,20 +68,20 @@ func TestParseSumReadResponse_TruncationLogsError(t *testing.T) {
 	// Two items: first declares length=8, second declares length=4. Data section
 	// has only 4 bytes total — first item alone exceeds remaining bytes.
 	resp := craftSumReadResponse(
-		[]ReturnCode{ReturnCodeNoErrors, ReturnCodeNoErrors},
+		[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors},
 		[]uint32{8, 4},
 		[]byte{0x01, 0x02, 0x03, 0x04},
 	)
-	requests := []SumReadRequest{{Length: 8}, {Length: 4}}
+	requests := []ams.SumReadRequest{{Length: 8}, {Length: 4}}
 
 	results, err := conn.client.Load().parseSumReadResponse(resp, 2, requests)
 	if err != nil {
 		t.Fatalf("unexpected outer error: %v", err)
 	}
-	if results[0].Error != ReturnCodeDeviceInvalidSize {
+	if results[0].Error != ams.ReturnCodeDeviceInvalidSize {
 		t.Errorf("results[0].Error = %v, want ReturnCodeDeviceInvalidSize", results[0].Error)
 	}
-	if results[1].Error != ReturnCodeDeviceInvalidSize {
+	if results[1].Error != ams.ReturnCodeDeviceInvalidSize {
 		t.Errorf("results[1].Error = %v, want ReturnCodeDeviceInvalidSize", results[1].Error)
 	}
 
@@ -103,20 +105,20 @@ func TestParseSumReadResponse_PerItemOversize(t *testing.T) {
 	// Total response size accommodates 8+4=12 data bytes so the gross truncation
 	// guard (F-09) does NOT fire; only the per-item check (F-11) catches it.
 	resp := craftSumReadResponse(
-		[]ReturnCode{ReturnCodeNoErrors, ReturnCodeNoErrors},
+		[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors},
 		[]uint32{8, 4},
 		[]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
 	)
-	requests := []SumReadRequest{{Length: 4}, {Length: 4}}
+	requests := []ams.SumReadRequest{{Length: 4}, {Length: 4}}
 
 	results, err := conn.client.Load().parseSumReadResponse(resp, 2, requests)
 	if err != nil {
 		t.Fatalf("unexpected outer error: %v", err)
 	}
-	if results[0].Error != ReturnCodeDeviceInvalidSize {
+	if results[0].Error != ams.ReturnCodeDeviceInvalidSize {
 		t.Errorf("results[0].Error = %v, want ReturnCodeDeviceInvalidSize", results[0].Error)
 	}
-	if results[1].Error != ReturnCodeDeviceInvalidSize {
+	if results[1].Error != ams.ReturnCodeDeviceInvalidSize {
 		t.Errorf("results[1].Error = %v, want ReturnCodeDeviceInvalidSize", results[1].Error)
 	}
 
@@ -165,7 +167,7 @@ func TestSumReadOverflowGuard(t *testing.T) {
 			activeRequests: map[uint32]chan amsReply{},
 		},
 	}
-	requests := []SumReadRequest{
+	requests := []ams.SumReadRequest{
 		{Group: 1, Offset: 0, Length: math.MaxUint32},
 		{Group: 1, Offset: 0, Length: 1}, // total > MaxUint32
 	}
@@ -187,11 +189,11 @@ func TestIsSumCommandUnsupportedError(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{ReturnCodeDeviceServiceNotSupported, true},
-		{ReturnCodeGlobalUnknownCommandID, true},
-		{ReturnCodeGlobalUnknownAdsCommand, true},
-		{ReturnCodeDeviceBusy, false},
-		{ReturnCodeDeviceTimeout, false},
+		{ams.ReturnCodeDeviceServiceNotSupported, true},
+		{ams.ReturnCodeGlobalUnknownCommandID, true},
+		{ams.ReturnCodeGlobalUnknownAdsCommand, true},
+		{ams.ReturnCodeDeviceBusy, false},
+		{ams.ReturnCodeDeviceTimeout, false},
 		{fmt.Errorf("network error"), false},
 		{nil, false},
 	}
@@ -315,9 +317,9 @@ func TestSession_ReadValues_StaleDetection(t *testing.T) {
 
 	// SumReadEx2 (0xF084) handler: respond with one stale code + one OK.
 	// Response shape: [N × (error(4), length(4))][data].
-	srv.onWriteRead(GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		resp := craftSumReadResponse(
-			[]ReturnCode{ReturnCodeDeviceSymbolVersionInvalid, ReturnCodeNoErrors},
+			[]ams.ReturnCode{ams.ReturnCodeDeviceSymbolVersionInvalid, ams.ReturnCodeNoErrors},
 			[]uint32{0, 1},
 			[]byte{0x00},
 		)
@@ -368,12 +370,12 @@ func TestSession_ReadValues_FiresCallbackOncePerBatch(t *testing.T) {
 	seedSymbol(sess, "MAIN.c", 0x2003)
 
 	// Three stale codes — implementation must break after first.
-	srv.onWriteRead(GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
-			[]ReturnCode{
-				ReturnCodeDeviceSymbolVersionInvalid,
-				ReturnCodeDeviceSymbolVersionInvalid,
-				ReturnCodeDeviceSymbolNoFound,
+			[]ams.ReturnCode{
+				ams.ReturnCodeDeviceSymbolVersionInvalid,
+				ams.ReturnCodeDeviceSymbolVersionInvalid,
+				ams.ReturnCodeDeviceSymbolNoFound,
 			},
 			[]uint32{0, 0, 0},
 			nil,
@@ -431,10 +433,10 @@ func TestSession_WriteValues_StaleDetection(t *testing.T) {
 	seedSymbol(sess, "MAIN.b", 0x3002)
 
 	// SumWrite (0xF081) response: N × uint32 per-item error codes.
-	srv.onWriteRead(GroupSumupWrite, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint32(buf[0:], uint32(ReturnCodeDeviceSymbolVersionInvalid))
-		binary.LittleEndian.PutUint32(buf[4:], uint32(ReturnCodeNoErrors))
+		binary.LittleEndian.PutUint32(buf[0:], uint32(ams.ReturnCodeDeviceSymbolVersionInvalid))
+		binary.LittleEndian.PutUint32(buf[4:], uint32(ams.ReturnCodeNoErrors))
 		return buf
 	})
 
@@ -476,18 +478,18 @@ func TestSumReadFallback_PreservesADSReturnCode(t *testing.T) {
 	defer srv.stop()
 
 	// Register a Read handler for an arbitrary group that returns the stale code.
-	const testGroup Group = 0xABCD1234
-	srv.onRead(testGroup, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeDeviceSymbolVersionInvalid, nil
+	const testGroup ams.Group = 0xABCD1234
+	srv.onRead(testGroup, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeDeviceSymbolVersionInvalid, nil
 	})
 
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 2*time.Second)
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
 	defer c.Close()
 
-	reqs := []SumReadRequest{{Group: uint32(testGroup), Offset: 0, Length: 4}}
+	reqs := []ams.SumReadRequest{{Group: uint32(testGroup), Offset: 0, Length: 4}}
 	results, err := c.sumReadFallback(context.Background(), reqs)
 	if err != nil {
 		t.Fatalf("sumReadFallback returned unexpected top-level error: %v", err)
@@ -495,7 +497,7 @@ func TestSumReadFallback_PreservesADSReturnCode(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].Error != ReturnCodeDeviceSymbolVersionInvalid {
+	if results[0].Error != ams.ReturnCodeDeviceSymbolVersionInvalid {
 		t.Errorf("results[0].Error = %v, want ReturnCodeDeviceSymbolVersionInvalid", results[0].Error)
 	}
 }
@@ -520,27 +522,27 @@ func TestParseSumReadResponse_ErroredItemAdvancesOffset(t *testing.T) {
 	data := append(append(append([]byte{}, item1...), item1Err...), item2...)
 
 	resp := craftSumReadResponse(
-		[]ReturnCode{ReturnCodeNoErrors, ReturnCodeDeviceSymbolVersionInvalid, ReturnCodeNoErrors},
+		[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeDeviceSymbolVersionInvalid, ams.ReturnCodeNoErrors},
 		[]uint32{4, 4, 4},
 		data,
 	)
-	requests := []SumReadRequest{{Length: 4}, {Length: 4}, {Length: 4}}
+	requests := []ams.SumReadRequest{{Length: 4}, {Length: 4}, {Length: 4}}
 
 	results, err := conn.client.Load().parseSumReadResponse(resp, 3, requests)
 	if err != nil {
 		t.Fatalf("unexpected outer error: %v", err)
 	}
 
-	if results[0].Error != ReturnCodeNoErrors {
+	if results[0].Error != ams.ReturnCodeNoErrors {
 		t.Errorf("results[0].Error = %v, want NoErrors", results[0].Error)
 	}
 	if !bytes.Equal(results[0].Data, item1) {
 		t.Errorf("results[0].Data = %v, want %v", results[0].Data, item1)
 	}
-	if results[1].Error != ReturnCodeDeviceSymbolVersionInvalid {
+	if results[1].Error != ams.ReturnCodeDeviceSymbolVersionInvalid {
 		t.Errorf("results[1].Error = %v, want SymbolVersionInvalid", results[1].Error)
 	}
-	if results[2].Error != ReturnCodeNoErrors {
+	if results[2].Error != ams.ReturnCodeNoErrors {
 		t.Errorf("results[2].Error = %v, want NoErrors (alignment preserved across errored item)", results[2].Error)
 	}
 	if !bytes.Equal(results[2].Data, item2) {
@@ -560,17 +562,17 @@ func TestParseSumReadResponse_ErroredItemOverflowsRemaining(t *testing.T) {
 
 	// Two items, second errored with absurd declared length, only 4 actual data bytes.
 	resp := craftSumReadResponse(
-		[]ReturnCode{ReturnCodeNoErrors, ReturnCodeDeviceSymbolVersionInvalid},
+		[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeDeviceSymbolVersionInvalid},
 		[]uint32{4, 0xFFFFFFFE}, // item 1 errored, claims ~4 GiB; remaining < that
 		[]byte{1, 2, 3, 4},
 	)
-	requests := []SumReadRequest{{Length: 4}, {Length: 4}}
+	requests := []ams.SumReadRequest{{Length: 4}, {Length: 4}}
 
 	results, err := conn.client.Load().parseSumReadResponse(resp, 2, requests)
 	if err != nil {
 		t.Fatalf("unexpected outer error: %v", err)
 	}
-	if results[1].Error != ReturnCodeDeviceInvalidSize {
+	if results[1].Error != ams.ReturnCodeDeviceInvalidSize {
 		t.Errorf("results[1].Error = %v, want DeviceInvalidSize (errored-item overflow cascade)", results[1].Error)
 	}
 	if !strings.Contains(logBuf.String(), "errored-item declared length exceeds remaining bytes") {
@@ -589,7 +591,7 @@ func TestParseSumReadResponse_ErroredItemOverflowsRemaining(t *testing.T) {
 // The code itself must stay readable through errors.Is — client_test.go's AMS
 // test and every consumer branching on a named router condition depend on that.
 func TestAMSRouterErrorIsNotADeviceVerdict(t *testing.T) {
-	_, err := amsReply{amsErr: ReturnCodeGlobalTargetPortNotFound}.payload()
+	_, err := amsReply{amsErr: ams.ReturnCodeGlobalTargetPortNotFound}.payload()
 	if err == nil {
 		t.Fatal("payload() returned nil error for a non-zero AMS ErrorCode")
 	}
@@ -605,15 +607,15 @@ func TestAMSRouterErrorIsNotADeviceVerdict(t *testing.T) {
 		{name: "double wrapped", err: wrapped},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var rc ReturnCode
+			var rc ams.ReturnCode
 			if errors.As(tc.err, &rc) {
 				t.Errorf("errors.As extracted ReturnCode %v from a router rejection; "+
 					"every abort guard will read it as a PLC verdict about an item", rc)
 			}
-			if !errors.Is(tc.err, ReturnCodeGlobalTargetPortNotFound) {
+			if !errors.Is(tc.err, ams.ReturnCodeGlobalTargetPortNotFound) {
 				t.Errorf("errors.Is(err, ReturnCodeGlobalTargetPortNotFound) = false, want true; got %v", tc.err)
 			}
-			if errors.Is(tc.err, ReturnCodeGlobalInsertMailboxError) {
+			if errors.Is(tc.err, ams.ReturnCodeGlobalInsertMailboxError) {
 				t.Error("errors.Is matched an unrelated router code")
 			}
 			if !strings.Contains(tc.err.Error(), "target port") {
@@ -689,12 +691,12 @@ func TestReadValues_AllItemsFailedIsNotSuccess(t *testing.T) {
 	seedSymbol(sess, "MAIN.b", 0x4002)
 	seedSymbol(sess, "MAIN.c", 0x4003)
 
-	srv.onWriteRead(GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
-			[]ReturnCode{
-				ReturnCodeDeviceSymbolNoFound,
-				ReturnCodeDeviceSymbolNoFound,
-				ReturnCodeDeviceSymbolNoFound,
+			[]ams.ReturnCode{
+				ams.ReturnCodeDeviceSymbolNoFound,
+				ams.ReturnCodeDeviceSymbolNoFound,
+				ams.ReturnCodeDeviceSymbolNoFound,
 			},
 			[]uint32{0, 0, 0},
 			nil,
@@ -719,8 +721,8 @@ func TestReadValues_AllItemsFailedIsNotSuccess(t *testing.T) {
 		if item.Skipped != nil {
 			t.Errorf("item %s: Skipped = %v, want nil (the PLC gave a verdict)", item.Symbol, item.Skipped)
 		}
-		if item.Error != ReturnCodeDeviceSymbolNoFound {
-			t.Errorf("item %s: Error = 0x%X, want 0x%X", item.Symbol, uint32(item.Error), uint32(ReturnCodeDeviceSymbolNoFound))
+		if item.Error != ams.ReturnCodeDeviceSymbolNoFound {
+			t.Errorf("item %s: Error = 0x%X, want 0x%X", item.Symbol, uint32(item.Error), uint32(ams.ReturnCodeDeviceSymbolNoFound))
 		}
 	}
 }
@@ -739,9 +741,9 @@ func TestReadValues_OneAbsentSymbolKeepsTheRest(t *testing.T) {
 	seedSymbol(sess, "MAIN.absent", 0x4102)
 	seedSymbol(sess, "MAIN.c", 0x4103)
 
-	srv.onWriteRead(GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
-			[]ReturnCode{ReturnCodeNoErrors, ReturnCodeDeviceSymbolNoFound, ReturnCodeNoErrors},
+			[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeDeviceSymbolNoFound, ams.ReturnCodeNoErrors},
 			[]uint32{1, 0, 1},
 			[]byte{0x01, 0x00},
 		)
@@ -761,7 +763,7 @@ func TestReadValues_OneAbsentSymbolKeepsTheRest(t *testing.T) {
 		t.Errorf("got Succeeded = %d, want 2", batchErr.Succeeded)
 	}
 	item := itemFor(t, batchErr, "MAIN.absent")
-	if item.Skipped != nil || item.Error != ReturnCodeDeviceSymbolNoFound {
+	if item.Skipped != nil || item.Error != ams.ReturnCodeDeviceSymbolNoFound {
 		t.Errorf("got item %+v, want a PLC verdict of 0x710", item)
 	}
 	if !strings.Contains(err.Error(), "MAIN.absent") {
@@ -783,8 +785,8 @@ func TestReadValues_UnresolvedSymbolIsReported(t *testing.T) {
 	// MAIN.typo is not seeded, and the server answers no handle lookup, so
 	// getSymbol fails for it before any request is built.
 
-	srv.onWriteRead(GroupSumupReadEx2, func(_ []byte) []byte {
-		return craftSumReadResponse([]ReturnCode{ReturnCodeNoErrors}, []uint32{1}, []byte{0x01})
+	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
+		return craftSumReadResponse([]ams.ReturnCode{ams.ReturnCodeNoErrors}, []uint32{1}, []byte{0x01})
 	})
 
 	values, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.typo"})
@@ -833,13 +835,13 @@ func TestReadValues_VanishedAndUnparsableAreReported(t *testing.T) {
 	// loop takes cache.lock, so it can stage exactly the two races: drop one
 	// entry from the cache, and widen another's Length past the payload the PLC
 	// is about to return.
-	srv.onWriteRead(GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		sess.cache.lock.Lock()
 		delete(sess.cache.symbols, symbolKey("MAIN.gone"))
 		sess.cache.symbols[symbolKey("MAIN.widened")].Length = 8
 		sess.cache.lock.Unlock()
 		return craftSumReadResponse(
-			[]ReturnCode{ReturnCodeNoErrors, ReturnCodeNoErrors, ReturnCodeNoErrors},
+			[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors},
 			[]uint32{1, 1, 1},
 			[]byte{0x01, 0x01, 0x01},
 		)
@@ -876,7 +878,7 @@ func TestReadValues_TransportFailureIsABareError(t *testing.T) {
 
 	// Seeded symbols need no handle lookup, so the first ReadWrite is the
 	// SumRead itself: the router rejects it the way a PLC in CONFIG does.
-	srv.amsErrorAfter(CommandIDReadWrite, 1, ReturnCodeGlobalTargetPortNotFound)
+	srv.amsErrorAfter(ams.CommandReadWrite, 1, ams.ReturnCodeGlobalTargetPortNotFound)
 
 	values, err := sess.ReadValues(context.Background(), []string{"MAIN.a", "MAIN.b"})
 	if err == nil {
@@ -886,7 +888,7 @@ func TestReadValues_TransportFailureIsABareError(t *testing.T) {
 	if errors.As(err, &batchErr) {
 		t.Errorf("got a *BatchError (%v) for a transport failure; per-item results are not knowable here", batchErr)
 	}
-	if !errors.Is(err, ReturnCodeGlobalTargetPortNotFound) {
+	if !errors.Is(err, ams.ReturnCodeGlobalTargetPortNotFound) {
 		t.Errorf("got err = %v, want it to match ReturnCodeGlobalTargetPortNotFound", err)
 	}
 	if values != nil {
@@ -929,9 +931,9 @@ func TestWriteValues_DroppedItemIsNotSuccess(t *testing.T) {
 	// the PLC. MAIN.bad is a BOOL handed a non-boolean, the shape a type change
 	// under an online change takes, and it dies at serialization instead.
 
-	srv.onWriteRead(GroupSumupWrite, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(ReturnCodeNoErrors))
+		binary.LittleEndian.PutUint32(buf, uint32(ams.ReturnCodeNoErrors))
 		return buf
 	})
 
@@ -942,7 +944,7 @@ func TestWriteValues_DroppedItemIsNotSuccess(t *testing.T) {
 	})
 	batchErr := batchErrorFor(t, err)
 
-	if codes["MAIN.a"] != ReturnCodeNoErrors {
+	if codes["MAIN.a"] != ams.ReturnCodeNoErrors {
 		t.Errorf("MAIN.a: code = 0x%X, want 0x0 — the write that did land must still report success", uint32(codes["MAIN.a"]))
 	}
 	if _, ok := codes["MAIN.typo"]; ok {
@@ -971,20 +973,20 @@ func TestWriteValues_PerItemRejectionIsAnError(t *testing.T) {
 	sess, _ := newWiredTestSession(t, srv, WithSymbolVersionStrategy(SymbolVersionIgnore))
 	seedSymbol(sess, "MAIN.a", 0x4601)
 
-	srv.onWriteRead(GroupSumupWrite, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(ReturnCodeDeviceSymbolNoFound))
+		binary.LittleEndian.PutUint32(buf, uint32(ams.ReturnCodeDeviceSymbolNoFound))
 		return buf
 	})
 
 	codes, err := sess.WriteValues(context.Background(), map[string]any{"MAIN.a": true})
 	batchErr := batchErrorFor(t, err)
 
-	if codes["MAIN.a"] != ReturnCodeDeviceSymbolNoFound {
+	if codes["MAIN.a"] != ams.ReturnCodeDeviceSymbolNoFound {
 		t.Errorf("MAIN.a: code = 0x%X, want 0x710", uint32(codes["MAIN.a"]))
 	}
 	item := itemFor(t, batchErr, "MAIN.a")
-	if item.Skipped != nil || item.Error != ReturnCodeDeviceSymbolNoFound {
+	if item.Skipped != nil || item.Error != ams.ReturnCodeDeviceSymbolNoFound {
 		t.Errorf("got item %+v, want a PLC verdict of 0x710", item)
 	}
 }
@@ -1003,14 +1005,14 @@ func TestBatchSymbols_FullSuccessIsNotAnError(t *testing.T) {
 	seedSymbol(sess, "MAIN.a", 0x4701)
 	seedSymbol(sess, "MAIN.b", 0x4702)
 
-	srv.onWriteRead(GroupSumupReadEx2, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		return craftSumReadResponse(
-			[]ReturnCode{ReturnCodeNoErrors, ReturnCodeNoErrors},
+			[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors},
 			[]uint32{1, 1},
 			[]byte{0x01, 0x00},
 		)
 	})
-	srv.onWriteRead(GroupSumupWrite, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupWrite, func(_ []byte) []byte {
 		return make([]byte, 8) // two items, both ReturnCodeNoErrors
 	})
 

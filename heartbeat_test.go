@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // heartbeat_test.go — noticing that subscriptions have died, without asking the
@@ -44,7 +46,7 @@ func TestHeartbeat_ResubscribesWhenBeatsStop(t *testing.T) {
 		adds.Add(1)
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(150*time.Millisecond, 3))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -56,7 +58,7 @@ func TestHeartbeat_ResubscribesWhenBeatsStop(t *testing.T) {
 
 	ch := make(chan *Update, 16)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.beat", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	afterSetup := adds.Load()
@@ -104,11 +106,11 @@ func TestHeartbeat_NotDeliveredToTheCaller(t *testing.T) {
 	})
 	var deletedMu sync.Mutex
 	var deleted []uint32
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		deletedMu.Lock()
 		deleted = append(deleted, h)
 		deletedMu.Unlock()
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	// A cycle long enough that the watcher cannot fire during the test.
@@ -117,7 +119,7 @@ func TestHeartbeat_NotDeliveredToTheCaller(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.quiet", 0xF400)
 	ch := make(chan *Update, 8)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.quiet", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	hb := sess.notifications.heartbeatHandle.Load()
@@ -189,7 +191,7 @@ func TestHeartbeat_OptOut(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.nohb", 0xF500)
 	ch := make(chan *Update, 4)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.nohb", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	if got := adds.Load(); got != 1 {
@@ -210,7 +212,7 @@ func TestHeartbeat_CarriesSymbolVersionChange(t *testing.T) {
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	// The reload cap defaults to 0 in this helper, which degrades AutoReload to
 	// Ignore — set it so the strategy can actually run.
@@ -222,7 +224,7 @@ func TestHeartbeat_CarriesSymbolVersionChange(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.ver", 0xF600)
 	ch := make(chan *Update, 4)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.ver", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	sess.cache.lock.Lock()
@@ -268,12 +270,12 @@ func TestHeartbeat_RecoverySurvivesAnUnavailablePLC(t *testing.T) {
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
 		if !serving.Load() {
 			refusals.Add(1)
-			return addNotifResponse{Error: ReturnCodeDeviceServiceNotSupported}
+			return addNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 		}
 		adds.Add(1)
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	serving.Store(true)
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
@@ -285,7 +287,7 @@ func TestHeartbeat_RecoverySurvivesAnUnavailablePLC(t *testing.T) {
 
 	ch := make(chan *Update, 8)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.survive", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 
@@ -357,37 +359,37 @@ func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
 
 	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
 		h := nextHandle.Add(1)
-		if Group(req.Group) == GroupSymbolVersion && req.TransMode == uint32(TransModeServerCycle) {
+		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			mu.Lock()
 			heartbeatAdds = append(heartbeatAdds, h)
 			mu.Unlock()
 		}
 		return addNotifResponse{Handle: h}
 	})
-	srv.onDeleteDeviceNotification(func(h uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(h uint32) ams.ReturnCode {
 		mu.Lock()
 		deleted = append(deleted, h)
 		mu.Unlock()
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 	// The resubscribe goes through the batch path, which tries the sum command first.
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(_ []byte) []byte {
-		return buildSumAddNotifPayload([]sumNotifResponse{{Error: ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+		return buildSumAddNotifPayload([]sumNotifResponse{{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
 	})
 	// Releases go through the sum group too, so record them there or the leak
 	// assertion below can never be satisfied by any implementation.
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		codes := make([]ReturnCode, len(req)/4)
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+		codes := make([]ams.ReturnCode, len(req)/4)
 		mu.Lock()
 		for i := range codes {
 			deleted = append(deleted, binary.LittleEndian.Uint32(req[i*4:]))
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		mu.Unlock()
 		return buildSumDeleteNotifPayload(codes)
 	})
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{9}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{9}
 	})
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 5)
@@ -406,7 +408,7 @@ func TestHeartbeat_ReEstablishedAfterReconnect(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.beat", 0xF300)
 	ch := make(chan *Update, 16)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.beat", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	oldHB := sess.notifications.heartbeatHandle.Load()
@@ -460,8 +462,8 @@ func TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping(t *testing.T) {
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
 	// The PLC no longer knows this registration.
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
-		return ReturnCodeDeviceNotifyHandleInvalid
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
+		return ams.ReturnCodeDeviceNotifyHandleInvalid
 	})
 
 	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
@@ -469,7 +471,7 @@ func TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.gone", 0xF600)
 	ch := make(chan *Update, 4)
 	handle, err := sess.AddSymbolNotification(context.Background(), "MAIN.gone", 0, 0,
-		TransModeServerOnChange, ch)
+		ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
@@ -506,7 +508,7 @@ func TestDeleteNotification_AlreadyGoneStillCleansUpBookkeeping(t *testing.T) {
 func TestDeleteNotification_ForeignHandleKeepsTheSubscriptionChannel(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
 	c.SetNotificationHandler(sess.handleNotification)
@@ -551,7 +553,7 @@ func TestHeartbeat_SymbolVersionChangeDetectedOnce(t *testing.T) {
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	var detections atomic.Int32
 	// A long cycle so the watchdog cannot interfere; the beats here are driven by
@@ -569,7 +571,7 @@ func TestHeartbeat_SymbolVersionChangeDetectedOnce(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.ver", 0xF700)
 	ch := make(chan *Update, 16)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.ver", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	hb := sess.notifications.heartbeatHandle.Load()
@@ -617,22 +619,22 @@ func TestHeartbeat_RecoveryDoesNothingAfterClose(t *testing.T) {
 		adds.Add(1)
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 	// The resubscribe uses the batch path, so this group has to answer or the test
 	// proves nothing: it would fail on a parse error long before reaching the
 	// behaviour under test.
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		adds.Add(1)
-		return buildSumAddNotifPayload([]sumNotifResponse{{Error: ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
+		return buildSumAddNotifPayload([]sumNotifResponse{{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}})
 	})
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		codes := make([]ReturnCode, len(req)/4)
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
 			deletes.Add(1)
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
@@ -640,8 +642,8 @@ func TestHeartbeat_RecoveryDoesNothingAfterClose(t *testing.T) {
 	// newDialableTestSession, not newWiredTestSession: the latter's Client comes
 	// from Dial with a context of its own, so Session.Close() can never finish
 	// waiting for its workers (see that helper's comment).
-	srv.onRead(GroupSymbolVersion, func(_, _, _ uint32) (ReturnCode, []byte) {
-		return ReturnCodeNoErrors, []byte{5}
+	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
+		return ams.ReturnCodeNoErrors, []byte{5}
 	})
 	sess := newDialableTestSession(t, srv.host, srv.port, 5)
 	sess.heartbeatInterval = 5 * time.Second
@@ -652,7 +654,7 @@ func TestHeartbeat_RecoveryDoesNothingAfterClose(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.afterclose", 0xF800)
 	ch := make(chan *Update, 4)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.afterclose", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 
@@ -737,7 +739,7 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	logs := &testLogHandler{}
 	sess, c := newWiredTestSession(t, srv,
@@ -747,7 +749,7 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.spin", 0xF900)
 	ch := make(chan *Update, 4)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.spin", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 
@@ -801,14 +803,14 @@ func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
 	// No reading yet: the gate must permit, or every device that does not serve the
 	// system service port would stop working.
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.cfg", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("subscribe refused with no runtime-state reading: %v", err)
 	}
 
 	// Now the system service reports CONFIG.
-	sess.recordRuntimeState(ADSStateConfig)
+	sess.recordRuntimeState(ams.StateConfig)
 	_, err := sess.AddSymbolNotification(context.Background(), "MAIN.cfg2", 0, 0,
-		TransModeServerOnChange, ch)
+		ams.TransModeServerOnChange, ch)
 	if err == nil {
 		t.Error("subscribe succeeded although the runtime is in CONFIG: the runtime port does not exist in that state, so this " +
 			"can only fail later and obscurely")
@@ -824,9 +826,9 @@ func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
 	}
 
 	// Back to RUN: work is allowed again without rebuilding anything.
-	sess.recordRuntimeState(ADSStateRun)
+	sess.recordRuntimeState(ams.StateRun)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.cfg3", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Errorf("subscribe still refused after the runtime returned to RUN: %v", err)
 	}
 }
@@ -841,7 +843,7 @@ func TestRuntimeState_RefusesSymbolWorkOutsideRun(t *testing.T) {
 func TestRuntimeState_PollReportsTheState(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.setADSState(ADSStateConfig)
+	srv.setADSState(ams.StateConfig)
 
 	// WithRuntimeStateWatch, not WithNotificationHeartbeat: the state poll used to
 	// run at the heartbeat cycle, so this test tuned the heartbeat purely to make
@@ -858,7 +860,7 @@ func TestRuntimeState_PollReportsTheState(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		if state, known := sess.knownRuntimeState(); known {
-			if state != ADSStateConfig {
+			if state != ams.StateConfig {
 				t.Errorf("polled state = %v, want CONFIG", state)
 			}
 			break
@@ -870,10 +872,10 @@ func TestRuntimeState_PollReportsTheState(t *testing.T) {
 	}
 
 	// And it must notice the way back.
-	srv.setADSState(ADSStateRun)
+	srv.setADSState(ams.StateRun)
 	deadline = time.Now().Add(3 * time.Second)
 	for {
-		if state, _ := sess.knownRuntimeState(); state == ADSStateRun {
+		if state, _ := sess.knownRuntimeState(); state == ams.StateRun {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -907,7 +909,7 @@ func TestHeartbeat_DetectionSurvivesABackwardClockStep(t *testing.T) {
 		adds.Add(1)
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -917,7 +919,7 @@ func TestHeartbeat_DetectionSurvivesABackwardClockStep(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.clock", 0xFD10)
 	ch := make(chan *Update, 8)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.clock", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	afterSetup := adds.Load()
@@ -954,16 +956,16 @@ func TestHeartbeat_ConcurrentSubscribesEstablishOneBeat(t *testing.T) {
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xFE00)
 	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
-		if Group(req.Group) == GroupSymbolVersion && req.TransMode == uint32(TransModeServerCycle) {
+		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			cyclicAdds.Add(1)
 			// Wide enough that both callers are inside the round-trip together.
 			time.Sleep(150 * time.Millisecond)
 		}
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode {
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode {
 		deletes.Add(1)
-		return ReturnCodeNoErrors
+		return ams.ReturnCodeNoErrors
 	})
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(10*time.Second, 3))
@@ -1008,22 +1010,22 @@ func TestHeartbeat_RetriesAfterAFailedEstablish(t *testing.T) {
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xFF00)
 	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
-		if Group(req.Group) == GroupSymbolVersion && req.TransMode == uint32(TransModeServerCycle) {
+		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			cyclicAttempts.Add(1)
 			if refuse.Load() {
-				return addNotifResponse{Error: ReturnCodeDeviceServiceNotSupported}
+				return addNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 			}
 		}
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
 	preSeedTypedSymbol(sess, "MAIN.nobeat", 0xFF10)
 	ch := make(chan *Update, 4)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.nobeat", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	if sess.notifications.heartbeatHandle.Load() != 0 {
@@ -1067,31 +1069,31 @@ func TestHeartbeat_RecoveryKeepsALargeConfigSet(t *testing.T) {
 	var serving atomic.Bool
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0x2000)
-	srv.onWriteRead(GroupSumupAddDeviceNotification, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(req []byte) []byte {
 		items := make([]sumNotifResponse, len(req)/40)
 		for i := range items {
 			if !serving.Load() {
-				items[i] = sumNotifResponse{Error: ReturnCodeDeviceServiceNotSupported}
+				items[i] = sumNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 				continue
 			}
-			items[i] = sumNotifResponse{Error: ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
+			items[i] = sumNotifResponse{Error: ams.ReturnCodeNoErrors, Handle: nextHandle.Add(1)}
 		}
 		return buildSumAddNotifPayload(items)
 	})
-	srv.onWriteRead(GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
-		codes := make([]ReturnCode, len(req)/4)
+	srv.onWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
+		codes := make([]ams.ReturnCode, len(req)/4)
 		for i := range codes {
-			codes[i] = ReturnCodeNoErrors
+			codes[i] = ams.ReturnCodeNoErrors
 		}
 		return buildSumDeleteNotifPayload(codes)
 	})
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
 		if !serving.Load() {
-			return addNotifResponse{Error: ReturnCodeDeviceServiceNotSupported}
+			return addNotifResponse{Error: ams.ReturnCodeDeviceServiceNotSupported}
 		}
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	serving.Store(true)
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(80*time.Millisecond, 2))
@@ -1101,7 +1103,7 @@ func TestHeartbeat_RecoveryKeepsALargeConfigSet(t *testing.T) {
 	for i := 0; i < symbols; i++ {
 		name := fmt.Sprintf("MAIN.bulk%02d", i)
 		preSeedTypedSymbol(sess, name, uint32(0x3000+i))
-		configs = append(configs, NotificationConfig{SymbolName: name, TransmissionMode: TransModeServerOnChange})
+		configs = append(configs, NotificationConfig{SymbolName: name, TransmissionMode: ams.TransModeServerOnChange})
 	}
 	ch := make(chan *Update, 256)
 	results, err := sess.AddSymbolNotifications(context.Background(), configs, ch)
@@ -1153,8 +1155,8 @@ func TestHeartbeat_RecoveryKeepsALargeConfigSet(t *testing.T) {
 // refusing every subscribe on such a device, with no PLC error to explain it, is
 // worse than attempting the call.
 func TestRuntimeState_RefusesOnlyMeasuredStates(t *testing.T) {
-	refuse := []ADSState{ADSStateConfig, ADSStateReconfig}
-	permit := []ADSState{ADSStateRun, ADSStateStop, ADSStateShutdown, ADSStateIdle, ADSStateStart, ADSStateInvalid, ADSState(99)}
+	refuse := []ams.State{ams.StateConfig, ams.StateReconfig}
+	permit := []ams.State{ams.StateRun, ams.StateStop, ams.StateShutdown, ams.StateIdle, ams.StateStart, ams.StateInvalid, ams.State(99)}
 
 	for _, state := range refuse {
 		if !runtimeDefinitelyNotServing(state) {
@@ -1181,7 +1183,7 @@ func TestRuntimeState_ReadingExpires(t *testing.T) {
 	defer srv.stop()
 	sess, _ := newWiredTestSession(t, srv, WithoutNotificationHeartbeat())
 
-	sess.recordRuntimeState(ADSStateConfig)
+	sess.recordRuntimeState(ams.StateConfig)
 	if _, known := sess.knownRuntimeState(); !known {
 		t.Fatal("a fresh reading is not known")
 	}
@@ -1219,7 +1221,7 @@ func TestHeartbeat_DeferralsKeepAConstantRate(t *testing.T) {
 	srv.onAddDeviceNotification(func(_ addNotifRequest) addNotifResponse {
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	logs := &testLogHandler{}
 	sess, c := newWiredTestSession(t, srv,
@@ -1229,14 +1231,14 @@ func TestHeartbeat_DeferralsKeepAConstantRate(t *testing.T) {
 	preSeedTypedSymbol(sess, "MAIN.deferred", 0x5100)
 	ch := make(chan *Update, 8)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.deferred", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 
 	// The runtime is in CONFIG for 1.5s. At a 100ms cycle and 2 missed ticks the
 	// base window is 200ms, so a constant rate is ~7 deferrals. Doubling gives
 	// 200ms, 400ms, 800ms, 1600ms — three at most inside the same window.
-	sess.recordRuntimeState(ADSStateConfig)
+	sess.recordRuntimeState(ams.StateConfig)
 	time.Sleep(1500 * time.Millisecond)
 
 	got := logs.countByMessage("re-subscribe deferred")
@@ -1267,7 +1269,7 @@ func TestHeartbeat_ReconnectDoesNotInheritStaleQuietTicks(t *testing.T) {
 		adds.Add(1)
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	// allowed == 8 ticks of 100ms: wide enough that ±2 ticks of scheduler jitter
 	// under -race cannot flip either assertion below.
@@ -1283,7 +1285,7 @@ func TestHeartbeat_ReconnectDoesNotInheritStaleQuietTicks(t *testing.T) {
 
 	ch := make(chan *Update, 16)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.beat", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	hb := sess.notifications.heartbeatHandle.Load()
@@ -1506,7 +1508,7 @@ func TestHeartbeat_RetriesAfterAHandleCollision(t *testing.T) {
 	var nextHandle atomic.Uint32
 	nextHandle.Store(0xCD00)
 	srv.onAddDeviceNotification(func(req addNotifRequest) addNotifResponse {
-		if Group(req.Group) == GroupSymbolVersion && req.TransMode == uint32(TransModeServerCycle) {
+		if ams.Group(req.Group) == ams.GroupSymbolVersion && req.TransMode == uint32(ams.TransModeServerCycle) {
 			cyclicAttempts.Add(1)
 			if collide.Load() {
 				// The caller's own notification handle, handed back for the beat.
@@ -1516,7 +1518,7 @@ func TestHeartbeat_RetriesAfterAHandleCollision(t *testing.T) {
 		}
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -1528,7 +1530,7 @@ func TestHeartbeat_RetriesAfterAHandleCollision(t *testing.T) {
 	// never collide with itself.
 	seedLiveNotification(sess, "MAIN.already", collidingHandle, ch)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.collide", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	if got := sess.notifications.heartbeatHandle.Load(); got != 0 {
@@ -1670,7 +1672,7 @@ func TestRuntimeStateWatch_DefaultIsIndependentOfTheHeartbeat(t *testing.T) {
 func TestWithoutRuntimeStateWatch_StartsNoPollerAndKeepsTheOnce(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	srv.setADSState(ADSStateConfig)
+	srv.setADSState(ams.StateConfig)
 
 	sess, _ := newWiredTestSession(t, srv, WithoutRuntimeStateWatch())
 	sess.startRuntimeStateWatch()
@@ -1718,7 +1720,7 @@ func TestHeartbeat_RecoversSubscriptionsWhileTheBeatIsHealthy(t *testing.T) {
 		adds.Add(1)
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -1730,7 +1732,7 @@ func TestHeartbeat_RecoversSubscriptionsWhileTheBeatIsHealthy(t *testing.T) {
 
 	ch := make(chan *Update, 8)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.gap", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	want, have := sess.notifications.subscriptionGap()
@@ -1808,7 +1810,7 @@ func TestHeartbeat_RecoversWhenTheBeatIsSlowerThanTheTick(t *testing.T) {
 		adds.Add(1)
 		return addNotifResponse{Handle: nextHandle.Add(1)}
 	})
-	srv.onDeleteDeviceNotification(func(_ uint32) ReturnCode { return ReturnCodeNoErrors })
+	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 10))
 	c.SetNotificationHandler(sess.handleNotification)
@@ -1819,7 +1821,7 @@ func TestHeartbeat_RecoversWhenTheBeatIsSlowerThanTheTick(t *testing.T) {
 
 	ch := make(chan *Update, 8)
 	if _, err := sess.AddSymbolNotification(context.Background(), "MAIN.slowbeat", 0, 0,
-		TransModeServerOnChange, ch); err != nil {
+		ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("AddSymbolNotification: %v", err)
 	}
 	if want, have := sess.notifications.subscriptionGap(); want == 0 || want != have {

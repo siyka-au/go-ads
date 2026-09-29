@@ -1,7 +1,6 @@
-package ads
+package ams
 
 import (
-	"encoding/binary"
 	"strings"
 	"testing"
 )
@@ -53,32 +52,6 @@ func TestStringToNetIDErrors(t *testing.T) {
 			_, err := ParseNetID(tt.input)
 			if err == nil {
 				t.Errorf("ParseNetID(%q) expected error for %s, got nil", tt.input, tt.desc)
-			}
-		})
-	}
-}
-
-// --- downgradeTransMode ---
-
-// Validates: R-NOT-011.
-func TestDowngradeTransMode(t *testing.T) {
-	tests := []struct {
-		input    TransMode
-		expected TransMode
-	}{
-		{TransModeServerOnChange2, TransModeServerOnChange},
-		{TransModeServerCycle2, TransModeServerCycle},
-		{TransModeServerOnChange, TransModeServerOnChange},
-		{TransModeServerCycle, TransModeServerCycle},
-		{TransModeClientCycle, TransModeClientCycle},
-		{TransModeNoTransmission, TransModeNoTransmission},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input.String(), func(t *testing.T) {
-			result := downgradeTransMode(tt.input)
-			if result != tt.expected {
-				t.Errorf("downgradeTransMode(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -193,141 +166,34 @@ func TestReturnCodeError(t *testing.T) {
 	}
 }
 
-// --- buildTag ---
-
-// Validates: R-ROUTE-001.
-func TestBuildTag(t *testing.T) {
-	tag := buildTag(7, []byte{192, 168, 1, 1, 1, 1})
-	if len(tag) != 10 {
-		t.Fatalf("tag length = %d, want 10", len(tag))
-	}
-	tid := binary.LittleEndian.Uint16(tag[0:])
-	if tid != 7 {
-		t.Errorf("tag ID = %d, want 7", tid)
-	}
-	tlen := binary.LittleEndian.Uint16(tag[2:])
-	if tlen != 6 {
-		t.Errorf("tag length field = %d, want 6", tlen)
-	}
-}
-
-// --- appendNull ---
-
-// Validates: NO-SPEC (regression guard, awaiting spec backfill).
-// Pins null-terminator append helper used by route tag builders.
-func TestAppendNull(t *testing.T) {
-	result := appendNull([]byte("hello"))
-	if len(result) != 6 {
-		t.Fatalf("length = %d, want 6", len(result))
-	}
-	if result[5] != 0 {
-		t.Error("last byte should be null terminator")
-	}
-}
-
 // --- ADST_ type code tests ---
 
 // Validates: R-SYM-004.
-func TestADSTypeToString(t *testing.T) {
+func TestDataTypeIECName(t *testing.T) {
 	tests := []struct {
-		code ADSDataType
+		code DataType
 		want string
 	}{
-		{ADSTBool, "BOOL"},
-		{ADSTInt8, "SINT"},
-		{ADSTUint8, "USINT"},
-		{ADSTInt16, "INT"},
-		{ADSTUint16, "UINT"},
-		{ADSTInt32, "DINT"},
-		{ADSTUint32, "UDINT"},
-		{ADSTReal32, "REAL"},
-		{ADSTReal64, "LREAL"},
-		{ADSTInt64, "LINT"},
-		{ADSTUint64, "ULINT"},
-		{ADSTString, "STRING"},
-		{ADSTWString, "WSTRING"},
-		{ADSTVoid, ""},
+		{DataTypeBool, "BOOL"},
+		{DataTypeInt8, "SINT"},
+		{DataTypeUint8, "USINT"},
+		{DataTypeInt16, "INT"},
+		{DataTypeUint16, "UINT"},
+		{DataTypeInt32, "DINT"},
+		{DataTypeUint32, "UDINT"},
+		{DataTypeReal32, "REAL"},
+		{DataTypeReal64, "LREAL"},
+		{DataTypeInt64, "LINT"},
+		{DataTypeUint64, "ULINT"},
+		{DataTypeString, "STRING"},
+		{DataTypeWString, "WSTRING"},
+		{DataTypeVoid, ""},
 		{999, ""},
 	}
 	for _, tt := range tests {
-		got := adsTypeToString(tt.code)
+		got := tt.code.IECName()
 		if got != tt.want {
-			t.Errorf("adsTypeToString(%d) = %q, want %q", tt.code, got, tt.want)
-		}
-	}
-}
-
-// Validates: R-NOT-016.
-func TestUpdate_StaleReasonFields(t *testing.T) {
-	u := Update{Variable: "x", Value: "1", Stale: &StaleInfo{Reason: ReasonSymbolVersionInvalid}}
-	if u.Stale == nil {
-		t.Error("Stale field missing")
-	}
-	if u.Stale.Reason != ReasonSymbolVersionInvalid {
-		t.Errorf("Stale.Reason field missing or wrong: %q", u.Stale.Reason)
-	}
-}
-
-// Validates: R-SES-011.
-func TestSymbolVersionStrategy_String(t *testing.T) {
-	tests := []struct {
-		s    SymbolVersionStrategy
-		want string
-	}{
-		{SymbolVersionAutoReload, "AutoReload"},
-		{SymbolVersionClose, "Close"},
-		{SymbolVersionIgnore, "Ignore"},
-	}
-	for _, tt := range tests {
-		if got := tt.s.String(); got != tt.want {
-			t.Errorf("strategy %d → %q, want %q", tt.s, got, tt.want)
-		}
-	}
-}
-
-// Validates: R-NOT-016 reason enumeration.
-func TestStaleReasonConstants(t *testing.T) {
-	cases := map[Reason]string{
-		ReasonSymbolVersionInvalid: "symbol-version-invalid",
-		ReasonSymbolNotFound:       "symbol-not-found",
-		ReasonInvalidOffset:        "invalid-offset",
-		ReasonSymbolNotActive:      "symbol-not-active",
-		ReasonNotifyHandleInvalid:  "notify-handle-invalid",
-		ReasonInvalidSize:          "invalid-size",
-		ReasonReloadCapExhausted:   "reload-cap-exhausted",
-		ReasonReloadInProgress:     "reload-in-progress",
-	}
-	for got, want := range cases {
-		if string(got) != want {
-			t.Errorf("constant value drift: got %q, want %q", string(got), want)
-		}
-	}
-}
-
-// Validates: R-CACHE-009 detection set + R-NOT-016 reason mapping.
-func TestDetectStaleCache(t *testing.T) {
-	tests := []struct {
-		rc        ReturnCode
-		wantStale bool
-		wantReas  Reason
-	}{
-		// 5 codes in detection set.
-		{ReturnCodeDeviceSymbolVersionInvalid, true, ReasonSymbolVersionInvalid}, // 0x711
-		{ReturnCodeDeviceSymbolNoFound, true, ReasonSymbolNotFound},              // 0x710
-		{ReturnCodeDeviceInvalidOffset, true, ReasonInvalidOffset},               // 0x703
-		{ReturnCodeDeviceSymbolNotActive, true, ReasonSymbolNotActive},           // 0x722
-		{ReturnCodeDeviceNotifyHandleInvalid, true, ReasonNotifyHandleInvalid},   // 0x714
-		{ReturnCodeDeviceInvalidSize, true, ReasonInvalidSize},                   // 0x705
-		// Negative cases — must NOT trigger.
-		{ReturnCodeNoErrors, false, ""},
-		{ReturnCodeDeviceTimeout, false, ""},
-		{ReturnCodeDeviceWarning, false, ""}, // 0x720 — explicitly NOT in set (Beckhoff: signal warning)
-	}
-	for _, tt := range tests {
-		stale, reason := detectStaleCache(tt.rc)
-		if stale != tt.wantStale || reason != tt.wantReas {
-			t.Errorf("detectStaleCache(0x%X) = (%v, %q), want (%v, %q)",
-				uint32(tt.rc), stale, reason, tt.wantStale, tt.wantReas)
+			t.Errorf("IECName(%d) = %q, want %q", tt.code, got, tt.want)
 		}
 	}
 }

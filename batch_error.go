@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // Reasons the library itself, rather than the PLC, produced no value for an
@@ -43,7 +45,7 @@ type BatchItemError struct {
 	// Symbol is the symbol name as the caller passed it.
 	Symbol string
 	// Error is the PLC's per-item return code. Meaningful only when Skipped is nil.
-	Error ReturnCode
+	Error ams.ReturnCode
 	// Skipped is non-nil when the library produced no value for this item.
 	Skipped error
 }

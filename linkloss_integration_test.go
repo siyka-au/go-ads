@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // linkloss_integration_test.go — link faults against a real PLC, automated.
@@ -31,7 +33,7 @@ import (
 // which is the proxy. The route for this host already exists on the lab devices,
 // and since the proxy runs locally the PLC still sees this machine's IP as the
 // TCP source, so that route matches.
-func linkLossSession(t *testing.T, p *tcpProxy, target AMSAddress) *Session {
+func linkLossSession(t *testing.T, p *tcpProxy, target ams.Address) *Session {
 	t.Helper()
 	opts := []SessionOption{
 		WithRequestTimeout(3 * time.Second),
@@ -49,7 +51,7 @@ func linkLossSession(t *testing.T, p *tcpProxy, target AMSAddress) *Session {
 		}),
 	}
 	if localAMS := os.Getenv("ADS_LOCAL_AMS"); localAMS != "" {
-		local, err := NewAMSAddress(localAMS, 10600)
+		local, err := ams.NewAddress(localAMS, 10600)
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, err)
 		}
@@ -65,7 +67,7 @@ func linkLossSession(t *testing.T, p *tcpProxy, target AMSAddress) *Session {
 	return sess
 }
 
-func linkLossTarget(t *testing.T) (host string, target AMSAddress) {
+func linkLossTarget(t *testing.T) (host string, target ams.Address) {
 	t.Helper()
 	host = getEnvOrDefault("ADS_PLC_IP", "192.168.3.70")
 	targetAMS := getEnvOrDefault("ADS_TARGET_AMS", "5.3.69.134.1.1")
@@ -74,7 +76,7 @@ func linkLossTarget(t *testing.T) (host string, target AMSAddress) {
 	if err != nil {
 		t.Fatalf("ADS_TARGET_PORT %q: %v", portStr, err)
 	}
-	target, err = NewAMSAddress(targetAMS, uint16(port))
+	target, err = ams.NewAddress(targetAMS, ams.Port(port))
 	if err != nil {
 		t.Fatalf("target AMS: %v", err)
 	}
@@ -99,7 +101,7 @@ func subscribeLinkLossSymbols(t *testing.T, sess *Session, ch chan *Update) int 
 	for _, n := range names {
 		configs = append(configs, NotificationConfig{
 			SymbolName:       n,
-			TransmissionMode: TransModeServerOnChange,
+			TransmissionMode: ams.TransModeServerOnChange,
 			MaxDelay:         200 * time.Millisecond,
 			CycleTime:        200 * time.Millisecond,
 		})

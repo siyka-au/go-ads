@@ -3,13 +3,15 @@ package ads
 import (
 	"fmt"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // handleStaleDetection runs the configured online-change strategy for a PLC code
 // in the R-CACHE-009 set, reporting whether it handled the code. The user callback
 // fires in its own goroutine (R-SES-007). Ignore surfaces the error unchanged,
 // Close terminates asynchronously, AutoReload reloads and resubscribes.
-func (sess *Session) handleStaleDetection(rc ReturnCode) (stale bool, reason Reason) {
+func (sess *Session) handleStaleDetection(rc ams.ReturnCode) (stale bool, reason Reason) {
 	stale, reason = detectStaleCache(rc)
 	if !stale {
 		return false, ""
@@ -319,19 +321,19 @@ const (
 // staleness from a PLC online change; (false, "") otherwise.
 //
 // Detection codes verified against Beckhoff InfoSys (TC2 Utilities).
-func detectStaleCache(rc ReturnCode) (stale bool, reason Reason) {
+func detectStaleCache(rc ams.ReturnCode) (stale bool, reason Reason) {
 	switch rc {
-	case ReturnCodeDeviceSymbolVersionInvalid: // 0x711 — Beckhoff: "online change. Create a new handle."
+	case ams.ReturnCodeDeviceSymbolVersionInvalid: // 0x711 — Beckhoff: "online change. Create a new handle."
 		return true, ReasonSymbolVersionInvalid
-	case ReturnCodeDeviceSymbolNoFound: // 0x710
+	case ams.ReturnCodeDeviceSymbolNoFound: // 0x710
 		return true, ReasonSymbolNotFound
-	case ReturnCodeDeviceInvalidOffset: // 0x703 — TC3 surfaces this on cached handle post-delete
+	case ams.ReturnCodeDeviceInvalidOffset: // 0x703 — TC3 surfaces this on cached handle post-delete
 		return true, ReasonInvalidOffset
-	case ReturnCodeDeviceSymbolNotActive: // 0x722 — Beckhoff: "Release the handle and try again."
+	case ams.ReturnCodeDeviceSymbolNotActive: // 0x722 — Beckhoff: "Release the handle and try again."
 		return true, ReasonSymbolNotActive
-	case ReturnCodeDeviceNotifyHandleInvalid: // 0x714
+	case ams.ReturnCodeDeviceNotifyHandleInvalid: // 0x714
 		return true, ReasonNotifyHandleInvalid
-	case ReturnCodeDeviceInvalidSize: // 0x705 — surfaces when cached symbol.Length disagrees with PLC's new size post-online-change (e.g. operator toggle INT↔LREAL)
+	case ams.ReturnCodeDeviceInvalidSize: // 0x705 — surfaces when cached symbol.Length disagrees with PLC's new size post-online-change (e.g. operator toggle INT↔LREAL)
 		return true, ReasonInvalidSize
 	}
 	return false, ""

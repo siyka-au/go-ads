@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf16"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // Float comparison tolerances — single source of truth
@@ -167,7 +169,7 @@ func testEndpoint() AMSEndpoint {
 	return AMSEndpoint{
 		IP:   "127.0.0.1",
 		Port: 48898,
-		AMS:  AMSAddress{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
+		AMS:  ams.Address{NetID: [6]byte{1, 2, 3, 4, 1, 1}, Port: 851},
 	}
 }
 

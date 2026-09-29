@@ -57,7 +57,7 @@ func TestBrowseAllSymbols(t *testing.T) {
 	// Build .var file content.
 	var buf strings.Builder
 	buf.WriteString(fmt.Sprintf("(* symbol dump from %s — %s v%d.%d.%d *)\n",
-		ip, info.DeviceName, info.Major, info.Minor, info.Version))
+		ip, info.Name, info.Major, info.Minor, info.Build))
 	buf.WriteString(fmt.Sprintf("(* %d symbols, generated %s *)\n\n",
 		len(symbols), time.Now().Format("2006-01-02 15:04:05")))
 

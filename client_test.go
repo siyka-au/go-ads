@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // startStubTCPServer binds 127.0.0.1:0, accepts connections in a background
@@ -69,8 +71,8 @@ func TestClient_DialClose(t *testing.T) {
 	host, port, stop := startStubTCPServer(t)
 	defer stop()
 
-	target := AMSAddress{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 851}
-	source := AMSAddress{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 30000}
+	target := ams.Address{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 851}
+	source := ams.Address{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 30000}
 
 	c, err := Dial(host, port, target, source, 2*time.Second)
 	if err != nil {
@@ -94,8 +96,8 @@ func TestClient_DoubleClose(t *testing.T) {
 	host, port, stop := startStubTCPServer(t)
 	defer stop()
 
-	target := AMSAddress{}
-	source := AMSAddress{}
+	target := ams.Address{}
+	source := ams.Address{}
 
 	c, err := Dial(host, port, target, source, time.Second)
 	if err != nil {
@@ -114,8 +116,8 @@ func TestClient_DialFailsWhenServerUnreachable(t *testing.T) {
 	// On systems that DO have it open, the test still passes — Dial succeeds
 	// and we Close, asserting only that Dial returns either a usable client
 	// or a wrapped dial error.
-	target := AMSAddress{}
-	source := AMSAddress{}
+	target := ams.Address{}
+	source := ams.Address{}
 	c, err := Dial("127.0.0.1", 1, target, source, 250*time.Millisecond)
 	if err == nil {
 		_ = c.Close()
@@ -138,7 +140,7 @@ func TestClient_OptionsApplied(t *testing.T) {
 
 	c, err := Dial(
 		host, port,
-		AMSAddress{}, AMSAddress{},
+		ams.Address{}, ams.Address{},
 		3*time.Second,
 		WithClientRequestTimeout(7*time.Second),
 		WithNotificationHandler(notify),
@@ -194,7 +196,7 @@ type errWrap struct{ inner error }
 func (e errWrap) Error() string { return "wrapped: " + e.inner.Error() }
 func (e errWrap) Unwrap() error { return e.inner }
 
-// buildAmsTCPHeader builds the 6-byte amsTCPHeader: 1-byte Reserved + 1-byte System + 4-byte Length (LE).
+// buildAmsTCPHeader builds the 6-byte TCPHeader: 1-byte Reserved + 1-byte System + 4-byte Length (LE).
 func buildAmsTCPHeader(system uint8, length uint32) []byte {
 	b := make([]byte, 6)
 	b[0] = 0
@@ -204,7 +206,7 @@ func buildAmsTCPHeader(system uint8, length uint32) []byte {
 }
 
 // TestListen_TwoSequentialPackets verifies that listen() correctly frames
-// amsTCPHeader + body across multiple sequential packets. Uses net.Pipe to
+// TCPHeader + body across multiple sequential packets. Uses net.Pipe to
 // simulate the TCP connection.
 func TestListen_TwoSequentialPackets(t *testing.T) {
 	server, client := net.Pipe()
@@ -349,11 +351,11 @@ func TestEncodePacket(t *testing.T) {
 		tx:        &transport{},
 		lifecycle: &sessionLifecycle{ctx: ctx},
 		logger:    slog.Default(),
-		target: AMSAddress{
+		target: ams.Address{
 			NetID: [6]byte{5, 154, 236, 19, 1, 1},
 			Port:  851,
 		},
-		source: AMSAddress{
+		source: ams.Address{
 			NetID: [6]byte{192, 168, 1, 100, 1, 1},
 			Port:  10500,
 		},
@@ -361,7 +363,7 @@ func TestEncodePacket(t *testing.T) {
 	conn.client.Store(&Client{tx: conn.tx, logger: conn.logger, target: conn.target, source: conn.source})
 
 	data := []byte{0x01, 0x02, 0x03, 0x04}
-	packet, err := conn.client.Load().encode(CommandIDRead, data, 7)
+	packet, err := conn.client.Load().encode(ams.CommandRead, data, 7)
 	if err != nil {
 		t.Fatalf("encode error: %v", err)
 	}
@@ -399,8 +401,8 @@ func TestEncodePacket(t *testing.T) {
 
 	// Command at offset 22
 	cmd := binary.LittleEndian.Uint16(packet[22:24])
-	if CommandID(cmd) != CommandIDRead {
-		t.Errorf("command = %d, want %d (Read)", cmd, CommandIDRead)
+	if ams.Command(cmd) != ams.CommandRead {
+		t.Errorf("command = %d, want %d (Read)", cmd, ams.CommandRead)
 	}
 
 	// State at offset 24 — should be 4 (request)
@@ -434,12 +436,12 @@ func TestEncodePacket_EmptyData(t *testing.T) {
 		tx:        &transport{},
 		lifecycle: &sessionLifecycle{ctx: ctx},
 		logger:    slog.Default(),
-		target:    AMSAddress{NetID: [6]byte{1, 2, 3, 4, 5, 6}, Port: 851},
-		source:    AMSAddress{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 10500},
+		target:    ams.Address{NetID: [6]byte{1, 2, 3, 4, 5, 6}, Port: 851},
+		source:    ams.Address{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 10500},
 	}
 	conn.client.Store(&Client{tx: conn.tx, logger: conn.logger, target: conn.target, source: conn.source})
 
-	packet, err := conn.client.Load().encode(CommandIDReadDeviceInfo, nil, 0)
+	packet, err := conn.client.Load().encode(ams.CommandReadDeviceInfo, nil, 0)
 	if err != nil {
 		t.Fatalf("encode error: %v", err)
 	}
@@ -466,8 +468,8 @@ func TestEncodePacket_EmptyData(t *testing.T) {
 func TestEncodePacket_AllCommands(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	target := AMSAddress{NetID: [6]byte{1, 2, 3, 4, 5, 6}, Port: 851}
-	source := AMSAddress{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 10500}
+	target := ams.Address{NetID: [6]byte{1, 2, 3, 4, 5, 6}, Port: 851}
+	source := ams.Address{NetID: [6]byte{10, 20, 30, 40, 1, 1}, Port: 10500}
 	conn := &Session{
 		tx:        &transport{},
 		lifecycle: &sessionLifecycle{ctx: ctx},
@@ -477,15 +479,15 @@ func TestEncodePacket_AllCommands(t *testing.T) {
 	}
 	conn.client.Store(&Client{tx: conn.tx, logger: conn.logger, target: target, source: source})
 
-	commands := []CommandID{
-		CommandIDReadDeviceInfo,
-		CommandIDRead,
-		CommandIDWrite,
-		CommandIDReadState,
-		CommandIDWriteControl,
-		CommandIDAddDeviceNotification,
-		CommandIDDeleteDeviceNotification,
-		CommandIDReadWrite,
+	commands := []ams.Command{
+		ams.CommandReadDeviceInfo,
+		ams.CommandRead,
+		ams.CommandWrite,
+		ams.CommandReadState,
+		ams.CommandWriteControl,
+		ams.CommandAddDeviceNotification,
+		ams.CommandDeleteDeviceNotification,
+		ams.CommandReadWrite,
 	}
 
 	for i, cmd := range commands {
@@ -496,11 +498,11 @@ func TestEncodePacket_AllCommands(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode: %v", err)
 			}
-			// Layout: 6-byte amsTCPHeader + 32-byte amsHeader + payload.
+			// Layout: 6-byte TCPHeader + 32-byte amsHeader + payload.
 			if len(packet) != 6+32+len(payload) {
 				t.Fatalf("packet length %d, want %d", len(packet), 6+32+len(payload))
 			}
-			// amsTCPHeader: bytes 0-1 unknown/system (zero), 2-5 length (LE).
+			// TCPHeader: bytes 0-1 unknown/system (zero), 2-5 length (LE).
 			if got := binary.LittleEndian.Uint32(packet[2:6]); got != uint32(32+len(payload)) {
 				t.Errorf("TCP length = %d, want %d", got, 32+len(payload))
 			}
@@ -509,7 +511,7 @@ func TestEncodePacket_AllCommands(t *testing.T) {
 			if gotTargetNetID != target.NetID {
 				t.Errorf("target NetID = %v, want %v", gotTargetNetID, target.NetID)
 			}
-			gotTargetPort := binary.LittleEndian.Uint16(packet[12:14])
+			gotTargetPort := ams.Port(binary.LittleEndian.Uint16(packet[12:14]))
 			if gotTargetPort != target.Port {
 				t.Errorf("target port = %d, want %d", gotTargetPort, target.Port)
 			}
@@ -517,11 +519,11 @@ func TestEncodePacket_AllCommands(t *testing.T) {
 			if gotSourceNetID != source.NetID {
 				t.Errorf("source NetID = %v, want %v", gotSourceNetID, source.NetID)
 			}
-			gotSourcePort := binary.LittleEndian.Uint16(packet[20:22])
+			gotSourcePort := ams.Port(binary.LittleEndian.Uint16(packet[20:22]))
 			if gotSourcePort != source.Port {
 				t.Errorf("source port = %d, want %d", gotSourcePort, source.Port)
 			}
-			if got := binary.LittleEndian.Uint16(packet[22:24]); CommandID(got) != cmd {
+			if got := binary.LittleEndian.Uint16(packet[22:24]); ams.Command(got) != cmd {
 				t.Errorf("command = %d, want %d", got, cmd)
 			}
 			if got := binary.LittleEndian.Uint16(packet[24:26]); got != 4 {
@@ -564,10 +566,10 @@ func TestHandleReceive_RoutesToCorrectChannel(t *testing.T) {
 	conn.tx.activeRequestLock.Unlock()
 
 	// Build AMS header + data
-	header := AMSHeader{
-		Target:    AMSAddress{},
-		Source:    AMSAddress{},
-		Command:   CommandIDRead,
+	header := ams.Header{
+		Target:    ams.Address{},
+		Source:    ams.Address{},
+		Command:   ams.CommandRead,
 		State:     5, // response
 		Length:    4,
 		ErrorCode: 0,
@@ -603,8 +605,8 @@ func TestHandleReceive_UnknownInvokeID(t *testing.T) {
 	conn.client.Store(&Client{tx: conn.tx, logger: conn.logger, ctx: ctx})
 
 	// No registered channels — should not panic
-	header := AMSHeader{
-		Command:  CommandIDRead,
+	header := ams.Header{
+		Command:  ams.CommandRead,
 		State:    5,
 		Length:   2,
 		InvokeID: 999,
@@ -760,7 +762,7 @@ func (s *echoServer) handle(c net.Conn) {
 		// ReadDeviceInfo expects 24 bytes — handled separately.
 		// For ReadDeviceInfo (cmd=1) the response must be 24 bytes total;
 		// emit a fixed 24-byte payload to satisfy the strict length check.
-		if cmd == 1 { // CommandIDReadDeviceInfo
+		if cmd == 1 { // CommandReadDeviceInfo
 			respBody = respBody[:32]
 			binary.LittleEndian.PutUint32(respBody[20:24], 24) // declared Length
 			respBody = append(respBody, make([]byte, 24)...)
@@ -798,7 +800,7 @@ func TestClient_ConcurrentMultiplexing(t *testing.T) {
 	srv := startEchoTCPServer(t, nil)
 	defer srv.stop()
 
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 5*time.Second)
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 5*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -833,7 +835,7 @@ func TestClient_ClosedReturnsErrTransportClosed(t *testing.T) {
 	host, port, stop := startStubTCPServer(t)
 	defer stop()
 
-	c, err := Dial(host, port, AMSAddress{}, AMSAddress{}, time.Second)
+	c, err := Dial(host, port, ams.Address{}, ams.Address{}, time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -855,21 +857,21 @@ func TestClient_ClosedReturnsErrTransportClosed(t *testing.T) {
 		{"GetSymbolVersion", func() error { _, e := c.GetSymbolVersion(context.Background()); return e }},
 		{"GetSymbolUploadInfo", func() error { _, e := c.GetSymbolUploadInfo(context.Background()); return e }},
 		{"AddDeviceNotification", func() error {
-			_, e := c.AddDeviceNotification(context.Background(), 0, 0, 0, TransModeNoTransmission, 0, 0)
+			_, e := c.AddDeviceNotification(context.Background(), 0, 0, 0, ams.TransModeNoTransmission, 0, 0)
 			return e
 		}},
 		{"DeleteDeviceNotification", func() error { return c.DeleteDeviceNotification(context.Background(), 1) }},
 		{"ReleaseHandle", func() error { return c.ReleaseHandle(context.Background(), 1) }},
 		{"SumRead", func() error {
-			_, e := c.SumRead(context.Background(), []SumReadRequest{{Group: 1, Length: 1}})
+			_, e := c.SumRead(context.Background(), []ams.SumReadRequest{{Group: 1, Length: 1}})
 			return e
 		}},
 		{"SumWrite", func() error {
-			_, e := c.SumWrite(context.Background(), []SumWriteRequest{{Group: 1, Data: []byte{0}}})
+			_, e := c.SumWrite(context.Background(), []ams.SumWriteRequest{{Group: 1, Data: []byte{0}}})
 			return e
 		}},
 		{"SumAddDeviceNotification", func() error {
-			_, e := c.SumAddDeviceNotification(context.Background(), []SumNotificationRequest{{Group: 1, Length: 1}})
+			_, e := c.SumAddDeviceNotification(context.Background(), []ams.SumNotificationRequest{{Group: 1, Length: 1}})
 			return e
 		}},
 		{"SumDeleteDeviceNotification", func() error {
@@ -937,7 +939,7 @@ func TestClient_GoroutineCountBoundedAfterClose(t *testing.T) {
 
 	baseline := countClientWorkers(t)
 
-	c, err := Dial(host, port, AMSAddress{}, AMSAddress{}, time.Second)
+	c, err := Dial(host, port, ams.Address{}, ams.Address{}, time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -1008,7 +1010,7 @@ func TestClient_ReleaseHandleWritesToReleaseGroup(t *testing.T) {
 	})
 	defer srv.stop()
 
-	c, err := Dial(srv.host, srv.port, AMSAddress{}, AMSAddress{}, 2*time.Second)
+	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -1025,11 +1027,11 @@ func TestClient_ReleaseHandleWritesToReleaseGroup(t *testing.T) {
 		t.Fatal("server never received a frame")
 	}
 	frame := captured[0]
-	// Frame: 6-byte amsTCPHeader + 32-byte amsHeader + payload.
+	// Frame: 6-byte TCPHeader + 32-byte amsHeader + payload.
 	// amsHeader.Command at offset 6+16 = 22 (2 bytes LE).
 	cmd := binary.LittleEndian.Uint16(frame[22:24])
-	if CommandID(cmd) != CommandIDWrite {
-		t.Errorf("command = %d, want %d (Write)", cmd, CommandIDWrite)
+	if ams.Command(cmd) != ams.CommandWrite {
+		t.Errorf("command = %d, want %d (Write)", cmd, ams.CommandWrite)
 	}
 	// Write body layout: Group(4) + Offset(4) + Length(4) + Data(handle=4 bytes).
 	bodyStart := 6 + 32
@@ -1037,8 +1039,8 @@ func TestClient_ReleaseHandleWritesToReleaseGroup(t *testing.T) {
 		t.Fatalf("frame too short: %d", len(frame))
 	}
 	gotGroup := binary.LittleEndian.Uint32(frame[bodyStart : bodyStart+4])
-	if gotGroup != uint32(GroupSymbolReleaseHandle) {
-		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolReleaseHandle)", gotGroup, uint32(GroupSymbolReleaseHandle))
+	if gotGroup != uint32(ams.GroupSymbolReleaseHandle) {
+		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolReleaseHandle)", gotGroup, uint32(ams.GroupSymbolReleaseHandle))
 	}
 	gotHandle := binary.LittleEndian.Uint32(frame[bodyStart+12 : bodyStart+16])
 	if gotHandle != handle {
@@ -1131,8 +1133,8 @@ func TestSystemResponseChannelIsBuffered(t *testing.T) {
 	host, port, stop := startStubTCPServer(t)
 	defer stop()
 
-	target := AMSAddress{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 851}
-	source := AMSAddress{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 30000}
+	target := ams.Address{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 851}
+	source := ams.Address{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 30000}
 
 	c, err := Dial(host, port, target, source, 2*time.Second)
 	if err != nil {
@@ -1180,22 +1182,22 @@ func TestWriteProcessOutputBit_ByteOffsetOverflow(t *testing.T) {
 // propagated it. Every request for the rest of the session went out with the
 // auto-derived placeholder (127.0.0.1.1.1 and a random port) instead.
 func TestSetSource_TakesEffectOnTheWire(t *testing.T) {
-	placeholder := AMSAddress{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 33333}
-	assigned := AMSAddress{NetID: [6]byte{192, 168, 3, 52, 1, 1}, Port: 32905}
+	placeholder := ams.Address{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 33333}
+	assigned := ams.Address{NetID: [6]byte{192, 168, 3, 52, 1, 1}, Port: 32905}
 
 	c := &Client{
 		tx:     &transport{},
 		logger: slog.Default(),
-		target: AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
+		target: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 		source: placeholder,
 	}
 
-	before, err := c.encode(CommandIDRead, []byte{1, 2, 3, 4}, 1)
+	before, err := c.encode(ams.CommandRead, []byte{1, 2, 3, 4}, 1)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	c.setSource(assigned)
-	after, err := c.encode(CommandIDRead, []byte{1, 2, 3, 4}, 2)
+	after, err := c.encode(ams.CommandRead, []byte{1, 2, 3, 4}, 2)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -1253,8 +1255,8 @@ func TestReadFrames_SourceRaceWithLocalHandshake(t *testing.T) {
 	})
 
 	handler := &testLogHandler{}
-	placeholder := AMSAddress{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 33333}
-	c, err := Dial(addr.IP.String(), addr.Port, AMSAddress{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
+	placeholder := ams.Address{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 33333}
+	c, err := Dial(addr.IP.String(), addr.Port, ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 		placeholder, time.Second, WithClientLogger(slog.New(handler)))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -1263,7 +1265,7 @@ func TestReadFrames_SourceRaceWithLocalHandshake(t *testing.T) {
 
 	// Differ in every byte from the placeholder so a torn read is also visible
 	// as a value, not only to the detector.
-	assigned := AMSAddress{NetID: [6]byte{192, 168, 3, 52, 2, 2}, Port: 32905}
+	assigned := ams.Address{NetID: [6]byte{192, 168, 3, 52, 2, 2}, Port: 32905}
 	stop := make(chan struct{})
 	var writer sync.WaitGroup
 	writer.Add(1)
@@ -1320,12 +1322,12 @@ func TestGetSymbol_TraceLogDoesNotRaceNotificationWriter(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	srv.onWriteRead(GroupSymbolInfoByNameEx, func(req []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolInfoByNameEx, func(req []byte) []byte {
 		name := strings.TrimRight(string(req), "\x00")
-		return buildSymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ADSTInt16, 0)
+		return buildSymbolInfoPayload(name, "INT", "", 0x4040, 0x100, 2, ams.DataTypeInt16, 0)
 	})
 	var nextHandle atomic.Uint32
-	srv.onWriteRead(GroupSymbolHandleByName, func(_ []byte) []byte {
+	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		return buildHandlePayload(nextHandle.Add(1))
 	})
 
@@ -1409,7 +1411,7 @@ func TestGetSymbol_TraceLogDoesNotRaceNotificationWriter(t *testing.T) {
 // TestHandleReceive_AMSErrorSurfacesAsItself: an AMS-level rejection must reach the
 // caller as that error, not as a guess parsed from the body.
 //
-// AMSHeader.ErrorCode was only ever written, never read. So when the router refused
+// Header.ErrorCode was only ever written, never read. So when the router refused
 // a request — target port not found, no runtime, invalid NetID — the library parsed
 // the accompanying body as though it were a response. Measured against a TC3.1.4024
 // system in CONFIG, where every request to the runtime port comes back with
@@ -1434,11 +1436,11 @@ func TestHandleReceive_AMSErrorSurfacesAsItself(t *testing.T) {
 
 	// What a system in CONFIG actually sends: ErrorCode 6, and a body that is the
 	// echoed request rather than a response.
-	header := AMSHeader{
-		Command:   CommandIDRead,
+	header := ams.Header{
+		Command:   ams.CommandRead,
 		State:     5,
 		Length:    4,
-		ErrorCode: uint32(ReturnCodeGlobalTargetPortNotFound),
+		ErrorCode: uint32(ams.ReturnCodeGlobalTargetPortNotFound),
 		InvokeID:  7,
 	}
 	buf := new(bytes.Buffer)
@@ -1450,7 +1452,7 @@ func TestHandleReceive_AMSErrorSurfacesAsItself(t *testing.T) {
 
 	select {
 	case reply := <-ch:
-		if reply.amsErr != ReturnCodeGlobalTargetPortNotFound {
+		if reply.amsErr != ams.ReturnCodeGlobalTargetPortNotFound {
 			t.Errorf("amsErr = %v, want ReturnCodeGlobalTargetPortNotFound: the header's ErrorCode is being discarded", reply.amsErr)
 		}
 		data, err := reply.payload()
@@ -1461,7 +1463,7 @@ func TestHandleReceive_AMSErrorSurfacesAsItself(t *testing.T) {
 		if data != nil {
 			t.Errorf("payload() returned %v alongside an AMS error; the body is not a response", data)
 		}
-		if !errors.Is(err, ReturnCodeGlobalTargetPortNotFound) {
+		if !errors.Is(err, ams.ReturnCodeGlobalTargetPortNotFound) {
 			t.Errorf("error %v does not wrap the code, so callers cannot branch on it", err)
 		}
 		if !strings.Contains(err.Error(), "target port") {

@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // droppedResponseGrace is how long a request already waiting keeps waiting after
@@ -47,8 +49,8 @@ type Client struct {
 	ip   string
 	port int
 
-	target AMSAddress
-	source AMSAddress
+	target ams.Address
+	source ams.Address
 
 	requestTimeout time.Duration
 	logger         *slog.Logger
@@ -121,7 +123,7 @@ type Client struct {
 // since the handshake needs a live Client -- without this every later request
 // carried the auto-derived placeholder. It is also what makes encode's connMu
 // snapshot of c.source mean anything.
-func (c *Client) setSource(addr AMSAddress) {
+func (c *Client) setSource(addr ams.Address) {
 	c.tx.connMu.Lock()
 	c.source = addr
 	c.tx.connMu.Unlock()
@@ -132,7 +134,7 @@ func (c *Client) setSource(addr AMSAddress) {
 // be writing it via setSource — both callers of setSource publish the Client,
 // and so start the workers, before the handshake that assigns the address.
 // encodeTo (ams.go) already takes connMu for the same reason.
-func (c *Client) sourceAddr() AMSAddress {
+func (c *Client) sourceAddr() ams.Address {
 	c.tx.connMu.Lock()
 	defer c.tx.connMu.Unlock()
 	return c.source
@@ -154,7 +156,7 @@ func (c *Client) markDropped() {
 func Dial(
 	ip string,
 	port int,
-	target, source AMSAddress,
+	target, source ams.Address,
 	requestTimeout time.Duration,
 	opts ...ClientOption,
 ) (*Client, error) {

@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 // Target discovery over the AMS router's identify service: UDP 48899, the same
@@ -47,7 +49,7 @@ const (
 type RemoteIdentity struct {
 	// AMS is the router's own address. The port is the router's (10000), NOT a
 	// PLC runtime port — see RuntimePort.
-	AMS AMSAddress
+	AMS ams.Address
 	// HostName is the device's computer name, e.g. "CX-4285CB". Empty if the
 	// device did not report one.
 	HostName string
@@ -76,11 +78,11 @@ func (id RemoteIdentity) Version() string {
 // the router's own port and never a runtime port. A TwinCAT 2 project with
 // several runtimes uses 811, 821, 831; a TwinCAT 3 one uses 852, 853, … and a
 // caller targeting any of those must say so explicitly.
-func (id RemoteIdentity) RuntimePort() uint16 {
+func (id RemoteIdentity) RuntimePort() ams.Port {
 	if id.Major == 2 {
-		return uint16(PortR0PlcRts1)
+		return ams.PortR0PlcRts1
 	}
-	return uint16(PortR0PlcTc3)
+	return ams.PortR0PlcTc3
 }
 
 // IdentifyRemote asks the device at host for its own NetID and system details.
@@ -210,7 +212,7 @@ func identifyRemoteFrom(ctx context.Context, logger *slog.Logger, localIP net.IP
 				logger.Debug("identify succeeded after a retransmit", "host", host, "attempt", attempt)
 			}
 			logger.Debug("identified remote",
-				"host", host, "netID", id.AMS.NetIDString(),
+				"host", host, "netID", id.AMS.NetID.String(),
 				"hostName", id.HostName, "twinCAT", id.Version())
 			return id, nil
 		}
@@ -269,8 +271,8 @@ func parseIdentifyResponse(data []byte, expectedInvokeID uint32) (RemoteIdentity
 
 	id := RemoteIdentity{Tags: map[uint16][]byte{}}
 	copy(id.AMS.NetID[:], data[12:18])
-	id.AMS.Port = binary.LittleEndian.Uint16(data[18:20])
-	if id.AMS.NetID == [6]byte{} {
+	id.AMS.Port = ams.Port(binary.LittleEndian.Uint16(data[18:20]))
+	if id.AMS.NetID.IsZero() {
 		return RemoteIdentity{}, fmt.Errorf("identify response reported a zero NetID")
 	}
 

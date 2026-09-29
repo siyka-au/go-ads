@@ -34,6 +34,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/ams"
+
 	"cloud.google.com/go/civil"
 )
 
@@ -87,7 +89,7 @@ func openSeedSession(t *testing.T, loadSymbols bool) *Session {
 	if err != nil {
 		t.Fatalf("ADS_TARGET_PORT: %v", err)
 	}
-	target, err := NewAMSAddress(netID, uint16(port))
+	target, err := ams.NewAddress(netID, ams.Port(port))
 	if err != nil {
 		t.Fatal(err)
 	}
