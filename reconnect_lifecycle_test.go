@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -66,14 +68,9 @@ func newDialableTestSession(t *testing.T, host string, port int, maxAttempts int
 	t.Cleanup(cancel)
 
 	sess := &Session{
-		ip:   host,
-		port: port,
-		tx: &transport{
-			sendChannel:    make(chan []byte),
-			systemResponse: make(chan []byte, 1),
-			recvQueue:      make(chan []byte, recvQueueSize),
-			activeRequests: map[uint32]chan amsReply{},
-		},
+		ip:            host,
+		port:          port,
+		tx:            adsconn.NewTransport(ams.Address{}),
 		notifications: newTestNotificationManager(),
 		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		// Production always has one; ensureRoute dereferences it unconditionally.
@@ -244,7 +241,7 @@ func TestReconnect_CleanupKeepsTheUserChannel(t *testing.T) {
 	c.SetNotificationHandler(sess.handleNotification)
 	// One Add per symbol, which is also what a TC2 does — the shape this bug was
 	// found on.
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 	srv.OnWriteRead(ams.GroupSumupDeleteDeviceNotification, func(req []byte) []byte {
@@ -985,7 +982,7 @@ func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 	}
 
 	// The Client that was published during the attempt must be finished with.
-	if c := sess.client.Load(); c != nil && c.ctx != nil && c.ctx.Err() == nil {
+	if c := sess.client.Load(); c != nil && c.Err() == nil {
 		t.Error("the Client published during the failed Connect is still live: its workers are running on an open socket")
 	}
 
@@ -1277,7 +1274,7 @@ func TestGiveUpReconnecting_TearsDownTheTransport(t *testing.T) {
 	}
 
 	workers := make(chan struct{})
-	go func() { c.waitGroup.Wait(); close(workers) }()
+	go func() { c.Wait(); close(workers) }()
 	select {
 	case <-workers:
 	case <-time.After(5 * time.Second):
@@ -1372,7 +1369,7 @@ func TestConnect_ResetDuringLivenessProbeSpawnsNoRivalReconnect(t *testing.T) {
 	if got := srv.Accepts(); got != 1 {
 		t.Errorf("the server accepted %d connections, want 1: a second one was dialled while Connect still owned the transport", got)
 	}
-	if c := sess.client.Load(); c != nil && c.ctx != nil && c.ctx.Err() == nil {
+	if c := sess.client.Load(); c != nil && c.Err() == nil {
 		t.Error("the Client published during the failed Connect is still live: its workers are running on an open socket")
 	}
 
@@ -1450,7 +1447,7 @@ func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
 	// The gate sits after dialAndStart, so the flag is already clear here. If it
 	// is not, the drop below would be indistinguishable from the state we started
 	// in and the test would prove nothing.
-	if sess.tx.disconnected.Load() {
+	if sess.tx.Disconnected() {
 		t.Fatal("transport still marked disconnected at the cleanup log — the gate is in the wrong place")
 	}
 	before := srv.Accepts()
@@ -1462,7 +1459,7 @@ func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
 	// ordering deterministic instead of hopeful: the erasing store is downstream of
 	// the gate, so the flag must be observably true before the gate is released.
 	deadline := time.Now().Add(10 * time.Second)
-	for !sess.tx.disconnected.Load() {
+	for !sess.tx.Disconnected() {
 		if time.Now().After(deadline) {
 			t.Fatal("the injected drop was never recorded on the transport; the window was not exercised")
 		}
@@ -1487,14 +1484,14 @@ func TestReconnect_DropDuringTheTailIsNotErased(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("no redial after a drop during the reconnect tail (accepts stayed at %d): "+
 				"state=%v IsClosed=%v disconnected=%v — the drop was erased on the way out",
-				before, sess.lifecycle.state.load(), sess.IsClosed(), sess.tx.disconnected.Load())
+				before, sess.lifecycle.state.load(), sess.IsClosed(), sess.tx.Disconnected())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
 	// And never Connected over a Client that has already been dropped.
 	if state := sess.lifecycle.state.load(); state == SessionStateConnected {
-		if c := sess.client.Load(); c != nil && c.ctx != nil && c.ctx.Err() != nil {
+		if c := sess.client.Load(); c != nil && c.Err() != nil {
 			t.Error("session reports Connected over a client whose context is already cancelled")
 		}
 	}

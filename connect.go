@@ -1,9 +1,7 @@
 package ads
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +9,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 )
@@ -50,7 +50,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 		// adopt, or the suppression trades a rival Reconnect for a lost drop. Success
 		// path only: after an error the caller discards the session and adopting
 		// would race their retry.
-		if retErr == nil && !sess.isClosed() && sess.tx.disconnected.Load() {
+		if retErr == nil && !sess.isClosed() && sess.tx.Disconnected() {
 			sess.triggerReconnect()
 		}
 	}()
@@ -108,29 +108,24 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 		sess.logger.Warn("could not dial the PLC", "ip", sess.ip, "port", sess.port, "error", err)
 		return err
 	}
-	sess.tx.connMu.Lock()
-	sess.tx.connection = tcpConn
-	sess.tx.connMu.Unlock()
+	sess.tx.SetConn(tcpConn)
 	// Enable aggressive TCP keepalive to detect dead connections quickly.
 	// With Idle=3s, Interval=2s, Count=5: connection declared dead after ~13s of no response.
 	// This ensures cable unplugs (>13s) are detected and trigger reconnect,
 	// while not affecting slow-changing notification data (keepalive is TCP-level, not app-level).
-	configureKeepAlive(tcpConn)
+	adsconn.ConfigureKeepAlive(tcpConn)
 	// Log TCP socket (transport-level only — ADS route validation happens on first ADS command)
 	sess.logger.Info("TCP socket established (ADS route not yet verified)",
-		"local", sess.tx.connection.LocalAddr().String(),
-		"remote", sess.tx.connection.RemoteAddr().String())
+		"local", tcpConn.LocalAddr().String(),
+		"remote", tcpConn.RemoteAddr().String())
 
 	// Auto-derive source AMS NetID from local IP if source NetID is all zeros.
-	// Take connMu around the read+write of sess.source so encode() at ams.go
-	// (which reads sess.source under connMu) cannot interleave even in the
-	// theoretical case of a goroutine surviving across reconnect cycles.
-	sess.tx.connMu.Lock()
-	if sess.source.NetID == [6]byte{} {
-		localAddr, ok := sess.tx.connection.LocalAddr().(*net.TCPAddr)
+	// No worker is running yet (the Conn is published below) and Connect is
+	// exclusive, so nothing else reads or writes the source until SetSource.
+	if source := sess.tx.Source(); source.NetID.IsZero() {
+		localAddr, ok := tcpConn.LocalAddr().(*net.TCPAddr)
 		if !ok {
-			sess.tx.connMu.Unlock()
-			return fmt.Errorf("unexpected local address type: %T", sess.tx.connection.LocalAddr())
+			return fmt.Errorf("unexpected local address type: %T", tcpConn.LocalAddr())
 		}
 		ip := localAddr.IP.To4()
 		if ip != nil {
@@ -142,9 +137,10 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 					ip = cbIP
 				}
 			}
-			sess.source.NetID = [6]byte{ip[0], ip[1], ip[2], ip[3], 1, 1}
+			source.NetID = ams.NetID{ip[0], ip[1], ip[2], ip[3], 1, 1}
+			sess.tx.SetSource(source)
 			sess.logger.Info("auto-derived source AMS NetID from local IP",
-				"netid", sess.source.NetID.String())
+				"netid", source.NetID.String())
 		}
 
 		// NAT/Docker detection: compare TCP and UDP source IPs
@@ -164,7 +160,6 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 			}
 		}
 	}
-	sess.tx.connMu.Unlock()
 
 	// One snapshot for the three log lines below, taken under the lock that guards
 	// the field (see sourceAddr): a rival Reconnect's localHandshake can be writing
@@ -197,7 +192,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 	// is running. Connect never cleared it and got away with it only because a rival
 	// Reconnect did; with that spawn suppressed the stale true survived into the
 	// retry and failed every request on a perfectly good socket.
-	sess.tx.disconnected.Store(false)
+	sess.tx.SetDisconnected(false)
 	// If this device is already known to answer on a connection it opens to us, bind
 	// before probing: otherwise every session pays the probe timeout plus the
 	// activation budget to rediscover it and registers a route it did not need --
@@ -215,27 +210,14 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 		}
 	}
 	if local {
-		resp, err := newClient.send([]byte{0, 16, 2, 0, 0, 0, 0, 0})
+		// The Conn has to be running before it can ask, so it starts out stamping
+		// the placeholder; LocalHandshake replaces it for every later request.
+		result, err := newClient.LocalHandshake()
 		if err != nil {
 			sess.tearDownAndReset()
-			return fmt.Errorf("local mode handshake failed: %w", err)
-		}
-		buf := bytes.NewBuffer(resp)
-		result := ams.Address{}
-		sess.logger.Log(context.Background(), LevelTrace, "got stuff", "stuff", buf.Bytes())
-		err = binary.Read(buf, binary.LittleEndian, &result)
-		if err != nil {
-			sess.tearDownAndReset()
-			return fmt.Errorf("local mode binary read failed: %w", err)
+			return fmt.Errorf("local mode %w", err)
 		}
 		sess.logger.Info("local mode handshake result", "result", result)
-		sess.tx.connMu.Lock()
-		sess.source = result
-		sess.tx.connMu.Unlock()
-		// The Client was published before the handshake could run, holding a copy of
-		// the pre-handshake address; without this every later request goes out with
-		// the placeholder rather than what the router just told us to use.
-		newClient.setSource(result)
 	}
 
 	// A successful route-activation probe already carries the symbol version, so
@@ -316,10 +298,10 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 			// The addressing hint goes in the RETURNED error, not just the log, and
 			// which hint depends on whether the connection ever carried a frame. A
 			// sentinel carries it so callers need not match strings.
-			hint := resetAfterConnectHint(sess.sourceAddr(), sess.target)
+			hint := adsconn.ResetAfterConnectHint(sess.sourceAddr(), sess.target)
 			verdict := ErrRouteNotServed
-			if c := sess.client.Load(); c != nil && c.wasEstablished() {
-				hint = establishedDropHint()
+			if c := sess.client.Load(); c != nil && c.Established() {
+				hint = adsconn.EstablishedDropHint()
 				verdict = ErrEstablishedDropped
 			}
 			sess.tearDownAndReset()
@@ -411,19 +393,7 @@ func (sess *Session) tearDownAndReset() {
 	cancel := sess.lifecycle.shutdown
 	sess.lifecycle.ctxMu.RUnlock()
 	cancel()
-	sess.tx.connMu.Lock()
-	// Read the local port before the Close, not after: LocalAddr on a closed
-	// connection is not reliable, and this port is what every drop investigation
-	// needed to line the event up against a packet capture.
-	localPort := 0
-	if sess.tx.connection != nil {
-		if addr, ok := sess.tx.connection.LocalAddr().(*net.TCPAddr); ok {
-			localPort = addr.Port
-		}
-		sess.tx.connection.Close()
-	}
-	sess.tx.connMu.Unlock()
-	if localPort != 0 {
+	if localPort := sess.tx.CloseConn(); localPort != 0 {
 		// INFO, not Debug. With debug_level on, the consumer's log rotated every
 		// ~9s in the field and destroyed the evidence window repeatedly; one line
 		// per teardown at INFO survives that.
@@ -438,9 +408,8 @@ func (sess *Session) tearDownAndReset() {
 		// letting it sit out its full request timeout: readFrames returns on
 		// ctx.Done() without calling callOnDrop, so nothing else closes `dropped`
 		// on a session-initiated teardown.
-		c.markDropped()
-		c.closePeerConns()
-		c.waitGroup.Wait()
+		c.Release()
+		c.Wait()
 	}
 	// spawnMu across the Wait: trackGoroutineOn takes it to Add, so holding it here
 	// makes "no new goroutines while we wait for the current ones" true. Without it
@@ -464,16 +433,9 @@ func (sess *Session) tearDownAndReset() {
 	}
 	sess.lifecycle.ctx, sess.lifecycle.shutdown = context.WithCancel(parent) //nolint:gosec // cancel stored in lifecycle.shutdown, called from Close
 	sess.lifecycle.ctxMu.Unlock()
-	sess.tx.chanMu.Lock()
-	sess.tx.sendChannel = make(chan []byte)
-	sess.tx.systemResponse = make(chan []byte, 1)
-	sess.tx.recvQueue = make(chan []byte, recvQueueSize)
-	sess.tx.chanMu.Unlock()
-	sess.tx.activeRequestLock.Lock()
-	sess.tx.activeRequests = map[uint32]chan amsReply{}
-	sess.tx.activeRequestLock.Unlock()
-	// Capability state lives on Client. A fresh Client (allocated in
-	// dialAndStart on each reconnect attempt) has zero-value capabilities,
+	sess.tx.ResetQueues()
+	// Capability state lives on the Conn, so the fresh one dialAndStart wires on
+	// each attempt probes sum-command support again.
 }
 
 // dialAndStart dials, configures keepalive, clears the disconnected flag and
@@ -484,16 +446,11 @@ func (sess *Session) dialAndStart() error {
 	if err != nil {
 		return err
 	}
-	sess.tx.connMu.Lock()
-	sess.tx.connection = newConn
-	sess.tx.connMu.Unlock()
-	configureKeepAlive(newConn)
+	sess.tx.SetConn(newConn)
+	adsconn.ConfigureKeepAlive(newConn)
 	if sess.isClosed() {
 		// Session was Closed mid-dial. Don't Add to waitGroup.
-		sess.tx.connMu.Lock()
-		newConn.Close()
-		sess.tx.connection = nil
-		sess.tx.connMu.Unlock()
+		sess.tx.DiscardConn()
 		return fmt.Errorf("connection closed during dial")
 	}
 	c := sess.publishWiredClient()
@@ -501,50 +458,42 @@ func (sess *Session) dialAndStart() error {
 	// route-activation dials, which Connect's own "TCP socket established" line
 	// does not cover. Correlating a drop against a packet capture needs the
 	// ephemeral port of the connection that died, and by then it is gone.
-	if port := c.localPort(); port != 0 {
+	if port := c.LocalPort(); port != 0 {
 		sess.logger.Info("dialed the PLC", "localPort", port, "ip", sess.ip, "port", sess.port)
 	}
 	// Clear disconnected AFTER the workers are up, so a user RPC that observes
 	// disconnected=false is guaranteed to find transmitWorker actually running.
-	sess.tx.disconnected.Store(false)
+	sess.tx.SetDisconnected(false)
 	return nil
 }
 
-// sourceAddr returns the source AMS address under tx.connMu, the field's lock.
-// Every reader outside Connect's own critical sections must come through here;
-// AddRoute is callable from any goroutine. Returns the whole address, not just the
-// NetID, so one accessor covers the field.
+// sourceAddr returns the source AMS address. AddRoute is callable from any
+// goroutine while a local-mode handshake may be replacing it, so every reader
+// goes through the transport's lock.
 func (sess *Session) sourceAddr() ams.Address {
-	sess.tx.connMu.Lock()
-	defer sess.tx.connMu.Unlock()
-	return sess.source
+	return sess.tx.Source()
 }
 
 // publishWiredClient wires and starts the Client for the connection on sess.tx.
 // ctx and cancel come from one RLock, or the Client gets a context from one
 // generation and the cancel of the next. Publish before startWorkers: the workers
 // read sess.client, and a drop in that window tears down the previous Client.
-func (sess *Session) publishWiredClient() *Client {
+func (sess *Session) publishWiredClient() *adsconn.Conn {
 	sess.lifecycle.ctxMu.RLock()
 	clientCtx := sess.lifecycle.ctx
 	clientCancel := sess.lifecycle.shutdown
 	sess.lifecycle.ctxMu.RUnlock()
 
-	c := &Client{
-		ip:             sess.ip,
-		port:           sess.port,
-		target:         sess.target,
-		source:         sess.sourceAddr(),
-		requestTimeout: sess.requestTimeout,
-		logger:         sess.logger,
-		tx:             sess.tx,
-		dropped:        make(chan struct{}),
-		ctx:            clientCtx,
-		cancel:         clientCancel,
-		// dialedAt in the literal, never as a later assignment: readFrames reads it
-		// from the listen goroutine for the uptime on a drop.
-		dialedAt: time.Now(),
-	}
+	c := adsconn.New(adsconn.Config{
+		Host:           sess.ip,
+		Port:           sess.port,
+		Target:         sess.target,
+		RequestTimeout: sess.requestTimeout,
+		Logger:         sess.logger,
+		Transport:      sess.tx,
+		Ctx:            clientCtx,
+		Cancel:         clientCancel,
+	})
 	// handleNotification gives the Client cache-aware dispatch for inbound
 	// DeviceNotification packets; triggerReconnect routes transport-down into the
 	// Session's reconnect FSM.
@@ -553,27 +502,13 @@ func (sess *Session) publishWiredClient() *Client {
 	// Publish before the workers exist, so a drop cannot reach a teardown that
 	// would load a stale sess.client. See the ordering note above.
 	sess.client.Store(c)
-	c.startWorkers()
+	c.Start()
 	return c
 }
 
 // localHandshake performs the local-mode Address probe used after dial when
-// isLocal is true. Updates sess.source on success.
+// isLocal is true, and adopts the address the router hands out.
 func (sess *Session) localHandshake() error {
-	resp, err := sess.client.Load().send([]byte{0, 16, 2, 0, 0, 0, 0, 0})
-	if err != nil {
-		return fmt.Errorf("local handshake send: %w", err)
-	}
-	buf := bytes.NewBuffer(resp)
-	result := ams.Address{}
-	if err := binary.Read(buf, binary.LittleEndian, &result); err != nil {
-		return fmt.Errorf("local handshake parse: %w", err)
-	}
-	sess.tx.connMu.Lock()
-	sess.source = result
-	sess.tx.connMu.Unlock()
-	if c := sess.client.Load(); c != nil {
-		c.setSource(result) // same reason as the Connect path
-	}
-	return nil
+	_, err := sess.client.Load().LocalHandshake()
+	return err
 }

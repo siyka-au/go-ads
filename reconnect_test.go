@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 )
 
@@ -24,7 +27,7 @@ import (
 // drives it to Connected before triggering.
 func newReconnectTestSession() *Session {
 	return &Session{
-		tx:            &transport{},
+		tx:            &adsconn.Transport{},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
@@ -208,14 +211,9 @@ func TestReconnectExhaustsMaxAttemptsTransitionsToClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sess := &Session{
-		ip:   "127.0.0.1",
-		port: 1, // port 1 is always refused on loopback — instant TCP RST
-		tx: &transport{
-			sendChannel:    make(chan []byte),
-			systemResponse: make(chan []byte, 1),
-			recvQueue:      make(chan []byte, recvQueueSize),
-			activeRequests: map[uint32]chan amsReply{},
-		},
+		ip:            "127.0.0.1",
+		port:          1, // port 1 is always refused on loopback — instant TCP RST
+		tx:            adsconn.NewTransport(ams.Address{}),
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
@@ -275,14 +273,9 @@ func TestReconnectExhaustConcurrentClose_NoPanic(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 
 		sess := &Session{
-			ip:   "127.0.0.1",
-			port: 1, // refused on loopback
-			tx: &transport{
-				sendChannel:    make(chan []byte),
-				systemResponse: make(chan []byte, 1),
-				recvQueue:      make(chan []byte, recvQueueSize),
-				activeRequests: map[uint32]chan amsReply{},
-			},
+			ip:            "127.0.0.1",
+			port:          1, // refused on loopback
+			tx:            adsconn.NewTransport(ams.Address{}),
 			notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 			cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 			logger:        slog.Default(),
@@ -358,14 +351,9 @@ func TestReconnect_FlapDetection_AccumulatesAcrossCycles(t *testing.T) {
 	defer cancel()
 
 	sess := &Session{
-		ip:   "127.0.0.1",
-		port: 1, // refused on loopback
-		tx: &transport{
-			sendChannel:    make(chan []byte),
-			systemResponse: make(chan []byte, 1),
-			recvQueue:      make(chan []byte, recvQueueSize),
-			activeRequests: map[uint32]chan amsReply{},
-		},
+		ip:            "127.0.0.1",
+		port:          1, // refused on loopback
+		tx:            adsconn.NewTransport(ams.Address{}),
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
@@ -425,14 +413,9 @@ func TestReconnect_WipesActiveNotificationsBeforeRetryLoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sess := &Session{
-		ip:   "127.0.0.1",
-		port: 1, // refused on loopback — Reconnect exhausts attempts
-		tx: &transport{
-			sendChannel:    make(chan []byte),
-			systemResponse: make(chan []byte, 1),
-			recvQueue:      make(chan []byte, recvQueueSize),
-			activeRequests: map[uint32]chan amsReply{},
-		},
+		ip:            "127.0.0.1",
+		port:          1, // refused on loopback — Reconnect exhausts attempts
+		tx:            adsconn.NewTransport(ams.Address{}),
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),

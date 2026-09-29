@@ -4,26 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
 
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 	"github.com/siyka-au/go-ads/v3/router"
 )
-
-// randomAMSPort returns a random AMS source port in the dynamic range. The PLC
-// keys its notification table by {source NetID, port, handle}, so a fresh port per
-// session means a prior process's subscriptions age out instead of competing with
-// the new connection. WithLocalAMS overrides it where a stable port is needed.
-func randomAMSPort() ams.Port {
-	const minPort, span = 32768, 49151 - 32768 + 1
-	return ams.Port(minPort + rand.IntN(span)) //nolint:gosec // non-cryptographic port selection
-}
 
 // secret wraps credential strings so String() and slog.LogValuer return
 // "[REDACTED]", defending against fmt.Sprintf("%+v", sess) and slog.Any. Kept
@@ -48,13 +40,15 @@ type Session struct {
 	// Underlying RPC client. nil until Connect succeeds; replaced on
 	// Reconnect; shut down by Close. atomic.Pointer so concurrent reads on
 	// user RPC paths cannot race the publish in Connect / dialAndStart.
-	client atomic.Pointer[Client]
+	client atomic.Pointer[adsconn.Conn]
 
 	// TCP socket + request multiplexing + listen/transmit channels.
-	tx *transport
+	tx *adsconn.Transport
 
-	target      ams.Address
-	source      ams.Address
+	target ams.Address
+	// localAddr is the source address as configured (WithLocalAMS, or a random
+	// port); from NewSession on, tx holds the live copy.
+	localAddr   ams.Address
 	callbackIP  string // IP PLC uses to reach us (for Docker/VPN; set via WithHostIP)
 	localBindIP net.IP // Force outbound TCP source IP (multi-session per host; set via WithLocalBindIP). nil = OS default routing.
 
@@ -212,12 +206,7 @@ func NewSession(ctx context.Context, remote AMSEndpoint, opts ...SessionOption) 
 			symbols:         map[string]*symtab.Symbol{},
 			onDemandSymbols: map[string]bool{},
 		},
-		tx: &transport{
-			sendChannel:    make(chan []byte),
-			systemResponse: make(chan []byte, 1),
-			recvQueue:      make(chan []byte, recvQueueSize),
-			activeRequests: map[uint32]chan amsReply{},
-		},
+		tx: adsconn.NewTransport(ams.Address{}),
 		lifecycle: &sessionLifecycle{
 			autoReconnect:        true,
 			maxReconnectAttempts: 0, // 0 = infinite retries
@@ -240,12 +229,13 @@ func NewSession(ctx context.Context, remote AMSEndpoint, opts ...SessionOption) 
 	sess.targetCheck = TargetCheckWarn
 	// Default local AMS port: random in IANA dynamic range so each process /
 	// each session presents a distinct AMS source identity to the PLC. See
-	// randomAMSPort doc for the rationale. WithLocalAMS overrides for stable-
+	// RandomSourcePort doc for the rationale. WithLocalAMS overrides for stable-
 	// port deployments (firewalled environments, container port allow-lists).
-	sess.source.Port = randomAMSPort()
+	sess.localAddr.Port = adsconn.RandomSourcePort()
 	for _, opt := range opts {
 		opt(sess)
 	}
+	sess.tx.SetSource(sess.localAddr)
 	sess.normalizeHeartbeatOptions()
 	// Fill in what the caller omitted by asking the router for its identity, read
 	// from sess.target AFTER the options ran. Only when something is missing --

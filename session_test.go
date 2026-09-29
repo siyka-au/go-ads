@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
 
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
@@ -132,8 +134,8 @@ func TestNewSession_TotalConstruction(t *testing.T) {
 	// Default local AMS port is random in [32768, 49151] so each Session is
 	// a distinct AMS client identity to the PLC. WithLocalAMS overrides for
 	// stable-port deployments.
-	if sess.source.Port < 32768 || sess.source.Port > 49151 {
-		t.Errorf("localPort = %d, want random in [32768, 49151]", sess.source.Port)
+	if sess.tx.Source().Port < 32768 || sess.tx.Source().Port > 49151 {
+		t.Errorf("localPort = %d, want random in [32768, 49151]", sess.tx.Source().Port)
 	}
 	if state := sess.lifecycle.state.load(); state != SessionStateConstructed {
 		t.Errorf("FSM state = %v, want Constructed", state)
@@ -156,8 +158,8 @@ func TestNewSession_OptionsApplied(t *testing.T) {
 	if sess.requestTimeout != 11*time.Second {
 		t.Errorf("requestTimeout = %v, want 11s", sess.requestTimeout)
 	}
-	if sess.source.Port != 1234 {
-		t.Errorf("localPort = %d, want 1234", sess.source.Port)
+	if sess.tx.Source().Port != 1234 {
+		t.Errorf("localPort = %d, want 1234", sess.tx.Source().Port)
 	}
 }
 
@@ -282,7 +284,7 @@ func TestSession_ConnectAfterCloseRejected(t *testing.T) {
 		t.Errorf("after Connect post-Close: state = %v, want Closed (no transition out of terminal)", state)
 	}
 	// Should not have spawned client workers.
-	if c := sess.client.Load(); c != nil && c.tx != nil && c.tx.connection != nil {
+	if c := sess.client.Load(); c != nil && c.Transport().Conn() != nil {
 		t.Error("Connect post-Close created a live transport")
 	}
 	// Sanity: at least one of these must be true.
@@ -304,7 +306,7 @@ func TestSession_OnDisconnectFiresOnceOnConcurrentTrigger(t *testing.T) {
 	// triggerReconnect does NOT spawn the Reconnect goroutine (which would
 	// require a live transport).
 	sess := &Session{
-		tx:            &transport{},
+		tx:            &adsconn.Transport{},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
@@ -924,8 +926,8 @@ func TestNewSession_DefaultRandomLocalPort_InRange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iter %d: NewSession: %v", i, err)
 		}
-		if sess.source.Port < 32768 || sess.source.Port > 49151 {
-			t.Errorf("iter %d: port=%d, want [32768, 49151]", i, sess.source.Port)
+		if sess.tx.Source().Port < 32768 || sess.tx.Source().Port > 49151 {
+			t.Errorf("iter %d: port=%d, want [32768, 49151]", i, sess.tx.Source().Port)
 		}
 		_ = sess.Close()
 	}
@@ -942,7 +944,7 @@ func TestNewSession_DefaultRandomLocalPort_Distribution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iter %d: NewSession: %v", i, err)
 		}
-		seen[sess.source.Port] = struct{}{}
+		seen[sess.tx.Source().Port] = struct{}{}
 		_ = sess.Close()
 	}
 	if len(seen) < 50 {
@@ -962,11 +964,11 @@ func TestNewSession_WithLocalAMS_ZeroPort_KeepsRandomDefault(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	defer sess.Close()
-	if sess.source.Port < 32768 || sess.source.Port > 49151 {
-		t.Errorf("port=%d, want random default (Port=0 in WithLocalAMS must not override)", sess.source.Port)
+	if sess.tx.Source().Port < 32768 || sess.tx.Source().Port > 49151 {
+		t.Errorf("port=%d, want random default (Port=0 in WithLocalAMS must not override)", sess.tx.Source().Port)
 	}
-	if sess.source.NetID != ([6]byte{10, 20, 30, 40, 1, 1}) {
-		t.Errorf("NetID override lost: got %v", sess.source.NetID)
+	if sess.tx.Source().NetID != ([6]byte{10, 20, 30, 40, 1, 1}) {
+		t.Errorf("NetID override lost: got %v", sess.tx.Source().NetID)
 	}
 }
 

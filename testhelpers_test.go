@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -95,11 +97,7 @@ func newTestConnection() *Session {
 		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
 	}
-	conn.client.Store(&Client{
-		logger: conn.logger,
-		ctx:    ctx,
-		cancel: cancel,
-	})
+	conn.client.Store(adsconn.New(adsconn.Config{Logger: conn.logger, Ctx: ctx, Cancel: cancel}))
 	conn.client.Load().SetNotificationHandler(conn.handleNotification)
 	return conn
 }
@@ -108,7 +106,7 @@ func newTestConnection() *Session {
 // Client.deviceNotification decoder, which then dispatches to
 // Session.handleNotification via the installed callback.
 func (conn *Session) drivePacket(ctx context.Context, packet []byte) error {
-	return conn.client.Load().deviceNotification(ctx, packet)
+	return conn.client.Load().DecodeNotification(ctx, packet)
 }
 
 // --- helpers for the AMS peer-listener tests ---

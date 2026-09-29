@@ -3,6 +3,8 @@ package ads
 import (
 	"context"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -98,7 +100,7 @@ func (sess *Session) sumDeleteDeviceNotification(ctx context.Context, handles []
 	}
 	deleted := 0
 	for i := 0; i < limit; i++ {
-		if !isBestEffortDeleteSuccess(codes[i]) {
+		if !adsconn.IsBestEffortDeleteSuccess(codes[i]) {
 			continue
 		}
 		h := handles[i]
@@ -155,7 +157,7 @@ func (sess *Session) bestEffortDeleteNotifications(ctx context.Context, handles 
 	// "lost" from the operator's perspective.
 	deleted := 0
 	for _, code := range errors {
-		if isBestEffortDeleteSuccess(code) {
+		if adsconn.IsBestEffortDeleteSuccess(code) {
 			deleted++
 		}
 	}

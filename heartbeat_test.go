@@ -55,7 +55,7 @@ func TestHeartbeat_ResubscribesWhenBeatsStop(t *testing.T) {
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(150*time.Millisecond, 3))
 	c.SetNotificationHandler(sess.handleNotification)
 	// The stub speaks individual Add/Delete, not the sum groups.
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) || !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) || !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force the sum commands into the unsupported state")
 	}
 	preSeedTypedSymbol(sess, "MAIN.beat", 0xF300)
@@ -284,7 +284,7 @@ func TestHeartbeat_RecoverySurvivesAnUnavailablePLC(t *testing.T) {
 	serving.Store(true)
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) || !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) || !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force the sum commands into the unsupported state")
 	}
 	preSeedTypedSymbol(sess, "MAIN.survive", 0xF700)
@@ -917,7 +917,7 @@ func TestHeartbeat_DetectionSurvivesABackwardClockStep(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) || !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) || !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force the sum commands into the unsupported state")
 	}
 	preSeedTypedSymbol(sess, "MAIN.clock", 0xFD10)
@@ -1282,7 +1282,7 @@ func TestHeartbeat_ReconnectDoesNotInheritStaleQuietTicks(t *testing.T) {
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(cycle, allowed))
 	c.SetNotificationHandler(sess.handleNotification)
 	// The stub speaks individual Add/Delete, not the sum groups.
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) || !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) || !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force the sum commands into the unsupported state")
 	}
 	preSeedTypedSymbol(sess, "MAIN.beat", 0xF300)
@@ -1729,7 +1729,7 @@ func TestHeartbeat_RecoversSubscriptionsWhileTheBeatIsHealthy(t *testing.T) {
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 2))
 	c.SetNotificationHandler(sess.handleNotification)
 	// The scriptable server answers individual Adds, not the sum command.
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) || !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) || !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force the sum commands into the unsupported state")
 	}
 	preSeedTypedSymbol(sess, "MAIN.gap", 0xF800)
@@ -1818,7 +1818,7 @@ func TestHeartbeat_RecoversWhenTheBeatIsSlowerThanTheTick(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv, WithNotificationHeartbeat(100*time.Millisecond, 10))
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) || !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) || !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force the sum commands into the unsupported state")
 	}
 	preSeedTypedSymbol(sess, "MAIN.slowbeat", 0xF900)

@@ -156,11 +156,11 @@ func (sess *Session) ensureRouteOnConnect(ctx context.Context) (registered bool,
 	// expected probe faults do not surface as ERROR.
 	if oldClient := sess.client.Load(); oldClient != nil {
 		oldClient.SetOnDrop(nil)
-		oldClient.beginHandshake()
+		oldClient.BeginHandshake()
 	}
 	defer func() {
 		if c := sess.client.Load(); c != nil {
-			c.endHandshake()
+			c.EndHandshake()
 			c.SetOnDrop(sess.triggerReconnect)
 		}
 	}()
@@ -354,14 +354,14 @@ func (sess *Session) waitDuringActivation(ctxFor func() context.Context, d time.
 func (sess *Session) redialDuringHandshake() error {
 	sess.lifecycle.dialMu.Lock()
 	defer sess.lifecycle.dialMu.Unlock()
-	sess.tx.disconnected.Store(true)
+	sess.tx.SetDisconnected(true)
 	sess.tearDownAndReset()
 	if err := sess.dialAndStart(); err != nil {
 		return err
 	}
 	if c := sess.client.Load(); c != nil {
 		c.SetOnDrop(nil)
-		c.beginHandshake()
+		c.BeginHandshake()
 	}
 	return nil
 }
@@ -373,11 +373,11 @@ func (sess *Session) redialDuringHandshake() error {
 func (sess *Session) awaitRouteActive(ctxFor func() context.Context) (uint8, error) {
 	if c := sess.client.Load(); c != nil {
 		c.SetOnDrop(nil)
-		c.beginHandshake()
+		c.BeginHandshake()
 	}
 	defer func() {
 		if c := sess.client.Load(); c != nil {
-			c.endHandshake()
+			c.EndHandshake()
 			c.SetOnDrop(sess.triggerReconnect)
 		}
 	}()

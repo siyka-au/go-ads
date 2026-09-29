@@ -80,16 +80,11 @@ func (sess *Session) shutdownTransport(wasDisconnected bool) {
 			cancel()
 		}
 		// Close the TCP connection to unblock listen(), which may be stuck in ReadFull.
-		sess.tx.connMu.Lock()
-		if sess.tx.connection != nil {
-			_ = sess.tx.connection.Close()
-		}
-		sess.tx.connMu.Unlock()
+		sess.tx.CloseConn()
 		if c := sess.client.Load(); c != nil {
-			c.markDropped() // same reason as in tearDownAndReset
-			// Adopted inbound connections have their own readers; closing the sockets
-			// is what lets those readers return.
-			c.closePeerConns()
+			// Same reason as in tearDownAndReset; adopted inbound connections have their
+			// own readers, and closing those sockets is what lets them return.
+			c.Release()
 		}
 	})
 }
@@ -145,9 +140,8 @@ func (sess *Session) Close() error {
 		// Repeated from shutdownTransport on purpose: a reconnect in flight when the
 		// teardown ran may have swapped in a different *Client, and waiting on one
 		// whose sockets are still open never returns.
-		c.markDropped()
-		c.closePeerConns()
-		c.waitGroup.Wait()
+		c.Release()
+		c.Wait()
 	}
 	sess.lifecycle.waitGroup.Wait()
 	sess.logger.Info("Close DONE")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -77,8 +79,7 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 	if timestamp == 0 {
 		notificationTime = time.Now()
 	} else {
-		timeStamp := int64(timestamp)/windowsTick - secToUnixEpoch
-		notificationTime = time.Unix(timeStamp, int64(timestamp)%windowsTick*100)
+		notificationTime = adsconn.FiletimeToTime(timestamp)
 	}
 	// cache.lock for parse() — symbol fields live in cache.symbols and parse
 	// mutates Value/Valid. Lock ordering: cache after notifications release

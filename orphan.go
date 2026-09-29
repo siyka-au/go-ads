@@ -19,16 +19,6 @@ const (
 	orphanDeleteRPCTimeout     = 5 * time.Second
 )
 
-// isBestEffortDeleteSuccess reports whether the handle is gone, which is all
-// best-effort cleanup wants: deleted, 0x714 (already gone), or 0x715 (client
-// identity dropped, so our handles went with it). Beckhoff's AdsLib refuses
-// 0x715; here it is routine on reconnect and counting it as failure is spam.
-func isBestEffortDeleteSuccess(code ams.ReturnCode) bool {
-	return code == ams.ReturnCodeNoErrors ||
-		code == ams.ReturnCodeDeviceNotifyHandleInvalid ||
-		code == ams.ReturnCodeDeviceClientUnknown
-}
-
 // isBestEffortDeleteSuccessErr is the error-wrapped variant of
 // isBestEffortDeleteSuccess for call sites that receive a Go error rather
 // than a bare ReturnCode (e.g., orphan-Delete's RPC return). Unwraps the

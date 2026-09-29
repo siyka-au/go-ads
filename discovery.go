@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -106,7 +108,7 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 		return fmt.Errorf("failed to get symbol upload info: %w", err)
 	}
 
-	if err := sleepCtx(ctx, cfg.ChunkDelay); err != nil {
+	if err := adsconn.SleepCtx(ctx, cfg.ChunkDelay); err != nil {
 		return err
 	}
 
@@ -130,7 +132,7 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 		return fmt.Errorf("failed to parse datatypes: %w", err)
 	}
 
-	if err := sleepCtx(ctx, cfg.ChunkDelay); err != nil {
+	if err := adsconn.SleepCtx(ctx, cfg.ChunkDelay); err != nil {
 		return err
 	}
 

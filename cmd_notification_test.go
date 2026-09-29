@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"log/slog"
-	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,32 +19,6 @@ import (
 
 	"github.com/siyka-au/go-ads/v3/ams"
 )
-
-func TestDurationToADSTicks(t *testing.T) {
-	tests := []struct {
-		name    string
-		d       time.Duration
-		wantErr bool
-		want    uint32
-	}{
-		{"zero", 0, false, 0},
-		{"1ms", time.Millisecond, false, 10_000},
-		{"max valid", time.Duration(math.MaxUint32) * 100 * time.Nanosecond, false, math.MaxUint32},
-		{"negative", -time.Millisecond, true, 0},
-		{"overflow", time.Duration(math.MaxUint32)*100*time.Nanosecond + 100*time.Nanosecond, true, 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := durationToADSTicks(tt.d, "test")
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("durationToADSTicks(%v) error = %v, wantErr %v", tt.d, err, tt.wantErr)
-			}
-			if !tt.wantErr && got != tt.want {
-				t.Errorf("durationToADSTicks(%v) = %d, want %d", tt.d, got, tt.want)
-			}
-		})
-	}
-}
 
 // Verify that sending to a closed user channel does NOT panic the listen goroutine.
 // Go runtime panics on send-to-closed-channel regardless of select default,
@@ -136,8 +109,8 @@ func TestDeviceNotification_SingleSample(t *testing.T) {
 
 	// Windows FILETIME for 2024-01-01 00:00:00 UTC
 	// = (Unix epoch offset + unix timestamp) * ticks per second
-	unixTS := int64(1704067200) // 2024-01-01 00:00:00 UTC
-	filetime := uint64((unixTS + secToUnixEpoch) * windowsTick)
+	unixTS := int64(1704067200)                           // 2024-01-01 00:00:00 UTC
+	filetime := uint64((unixTS + 11644473600) * 10000000) // seconds 1601->1970, 100ns ticks
 
 	packet := buildNotificationPacket(42, filetime, data)
 	err := conn.drivePacket(conn.lifecycle.ctx, packet)

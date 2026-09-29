@@ -1282,9 +1282,7 @@ func TestIntegrationReconnect(t *testing.T) {
 	// Expect "listen read error, triggering reconnect" in logs — this is the
 	// detection mechanism firing after we deliberately close the socket.
 	t.Log("simulating network drop (expect 'listen read error' log)...")
-	conn.tx.connMu.Lock()
-	conn.tx.connection.Close()
-	conn.tx.connMu.Unlock()
+	conn.tx.CloseConn()
 
 	// 4. Wait for reconnect to complete
 	waitForReconnect(t, conn, 15*time.Second)
@@ -1347,9 +1345,7 @@ func TestIntegrationRouteForceRegistration(t *testing.T) {
 	// TestIntegrationReconnect does — the point is what the production reconnect
 	// path does with the option, not what a hand-driven Reconnect does.
 	t.Log("simulating network drop (expect 'listen read error' log)...")
-	conn.tx.connMu.Lock()
-	conn.tx.connection.Close()
-	conn.tx.connMu.Unlock()
+	conn.tx.CloseConn()
 	waitForReconnect(t, conn, 30*time.Second)
 
 	if n := logs.CountByMessage("registering route (forced/fallback)"); n < 1 {
@@ -1401,9 +1397,7 @@ func TestIntegrationReconnectDuringBatchRead(t *testing.T) {
 	// Expect "listen read error, triggering reconnect" in logs — this is the
 	// detection mechanism firing after we deliberately close the socket.
 	t.Log("simulating network drop (expect 'listen read error' log)...")
-	conn.tx.connMu.Lock()
-	conn.tx.connection.Close()
-	conn.tx.connMu.Unlock()
+	conn.tx.CloseConn()
 
 	// 3. Wait for reconnect
 	waitForReconnect(t, conn, 15*time.Second)
@@ -1466,9 +1460,7 @@ func TestIntegrationReconnectReadDuringDisconnect(t *testing.T) {
 	// Expect "listen read error, triggering reconnect" in logs — this is the
 	// detection mechanism firing after we deliberately close the socket.
 	t.Log("simulating network drop (expect 'listen read error' log)...")
-	conn.tx.connMu.Lock()
-	conn.tx.connection.Close()
-	conn.tx.connMu.Unlock()
+	conn.tx.CloseConn()
 
 	// 3. Immediately read WITHOUT waiting for reconnect.
 	// sendRequest's retry loop should handle this transparently.
@@ -1712,7 +1704,7 @@ func TestIntegrationSumReadFallbackForced(t *testing.T) {
 	}
 
 	// Force fallback: mark sum read as unsupported
-	conn.client.Load().capabilities.SumReadCmdStore(1)
+	conn.client.Load().Capabilities().SumReadCmdStore(1)
 
 	// The point of this test is that the per-symbol fallback path returns the
 	// same values as the sum path, so a refused item makes the comparison
@@ -1766,7 +1758,7 @@ func TestIntegrationSumWriteFallbackForced(t *testing.T) {
 	}
 
 	// Force fallback
-	conn.client.Load().capabilities.SumWriteStateStore(2) // 2 = checked + unsupported (forces fallback)
+	conn.client.Load().Capabilities().SumWriteStateStore(2) // 2 = checked + unsupported (forces fallback)
 
 	// Save originals
 	originals := make(map[string]any)
@@ -1825,7 +1817,7 @@ func TestIntegrationSumNotifFallbackForced(t *testing.T) {
 	}
 
 	// Force fallback
-	conn.client.Load().capabilities.SumAddNotifStateStore(2) // 2 = checked + unsupported (forces fallback)
+	conn.client.Load().Capabilities().SumAddNotifStateStore(2) // 2 = checked + unsupported (forces fallback)
 
 	ch := make(chan *Update, 50)
 	var configs []NotificationConfig
@@ -1897,7 +1889,7 @@ func TestIntegrationSumNotifFallbackDowngrade(t *testing.T) {
 	t.Logf("symbol %q: ContextMask=%d flags=0x%04X (fallback test)", symbolName, sym.ContextMask, uint32(sym.Flags))
 
 	// Force notification fallback — v2 modes should be downgraded to v1
-	conn.client.Load().capabilities.SumAddNotifStateStore(2) // 2 = checked + unsupported (forces fallback)
+	conn.client.Load().Capabilities().SumAddNotifStateStore(2) // 2 = checked + unsupported (forces fallback)
 
 	ch := make(chan *Update, 20)
 	configs := []NotificationConfig{{
@@ -3054,9 +3046,9 @@ func TestIntegrationDockerRoute(t *testing.T) {
 	conn := setupConnection(t)
 
 	t.Logf("source NetID: %d.%d.%d.%d.%d.%d",
-		conn.source.NetID[0], conn.source.NetID[1],
-		conn.source.NetID[2], conn.source.NetID[3],
-		conn.source.NetID[4], conn.source.NetID[5])
+		conn.tx.Source().NetID[0], conn.tx.Source().NetID[1],
+		conn.tx.Source().NetID[2], conn.tx.Source().NetID[3],
+		conn.tx.Source().NetID[4], conn.tx.Source().NetID[5])
 	t.Logf("callbackIP: %q", conn.callbackIP)
 
 	hostIP := os.Getenv("ADS_HOST_IP")

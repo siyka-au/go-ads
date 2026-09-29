@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"bufio"
@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
-func (c *Client) listen() {
+func (c *Conn) listen() {
 	defer c.waitGroup.Done()
 	// Snapshot under the mutex that guards it. A reconnect writes tx.connection
 	// while dialing, and reading it bare here raced that write — reported by -race
@@ -34,7 +35,7 @@ func (c *Client) listen() {
 // the primary connection means the transport is down and reconnect must fire;
 // losing an inbound one does not — the PLC can simply dial again, and treating it
 // as a drop would tear down a working session.
-func (c *Client) readFrames(conn net.Conn, primary bool) {
+func (c *Conn) readFrames(conn net.Conn, primary bool) {
 	reader := bufio.NewReader(conn)
 	const maxAMSPacket = 4 * 1024 * 1024
 	var hdrBytes [6]byte
@@ -124,7 +125,7 @@ func (c *Client) readFrames(conn net.Conn, primary bool) {
 	}
 }
 
-func (c *Client) recvWorker() {
+func (c *Conn) recvWorker() {
 	defer c.waitGroup.Done()
 	for {
 		select {
@@ -139,8 +140,8 @@ func (c *Client) recvWorker() {
 	}
 }
 
-func (c *Client) handleReceive(ctx context.Context, data []byte) {
-	c.logger.Log(context.Background(), LevelTrace, "in read")
+func (c *Conn) handleReceive(ctx context.Context, data []byte) {
+	c.logger.Log(context.Background(), logging.LevelTrace, "in read")
 	if len(data) < 32 {
 		c.logger.Error("header too short")
 		return
@@ -151,7 +152,7 @@ func (c *Client) handleReceive(ctx context.Context, data []byte) {
 		c.logger.Error("Error parsing header", "error", err)
 		return
 	}
-	c.logger.Log(context.Background(), LevelTrace, "header info", "header", header)
+	c.logger.Log(context.Background(), logging.LevelTrace, "header info", "header", header)
 	adsData := data[32:]
 	if len(adsData) != int(header.Length) {
 		c.logger.Error("Error parsing body")
@@ -159,11 +160,11 @@ func (c *Client) handleReceive(ctx context.Context, data []byte) {
 	}
 	switch header.Command {
 	case ams.CommandDeviceNotification:
-		if err := c.deviceNotification(ctx, adsData); err != nil {
+		if err := c.DecodeNotification(ctx, adsData); err != nil {
 			c.logger.Error("device notification decode failed", "error", err)
 		}
 	default:
-		c.logger.Log(context.Background(), LevelTrace, "default receive")
+		c.logger.Log(context.Background(), logging.LevelTrace, "default receive")
 		c.tx.activeRequestLock.Lock()
 		response, ok := c.tx.activeRequests[header.InvokeID]
 		c.tx.activeRequestLock.Unlock()
@@ -174,7 +175,7 @@ func (c *Client) handleReceive(ctx context.Context, data []byte) {
 					"id", header.InvokeID, "command", header.Command)
 				return
 			case response <- amsReply{data: adsData, amsErr: ams.ReturnCode(header.ErrorCode)}:
-				c.logger.Log(context.Background(), LevelTrace, "Successfully delivered answer",
+				c.logger.Log(context.Background(), logging.LevelTrace, "Successfully delivered answer",
 					"id", header.InvokeID, "command", header.Command)
 			}
 		} else {
@@ -190,7 +191,7 @@ func (c *Client) handleReceive(ctx context.Context, data []byte) {
 	}
 }
 
-func (c *Client) transmitWorker() {
+func (c *Conn) transmitWorker() {
 	defer c.waitGroup.Done()
 	c.tx.connMu.Lock()
 	conn := c.tx.connection
@@ -206,7 +207,7 @@ func (c *Client) transmitWorker() {
 			c.logger.Debug("Exit transmitWorker")
 			return
 		case data := <-c.tx.sendChannel:
-			c.logger.Log(context.Background(), LevelTrace, fmt.Sprintf("Sending %d bytes", len(data)))
+			c.logger.Log(context.Background(), logging.LevelTrace, fmt.Sprintf("Sending %d bytes", len(data)))
 			// Bound the write. Without a deadline a send into a backed-up buffer
 			// blocks here for as long as the kernel retries (tcp_retries2, ~15
 			// minutes), and callOnDrop below is only reached on an error, so a
@@ -240,7 +241,7 @@ func (c *Client) transmitWorker() {
 	}
 }
 
-func (c *Client) deviceNotification(ctx context.Context, in []byte) error {
+func (c *Conn) DecodeNotification(ctx context.Context, in []byte) error {
 	var stream NotificationStream
 	var header StampHeader
 	var sample NotificationSample
@@ -276,7 +277,7 @@ func (c *Client) deviceNotification(ctx context.Context, in []byte) error {
 	return nil
 }
 
-func (c *Client) dispatchNotification(ctx context.Context, handle uint32, ts uint64, content []byte) {
+func (c *Conn) dispatchNotification(ctx context.Context, handle uint32, ts uint64, content []byte) {
 	c.notifyMu.RLock()
 	fn := c.notify
 	c.notifyMu.RUnlock()
@@ -314,4 +315,10 @@ type StampHeader struct {
 type NotificationSample struct {
 	Handle uint32
 	Size   uint32
+}
+
+// FiletimeToTime converts a Windows FILETIME (100 ns ticks since 1601-01-01 UTC),
+// the timestamp format of ADS notifications, to a time.Time.
+func FiletimeToTime(ft uint64) time.Time {
+	return time.Unix(int64(ft)/windowsTick-secToUnixEpoch, int64(ft)%windowsTick*100)
 }

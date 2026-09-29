@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"net"
@@ -9,7 +9,7 @@ import (
 // they process our requests on our connection but answer over one they open back
 // to us. Frames carry their own invokeID, so responses match regardless of which
 // socket they arrive on.
-func (c *Client) AcceptPeerConn(conn net.Conn) {
+func (c *Conn) AcceptPeerConn(conn net.Conn) {
 	// Refuse once the adopted connections were dropped for a teardown: the PLC
 	// re-dials after every drop, which is exactly when teardown runs, so adopting
 	// here leaks an fd, blocks tearDownAndReset's wait in io.ReadFull for ever, and
@@ -45,7 +45,7 @@ func (c *Client) AcceptPeerConn(conn net.Conn) {
 // forgetPeerConn drops one adopted connection from the list. Without it the slice
 // only ever grows: a device that re-dials on each of its own drops would
 // accumulate an entry per connection for the life of the Client.
-func (c *Client) forgetPeerConn(conn net.Conn) {
+func (c *Conn) forgetPeerConn(conn net.Conn) {
 	c.peerMu.Lock()
 	defer c.peerMu.Unlock()
 	for i, existing := range c.peerConns {
@@ -59,7 +59,7 @@ func (c *Client) forgetPeerConn(conn net.Conn) {
 // closePeerConns drops every adopted inbound connection and refuses further ones.
 // Called from Close and from tearDownAndReset so a reader blocked on one cannot
 // hold up the wait for this Client's workers.
-func (c *Client) closePeerConns() {
+func (c *Conn) closePeerConns() {
 	c.peerMu.Lock()
 	conns := c.peerConns
 	c.peerConns = nil

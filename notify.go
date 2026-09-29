@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -303,7 +305,7 @@ var (
 	// Retryable: the caller (or resubscribeNotifications) should re-subscribe.
 	ErrNotificationStrandedByReload = errors.New("symbol cache reloaded during batch subscribe")
 	// ErrNotificationTransportFailure — the batch could not be sent.
-	ErrNotificationTransportFailure = errors.New("batch transport failure")
+	ErrNotificationTransportFailure = adsconn.ErrBatchAborted
 )
 
 // StaleInfo describes why a one-shot Stale Update was delivered. Non-nil iff

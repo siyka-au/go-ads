@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 // Returns ctx.Err() on cancellation, nil otherwise. Non-positive d
 // returns nil immediately without checking ctx (matches time.Sleep
 // semantics).
-func sleepCtx(ctx context.Context, d time.Duration) error {
+func SleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
 	}
@@ -56,7 +56,7 @@ func isChunkedDownloadUnsupportedErr(err error) bool {
 // offset, with an optional inter-chunk delay, so the loaders do not overwhelm the
 // PLC's real-time loop. Returns immediately when chunking is already known to be
 // unsupported, so the caller takes the single-request fallback.
-func (c *Client) DownloadInChunks(ctx context.Context, group uint32, totalLength uint32, chunkSize uint32, delay time.Duration) ([]byte, error) {
+func (c *Conn) DownloadInChunks(ctx context.Context, group uint32, totalLength uint32, chunkSize uint32, delay time.Duration) ([]byte, error) {
 	if totalLength == 0 {
 		return []byte{}, nil
 	}
@@ -92,7 +92,7 @@ func (c *Client) DownloadInChunks(ctx context.Context, group uint32, totalLength
 		result = append(result, chunk...)
 		offset += uint32(len(chunk))
 		if offset < totalLength && delay > 0 {
-			if err := sleepCtx(ctx, delay); err != nil {
+			if err := SleepCtx(ctx, delay); err != nil {
 				return nil, err
 			}
 		}
@@ -113,7 +113,7 @@ func (c *Client) DownloadInChunks(ctx context.Context, group uint32, totalLength
 // populated symbol with Group, Offset, Length, DataType, etc. Does NOT
 // populate Children (struct / array children require full discovery via
 // LoadSymbols / LoadSymbolList + LoadDataTypes). This is a raw RPC and bypasses the symbol cache; the caller is responsible for decoding the response.
-func (c *Client) GetSymbolInfoByName(ctx context.Context, symbolName string) (ams.SymbolInfo, error) {
+func (c *Conn) GetSymbolInfoByName(ctx context.Context, symbolName string) (ams.SymbolInfo, error) {
 	resp, err := c.WriteRead(
 		ctx,
 		uint32(ams.GroupSymbolInfoByNameEx),
@@ -134,7 +134,7 @@ func (c *Client) GetSymbolInfoByName(ctx context.Context, symbolName string) (am
 // GetHandleByName resolves a symbol name to its PLC-side handle. Wire RPC;
 // no cache. The handle is valid until the TCP transport drops or until
 // the caller releases it via ReleaseHandle.
-func (c *Client) GetHandleByName(ctx context.Context, symbolName string) (uint32, error) {
+func (c *Conn) GetHandleByName(ctx context.Context, symbolName string) (uint32, error) {
 	resp, err := c.WriteRead(ctx, uint32(ams.GroupSymbolHandleByName), 0, 4, append([]byte(symbolName), 0))
 	if err != nil {
 		return 0, fmt.Errorf("getting handle for %q: %w", symbolName, err)
@@ -149,7 +149,7 @@ func (c *Client) GetHandleByName(ctx context.Context, symbolName string) (uint32
 // Tries extended info (0xF00F, 24 bytes) first; falls back to basic info
 // (0xF00C, 16 bytes) for older PLCs. Used by LoadSymbols / LoadSymbolList /
 // LoadDataTypes to size the subsequent download. This is a raw RPC and bypasses the symbol cache; the caller is responsible for decoding the response.
-func (c *Client) GetSymbolUploadInfo(ctx context.Context) (ams.SymbolUploadInfo, error) {
+func (c *Conn) GetSymbolUploadInfo(ctx context.Context) (ams.SymbolUploadInfo, error) {
 	var uploadInfo ams.SymbolUploadInfo
 	res, err := c.Read(ctx, uint32(ams.GroupSymbolUploadInfo2), 0, 24)
 	if err != nil {
@@ -185,7 +185,7 @@ func (c *Client) GetSymbolUploadInfo(ctx context.Context) (ams.SymbolUploadInfo,
 
 // DownloadSymbolList downloads the raw symbol-table bytes (group 0xF00B).
 // Caller decodes per parseUploadSymbolInfoSymbols. This is a raw RPC and bypasses the symbol cache; the caller is responsible for decoding the response.
-func (c *Client) DownloadSymbolList(ctx context.Context, length uint32) ([]byte, error) {
+func (c *Conn) DownloadSymbolList(ctx context.Context, length uint32) ([]byte, error) {
 	res, err := c.Read(ctx, uint32(ams.GroupSymbolUpload), 0, length)
 	if err != nil {
 		return nil, fmt.Errorf("DownloadSymbolList failed: %w", err)
@@ -195,7 +195,7 @@ func (c *Client) DownloadSymbolList(ctx context.Context, length uint32) ([]byte,
 
 // DownloadDataTypes downloads the raw datatype-table bytes (group 0xF00E).
 // Caller decodes via parseUploadSymbolInfoDataTypes. This is a raw RPC and bypasses the symbol cache; the caller is responsible for decoding the response.
-func (c *Client) DownloadDataTypes(ctx context.Context, length uint32) ([]byte, error) {
+func (c *Conn) DownloadDataTypes(ctx context.Context, length uint32) ([]byte, error) {
 	res, err := c.Read(ctx, uint32(ams.GroupSymbolDataTypeUpload), 0x0, length)
 	if err != nil {
 		return nil, fmt.Errorf("DownloadDataTypes failed: %w", err)
@@ -205,7 +205,7 @@ func (c *Client) DownloadDataTypes(ctx context.Context, length uint32) ([]byte, 
 
 // GetSymbolVersion reads the current PLC symbol version (single byte).
 // Increments on online-change or download. This is a raw RPC and bypasses the symbol cache; the caller is responsible for decoding the response.
-func (c *Client) GetSymbolVersion(ctx context.Context) (uint8, error) {
+func (c *Conn) GetSymbolVersion(ctx context.Context) (uint8, error) {
 	data, err := c.Read(ctx, uint32(ams.GroupSymbolVersion), 0, 1)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read symbol version: %w", err)

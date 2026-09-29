@@ -166,7 +166,7 @@ func TestSubscribeRace_BatchOnSumUnsupportedPLC(t *testing.T) {
 	// Mark the sum command unsupported, as TC2 does by answering 0x0701 to
 	// group 0xF085. SumAddDeviceNotification then degrades to one Add per
 	// symbol — the condition under which the batch outlasts the race window.
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 
@@ -242,7 +242,7 @@ func TestSubscribeRace_BatchBindsEachHandleBeforeNextAdd(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 
@@ -318,7 +318,7 @@ func TestSubscribeRace_ReloadMidBatchStrandsWholeBatch(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 
@@ -407,7 +407,7 @@ func TestSubscribeRace_PlainSymbolReloadDoesNotStrandBatch(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 
@@ -487,10 +487,10 @@ func TestSubscribeRace_PostSweepCommitIsNotStranded(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
-	if !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumDeleteNotif into the unsupported state")
 	}
 
@@ -574,10 +574,10 @@ func TestSubscribeRace_StrandedSymbolCanBeResubscribed(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
-	if !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumDeleteNotif into the unsupported state")
 	}
 	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
@@ -639,12 +639,12 @@ func TestSubscribeRace_AbortedBatchStillAmendsAndReleases(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 	// Sum-delete goes down the same fallback road, one Delete per handle, so the
 	// stub sees them individually.
-	if !c.capabilities.SumDeleteNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumDeleteNotif into the unsupported state")
 	}
 
@@ -749,7 +749,7 @@ func TestOrphanReaperArmedAfterAbortedBatch(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 
@@ -833,7 +833,7 @@ func TestSubscribeRace_ConnectionDropsMidBatch(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv)
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 	// Don't let the drop spawn a reconnect that races the assertions.
@@ -905,7 +905,7 @@ func TestSubscribeRace_ConnectionDropsMidBatchAtScale(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv, WithRequestTimeout(300*time.Millisecond))
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 	c.SetOnDrop(nil)
@@ -986,7 +986,7 @@ func TestSubscribeFallback_AMSRouterErrorAbortsBatch(t *testing.T) {
 
 	sess, c := newWiredTestSession(t, srv, WithRequestTimeout(300*time.Millisecond))
 	c.SetNotificationHandler(sess.handleNotification)
-	if !c.capabilities.SumAddNotifStateCAS(0, 2) {
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) {
 		t.Fatal("could not force SumAddNotif into the unsupported state")
 	}
 	c.SetOnDrop(nil)

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
 
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
@@ -1225,7 +1227,7 @@ func TestIsBestEffortDeleteSuccess(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isBestEffortDeleteSuccess(tc.code); got != tc.want {
+			if got := adsconn.IsBestEffortDeleteSuccess(tc.code); got != tc.want {
 				t.Errorf("isBestEffortDeleteSuccess(%v) = %v, want %v", tc.code, got, tc.want)
 			}
 		})

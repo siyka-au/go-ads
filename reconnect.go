@@ -147,7 +147,7 @@ func (sess *Session) triggerReconnect() {
 	// CAS ensures only the first goroutine to detect disconnect fires the callback
 	// and sets up reconnection. Subsequent callers (e.g. both listen() and transmitWorker()
 	// detecting the same TCP failure) skip the callback to avoid double-firing.
-	firstDetector := sess.tx.disconnected.CompareAndSwap(false, true)
+	firstDetector := sess.tx.MarkDisconnected()
 	if firstDetector {
 		sess.transitionState(SessionStateDisconnected)
 	}
@@ -244,7 +244,7 @@ func (sess *Session) Reconnect(ctx context.Context) error {
 	defer func() {
 		closeReconnectDone()
 		sess.lifecycle.reconnectOwner.Store(false)
-		if sess.lifecycle.autoReconnect && !sess.isClosed() && sess.tx.disconnected.Load() {
+		if sess.lifecycle.autoReconnect && !sess.isClosed() && sess.tx.Disconnected() {
 			sess.logger.Info("adopting a drop that arrived while the previous reconnect was finishing")
 			go func() { _ = sess.Reconnect(context.Background()) }()
 		}
@@ -277,7 +277,7 @@ func (sess *Session) Reconnect(ctx context.Context) error {
 	// connection that never carried a frame is always a flap, however long it lasted.
 	neverServed := false
 	if c := sess.client.Load(); c != nil {
-		neverServed = !c.wasEstablished()
+		neverServed = !c.Established()
 	}
 
 	sess.lifecycle.flapMu.Lock()
@@ -309,7 +309,7 @@ func (sess *Session) Reconnect(ctx context.Context) error {
 	// every notification sample in the gap is lost.
 	sess.logger.Error("session disconnected, reconnecting; no data is read until it succeeds",
 		"flapCount", flapCount)
-	sess.tx.disconnected.Store(true)
+	sess.tx.SetDisconnected(true)
 	// State is already Reconnecting (transitionToOnce above).
 
 	// Snapshot the handles before clearing: the PLC may still hold them. Load
@@ -336,7 +336,7 @@ func (sess *Session) Reconnect(ctx context.Context) error {
 		// us" from "the link died mid-work", and only the first should go quiet.
 		servedNothing := false
 		if c := sess.client.Load(); c != nil {
-			servedNothing = !c.wasEstablished()
+			servedNothing = !c.Established()
 		}
 		sess.logAttempt("reconnect step failed, retrying",
 			"stage", stage, "error", err, "attempt", attempts,
@@ -523,7 +523,7 @@ func (sess *Session) filterValidPending(entries []pendingNotification) []pending
 // resetForRetry tears down goroutines, closes the TCP connection, and resets
 // channels/state so the next retry iteration starts clean.
 func (sess *Session) resetForRetry() {
-	sess.tx.disconnected.Store(true)
+	sess.tx.SetDisconnected(true)
 	sess.tearDownAndReset()
 	// Allow route re-registration on next attempt (PLC may have rebooted)
 }

@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 // send is the local-mode handshake primitive. NOT safe for concurrent use —
 // it consumes from the shared systemResponse channel. Used by Session for
 // the local AMS handshake during Connect/Reconnect.
-func (c *Client) send(data []byte) ([]byte, error) {
+func (c *Conn) send(data []byte) ([]byte, error) {
 	c.tx.currentRequest.Add(1)
 	c.tx.chanMu.RLock()
 	sendCh := c.tx.sendChannel
@@ -63,13 +63,13 @@ func (c *Client) send(data []byte) ([]byte, error) {
 // The caller's ctx is merged with requestTimeout, whichever fires first. Returns
 // ErrTransportClosed at once on a known-dead transport; otherwise no retry, and
 // mid-flight drops surface as ctx errors for Session to handle.
-func (c *Client) sendRequest(ctx context.Context, command ams.Command, data []byte) ([]byte, error) {
+func (c *Conn) sendRequest(ctx context.Context, command ams.Command, data []byte) ([]byte, error) {
 	return c.sendRequestTo(ctx, c.target, command, data)
 }
 
 // sendRequestTo is sendRequest addressed to an explicit AMS target — used to reach
 // another port on the same device (the system service) over this one connection.
-func (c *Client) sendRequestTo(ctx context.Context, target ams.Address, command ams.Command, data []byte) ([]byte, error) {
+func (c *Conn) sendRequestTo(ctx context.Context, target ams.Address, command ams.Command, data []byte) ([]byte, error) {
 	if c.tx.disconnected.Load() {
 		return nil, ErrTransportClosed
 	}
@@ -83,7 +83,7 @@ func (c *Client) sendRequestTo(ctx context.Context, target ams.Address, command 
 		delete(c.tx.activeRequests, id)
 		c.tx.activeRequestLock.Unlock()
 	}()
-	c.logger.Log(context.Background(), LevelTrace, "encoding packet",
+	c.logger.Log(context.Background(), logging.LevelTrace, "encoding packet",
 		"command", command, "data", data, "id", id)
 
 	pack, err := c.encodeTo(target, command, data, id)
@@ -144,7 +144,7 @@ func (c *Client) sendRequestTo(ctx context.Context, target ams.Address, command 
 
 // encode lives on *Client. Session callers reach it via s.client.encode
 // at the rare sites still on Session.
-func (c *Client) encode(command ams.Command, data []byte, invokeID uint32) ([]byte, error) {
+func (c *Conn) encode(command ams.Command, data []byte, invokeID uint32) ([]byte, error) {
 	return c.encodeTo(c.target, command, data, invokeID)
 }
 
@@ -152,14 +152,11 @@ func (c *Client) encode(command ams.Command, data []byte, invokeID uint32) ([]by
 // port on the same device (the system service, say) travel over this same
 // connection: the AMS header carries the port, and the router allows only one TCP
 // connection per remote IP, so opening a second one is not an option.
-func (c *Client) encodeTo(target ams.Address, command ams.Command, data []byte, invokeID uint32) ([]byte, error) {
-	// Snapshot source under lock: setSource replaces it after a local-mode
-	// handshake, which can land while requests are already in flight. target is set
-	// at construction and never mutated after that.
-	c.tx.connMu.Lock()
-	source := c.source
-	c.tx.connMu.Unlock()
-	c.logger.Log(context.Background(), LevelTrace, "Starting encoding of AMS header",
+func (c *Conn) encodeTo(target ams.Address, command ams.Command, data []byte, invokeID uint32) ([]byte, error) {
+	// One snapshot of source: a local-mode handshake can replace it while requests
+	// are already in flight. target is set at construction and never mutated.
+	source := c.tx.Source()
+	c.logger.Log(context.Background(), logging.LevelTrace, "Starting encoding of AMS header",
 		"command", command,
 		"target", target,
 		"source", source,
@@ -191,7 +188,7 @@ func (c *Client) encodeTo(target ams.Address, command ams.Command, data []byte, 
 		c.logger.Error("binary.Write failed", "error", err)
 		return nil, err
 	}
-	c.logger.Log(context.Background(), LevelTrace, "data to transmit", "data", data)
-	c.logger.Log(context.Background(), LevelTrace, "The encoded AMS header:", logging.HexAttr("bytes", buff.Bytes()))
+	c.logger.Log(context.Background(), logging.LevelTrace, "data to transmit", "data", data)
+	c.logger.Log(context.Background(), logging.LevelTrace, "The encoded AMS header:", logging.HexAttr("bytes", buff.Bytes()))
 	return buff.Bytes(), nil
 }

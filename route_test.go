@@ -40,9 +40,7 @@ func TestAddRoute_ReadsTheSourceNetIDUnderItsLock(t *testing.T) {
 
 	first := [6]byte{10, 0, 0, 1, 1, 1}
 	second := [6]byte{192, 168, 3, 52, 1, 1}
-	sess.tx.connMu.Lock()
-	sess.source = ams.Address{NetID: first, Port: 10500}
-	sess.tx.connMu.Unlock()
+	sess.tx.SetSource(ams.Address{NetID: first, Port: 10500})
 
 	// The writer, doing exactly what localHandshake does: replace the whole address
 	// under tx.connMu. Every byte differs between the two NetIDs, so a torn read is
@@ -55,9 +53,7 @@ func TestAddRoute_ReadsTheSourceNetIDUnderItsLock(t *testing.T) {
 			if i%2 == 0 {
 				next = second
 			}
-			sess.tx.connMu.Lock()
-			sess.source = ams.Address{NetID: next, Port: 10500}
-			sess.tx.connMu.Unlock()
+			sess.tx.SetSource(ams.Address{NetID: next, Port: 10500})
 		}
 	}()
 

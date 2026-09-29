@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
 // Single-symbol device-notification raw RPCs on *Client:
@@ -36,7 +37,7 @@ func durationToADSTicks(d time.Duration, name string) (uint32, error) {
 // AddDeviceNotification registers a device notification with the PLC and
 // returns the PLC-assigned handle. Raw RPC: no Session-side persistence.
 // Callers wanting auto-resubscribe-on-reconnect use Session.AddSymbolNotification.
-func (c *Client) AddDeviceNotification(
+func (c *Conn) AddDeviceNotification(
 	ctx context.Context,
 	group uint32,
 	offset uint32,
@@ -99,7 +100,7 @@ func (c *Client) AddDeviceNotification(
 		c.logger.Warn("failed to add notification handler", "errorCode", uint32(notificationResponse.Error))
 		return 0, fmt.Errorf("unable to create notification: %w", notificationResponse.Error)
 	}
-	c.logger.Log(context.Background(), LevelTrace, "added notification handler", "handle", notificationResponse.Handle)
+	c.logger.Log(context.Background(), logging.LevelTrace, "added notification handler", "handle", notificationResponse.Handle)
 	return notificationResponse.Handle, nil
 }
 
@@ -107,7 +108,7 @@ func (c *Client) AddDeviceNotification(
 // returns the wire-level success/error. Callers that maintain
 // activeNotifications must clean up themselves (Session does this in its
 // wrapper Session.DeleteDeviceNotification below).
-func (c *Client) DeleteDeviceNotification(ctx context.Context, handle uint32) error {
+func (c *Conn) DeleteDeviceNotification(ctx context.Context, handle uint32) error {
 	request := &bytes.Buffer{}
 	type deleteNotificationCommandPacket struct {
 		Handle uint32

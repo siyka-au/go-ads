@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"errors"
@@ -28,8 +28,7 @@ func TestDroppedDoesNotDiscardArrivedReply(t *testing.T) {
 		})
 		srv.AnswerThenClose(ams.CommandRead, 1)
 
-		c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, 2*time.Second,
-			WithClientLogger(slog.New(&testlog.Handler{})))
+		c, err := dialTest(srv.Host, srv.Port, ams.Address{}, ams.Address{}, 2*time.Second, slog.New(&testlog.Handler{}))
 		if err != nil {
 			t.Fatalf("Dial: %v", err)
 		}

@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
 // Single-symbol ADS commands on *Client: Read, Write, WriteRead,
@@ -15,7 +16,7 @@ import (
 // call s.client.Read/Write internally.
 
 // Read issues ADS Read (cmd 2) against the given index group/offset.
-func (c *Client) Read(ctx context.Context, group uint32, offset uint32, length uint32) (data []byte, err error) {
+func (c *Conn) Read(ctx context.Context, group uint32, offset uint32, length uint32) (data []byte, err error) {
 	request := new(bytes.Buffer)
 	type readCommandPacket struct {
 		Group  uint32
@@ -34,7 +35,7 @@ func (c *Client) Read(ctx context.Context, group uint32, offset uint32, length u
 		return nil, err
 	}
 
-	c.logger.Log(context.Background(), LevelTrace, "request", "request", content)
+	c.logger.Log(context.Background(), logging.LevelTrace, "request", "request", content)
 
 	// Try to send the request
 	resp, err := c.sendRequest(ctx, ams.CommandRead, request.Bytes())
@@ -68,7 +69,7 @@ func (c *Client) Read(ctx context.Context, group uint32, offset uint32, length u
 }
 
 // Write issues ADS Write (cmd 3) to the PLC at the given index group/offset.
-func (c *Client) Write(ctx context.Context, group uint32, offset uint32, data []byte) error {
+func (c *Conn) Write(ctx context.Context, group uint32, offset uint32, data []byte) error {
 	type writeCommandPacket struct {
 		Group  uint32
 		Offset uint32
@@ -113,7 +114,7 @@ func (c *Client) Write(ctx context.Context, group uint32, offset uint32, data []
 
 // WriteRead issues ADS ReadWrite (cmd 9): writes send and reads back up to
 // readLength bytes in a single round-trip.
-func (c *Client) WriteRead(ctx context.Context, group uint32, offset uint32, readLength uint32, send []byte) (data []byte, err error) {
+func (c *Conn) WriteRead(ctx context.Context, group uint32, offset uint32, readLength uint32, send []byte) (data []byte, err error) {
 	request := new(bytes.Buffer)
 	type writeReadCommandPacket struct {
 		Group       uint32
@@ -142,7 +143,7 @@ func (c *Client) WriteRead(ctx context.Context, group uint32, offset uint32, rea
 		return nil, fmt.Errorf("binary.Write failed: %w", err)
 	}
 
-	c.logger.Log(context.Background(), LevelTrace, "request", "request", request)
+	c.logger.Log(context.Background(), logging.LevelTrace, "request", "request", request)
 
 	// Try to send the request
 	resp, err := c.sendRequest(ctx, ams.CommandReadWrite, request.Bytes())
@@ -167,27 +168,27 @@ func (c *Client) WriteRead(ctx context.Context, group uint32, offset uint32, rea
 }
 
 // ReadState issues ADS ReadState (cmd 4) and returns the PLC's ADS+device state.
-func (c *Client) ReadState(ctx context.Context) (response ams.StateInfo, err error) {
+func (c *Conn) ReadState(ctx context.Context) (response ams.StateInfo, err error) {
 	return c.readStateOn(ctx, c.target)
 }
 
 // ReadStateOnPort reads the ADS state of another port on the same device. The
 // system service (PortSystemService) is the one that matters: it answers while the
 // system is in CONFIG, when the runtime ports do not exist at all.
-func (c *Client) ReadStateOnPort(ctx context.Context, port ams.Port) (ams.StateInfo, error) {
+func (c *Conn) ReadStateOnPort(ctx context.Context, port ams.Port) (ams.StateInfo, error) {
 	target := c.target
 	target.Port = port
 	return c.readStateOn(ctx, target)
 }
 
-func (c *Client) readStateOn(ctx context.Context, target ams.Address) (response ams.StateInfo, err error) {
+func (c *Conn) readStateOn(ctx context.Context, target ams.Address) (response ams.StateInfo, err error) {
 	// Try to send the request
 	resp, err := c.sendRequestTo(ctx, target, ams.CommandReadState, []byte{})
 	if err != nil {
 		c.logger.Log(ctx, c.transportFaultLevel(), "error during read state", "error", err)
 		return
 	}
-	c.logger.Log(context.Background(), LevelTrace, "response from plc for state", "data", resp)
+	c.logger.Log(context.Background(), logging.LevelTrace, "response from plc for state", "data", resp)
 	type readStateResponse struct {
 		Error ams.ReturnCode
 		ams.StateInfo
@@ -208,7 +209,7 @@ func (c *Client) readStateOn(ctx context.Context, target ams.Address) (response 
 }
 
 // ReadDeviceInfo issues ADS ReadDeviceInfo (cmd 1).
-func (c *Client) ReadDeviceInfo(ctx context.Context) (response ams.DeviceInfo, err error) {
+func (c *Conn) ReadDeviceInfo(ctx context.Context) (response ams.DeviceInfo, err error) {
 	// Try to send the request
 	resp, err := c.sendRequest(ctx, ams.CommandReadDeviceInfo, []byte{})
 	if err != nil {
@@ -251,7 +252,7 @@ func (c *Client) ReadDeviceInfo(ctx context.Context) (response ams.DeviceInfo, e
 // ReleaseHandle releases a symbol handle previously acquired via
 // GetHandleByName. Wraps Write to GroupSymbolReleaseHandle so the
 // Beckhoff-equivalent surface includes a symmetric release primitive.
-func (c *Client) ReleaseHandle(ctx context.Context, handle uint32) error {
+func (c *Conn) ReleaseHandle(ctx context.Context, handle uint32) error {
 	handleBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(handleBytes, handle)
 	return c.Write(ctx, uint32(ams.GroupSymbolReleaseHandle), 0, handleBytes)

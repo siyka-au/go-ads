@@ -236,5 +236,5 @@ func (sess *Session) waitForReconnect() {
 //
 //nolint:unused // re-wired by Session-level clientRead/Write wrappers.
 func (sess *Session) isTransportDown() bool {
-	return sess.tx.disconnected.Load()
+	return sess.tx.Disconnected()
 }

@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"context"
@@ -40,7 +40,7 @@ type sumCmdSpec[Req any, Res any] struct {
 //  4. On error: if isSumCommandUnsupportedError, CAS state to unsupported,
 //     log Warn, call fallback. Otherwise propagate.
 //  5. On success: CAS state to supported, length-check response, decode.
-func executeSumCommand[Req any, Res any](ctx context.Context, c *Client, spec sumCmdSpec[Req, Res], requests []Req) ([]Res, error) {
+func executeSumCommand[Req any, Res any](ctx context.Context, c *Conn, spec sumCmdSpec[Req, Res], requests []Req) ([]Res, error) {
 	if len(requests) == 0 {
 		return nil, nil
 	}
@@ -89,7 +89,7 @@ func executeSumCommand[Req any, Res any](ctx context.Context, c *Client, spec su
 // individual reads. Both sum variants share one response format, and the detected
 // level is cached until reconnect. Deliberately not on executeSumCommand: the
 // two-command-ID fallback does not fit its single-spec contract.
-func (c *Client) SumRead(ctx context.Context, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
+func (c *Conn) SumRead(ctx context.Context, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
 	if len(requests) == 0 {
 		return nil, nil
 	}
@@ -129,7 +129,7 @@ func (c *Client) SumRead(ctx context.Context, requests []ams.SumReadRequest) ([]
 }
 
 // sumReadProbe tries SumReadEx2 then SumReadEx, caching the first that works.
-func (c *Client) sumReadProbe(ctx context.Context, count uint32, readLen uint32, writeData []byte, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
+func (c *Conn) sumReadProbe(ctx context.Context, count uint32, readLen uint32, writeData []byte, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
 	// Try SumReadEx2 (0xF084) first
 	resp, err := c.WriteRead(ctx, uint32(ams.GroupSumupReadEx2), count, readLen, writeData)
 	if err == nil {
@@ -160,7 +160,7 @@ func (c *Client) sumReadProbe(ctx context.Context, count uint32, readLen uint32,
 }
 
 // sumReadExec performs a sum read with a known-good command.
-func (c *Client) sumReadExec(ctx context.Context, group ams.Group, count uint32, readLen uint32, writeData []byte, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
+func (c *Conn) sumReadExec(ctx context.Context, group ams.Group, count uint32, readLen uint32, writeData []byte, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
 	resp, err := c.WriteRead(ctx, uint32(group), count, readLen, writeData)
 	if err != nil {
 		return nil, fmt.Errorf("SumRead failed: %w", err)
@@ -174,7 +174,7 @@ func (c *Client) sumReadExec(ctx context.Context, group ams.Group, count uint32,
 // Note: The official Beckhoff PDF shows 0xF083 with a separate error array (like 0xF080),
 // but empirical testing on both TwinCAT 2 and TwinCAT 3 confirms 0xF083 returns the
 // interleaved format identical to 0xF084. See PROTOCOL.md for details.
-func (c *Client) parseSumReadResponse(resp []byte, n int, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
+func (c *Conn) parseSumReadResponse(resp []byte, n int, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
 	if len(resp) < n*8 {
 		return nil, fmt.Errorf("SumRead response too short: got %d bytes, expected at least %d", len(resp), n*8)
 	}
@@ -262,7 +262,7 @@ func (c *Client) parseSumReadResponse(resp []byte, n int, requests []ams.SumRead
 }
 
 // sumReadFallback performs individual reads when no sum read command is supported.
-func (c *Client) sumReadFallback(ctx context.Context, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
+func (c *Conn) sumReadFallback(ctx context.Context, requests []ams.SumReadRequest) ([]ams.SumReadResult, error) {
 	results := make([]ams.SumReadResult, len(requests))
 	for i, req := range requests {
 		data, err := c.Read(ctx, req.Group, req.Offset, req.Length)
@@ -290,7 +290,7 @@ func (c *Client) sumReadFallback(ctx context.Context, requests []ams.SumReadRequ
 // has a header section (Group+Offset+Length per item) followed by a concatenated
 // data section (variable-size Data bytes per item). The generic helper's fixed
 // itemWriteSize cannot represent this. Custom orchestration is required.
-func (c *Client) SumWrite(ctx context.Context, requests []ams.SumWriteRequest) ([]ams.SumWriteResult, error) {
+func (c *Conn) SumWrite(ctx context.Context, requests []ams.SumWriteRequest) ([]ams.SumWriteResult, error) {
 	if len(requests) == 0 {
 		return nil, nil
 	}
@@ -350,7 +350,7 @@ func (c *Client) SumWrite(ctx context.Context, requests []ams.SumWriteRequest) (
 }
 
 // sumWriteFallback performs individual writes when sum write is not supported.
-func (c *Client) sumWriteFallback(ctx context.Context, requests []ams.SumWriteRequest) ([]ams.SumWriteResult, error) {
+func (c *Conn) sumWriteFallback(ctx context.Context, requests []ams.SumWriteRequest) ([]ams.SumWriteResult, error) {
 	results := make([]ams.SumWriteResult, len(requests))
 	for i, req := range requests {
 		err := c.Write(ctx, req.Group, req.Offset, req.Data)
@@ -372,8 +372,8 @@ func (c *Client) sumWriteFallback(ctx context.Context, requests []ams.SumWriteRe
 // SumAddDeviceNotification adds multiple device notifications in a single ADS
 // round-trip using GroupSumupAddDeviceNotification (0xF085). Falls back to
 // individual AddDeviceNotification calls on older PLCs.
-func (c *Client) SumAddDeviceNotification(ctx context.Context, requests []ams.SumNotificationRequest) ([]ams.SumNotificationResult, error) {
-	return c.sumAddDeviceNotificationFunc(ctx, requests, nil)
+func (c *Conn) SumAddDeviceNotification(ctx context.Context, requests []ams.SumNotificationRequest) ([]ams.SumNotificationResult, error) {
+	return c.SumAddDeviceNotificationFunc(ctx, requests, nil)
 }
 
 // sumAddDeviceNotificationFunc is SumAddDeviceNotification with a per-item
@@ -385,7 +385,7 @@ func (c *Client) SumAddDeviceNotification(ctx context.Context, requests []ams.Su
 // onItem runs synchronously, once per request, in order: progressively on the
 // fallback path and after decode on the batched one, so callers get a single
 // commit path either way.
-func (c *Client) sumAddDeviceNotificationFunc(
+func (c *Conn) SumAddDeviceNotificationFunc(
 	ctx context.Context,
 	requests []ams.SumNotificationRequest,
 	onItem func(index int, res ams.SumNotificationResult),
@@ -448,7 +448,7 @@ func (c *Client) sumAddDeviceNotificationFunc(
 // Returns the per-handle ReturnCode slice from the PLC. Persistent
 // activeNotifications cleanup is the caller's responsibility; Session
 // wraps this with its notifications.lock cleanup in Session.SumDeleteDeviceNotification.
-func (c *Client) SumDeleteDeviceNotification(ctx context.Context, handles []uint32) ([]ams.ReturnCode, error) {
+func (c *Conn) SumDeleteDeviceNotification(ctx context.Context, handles []uint32) ([]ams.ReturnCode, error) {
 	spec := sumCmdSpec[uint32, ams.ReturnCode]{
 		stateLoad:             c.capabilities.SumDeleteNotifStateLoad,
 		stateCASToSupported:   func() bool { return c.capabilities.SumDeleteNotifStateCAS(0, 1) },
@@ -478,11 +478,11 @@ func (c *Client) SumDeleteDeviceNotification(ctx context.Context, handles []uint
 // onItem, when non-nil, is called with each result as that Add returns — before
 // the remaining requests are sent. The PLC is already streaming that handle by
 // then, so reporting it now is what lets the caller bind it in time.
-func (c *Client) sumAddNotificationFallback(ctx context.Context, requests []ams.SumNotificationRequest, onItem func(int, ams.SumNotificationResult)) ([]ams.SumNotificationResult, error) {
+func (c *Conn) sumAddNotificationFallback(ctx context.Context, requests []ams.SumNotificationRequest, onItem func(int, ams.SumNotificationResult)) ([]ams.SumNotificationResult, error) {
 	results := make([]ams.SumNotificationResult, len(requests))
 	for i, req := range requests {
 		// Downgrade v2 modes for older PLCs that don't support them
-		transMode := downgradeTransMode(req.TransmissionMode)
+		transMode := DowngradeTransMode(req.TransmissionMode)
 		if transMode != req.TransmissionMode {
 			c.logger.Info("downgraded transmission mode for older PLC",
 				"from", req.TransmissionMode.String(),
@@ -498,9 +498,9 @@ func (c *Client) sumAddNotificationFallback(ctx context.Context, requests []ams.
 				// failure as a device error blames the PLC for something it never
 				// said, and every remaining item would burn its own timeout
 				// against a connection that is already gone.
-				results[i].Skipped = fmt.Errorf("%w: %w", ErrNotificationTransportFailure, err)
+				results[i].Skipped = fmt.Errorf("%w: %w", ErrBatchAborted, err)
 				for j := i + 1; j < len(requests); j++ {
-					results[j].Skipped = fmt.Errorf("%w: batch aborted at item %d", ErrNotificationTransportFailure, i)
+					results[j].Skipped = fmt.Errorf("%w: batch aborted at item %d", ErrBatchAborted, i)
 				}
 				if onItem != nil {
 					for j := i; j < len(requests); j++ {
@@ -527,7 +527,7 @@ func (c *Client) sumAddNotificationFallback(ctx context.Context, requests []ams.
 // unsupported. An ADS-level code is stored and the loop continues; anything else
 // (transport closed, ctx cancelled) short-circuits with partial codes, since every
 // later handle would fail identically and bury the root cause.
-func (c *Client) sumDeleteNotificationFallback(ctx context.Context, handles []uint32) ([]ams.ReturnCode, error) {
+func (c *Conn) sumDeleteNotificationFallback(ctx context.Context, handles []uint32) ([]ams.ReturnCode, error) {
 	codes := make([]ams.ReturnCode, len(handles))
 	for i, h := range handles {
 		err := c.DeleteDeviceNotification(ctx, h)
@@ -549,7 +549,7 @@ func (c *Client) sumDeleteNotificationFallback(ctx context.Context, handles []ui
 		// reconnect or in best-effort cleanup paths). Log Debug; the
 		// caller's reduction via isBestEffortDeleteSuccess still counts
 		// these as cleanup wins. Other codes = real failure → Warn.
-		if isBestEffortDeleteSuccess(codes[i]) {
+		if IsBestEffortDeleteSuccess(codes[i]) {
 			c.logger.Debug("individual DeleteDeviceNotification: handle already gone PLC-side", "error", err, "handle", h, "code", codes[i])
 		} else {
 			c.logger.Warn("individual DeleteDeviceNotification failed in fallback", "error", err, "handle", h, "code", codes[i])
@@ -560,7 +560,7 @@ func (c *Client) sumDeleteNotificationFallback(ctx context.Context, handles []ui
 
 // downgradeTransMode converts v2 transmission modes to their v1 equivalents
 // for older PLCs (e.g. TwinCAT 2) that silently ignore v2 modes.
-func downgradeTransMode(mode ams.TransMode) ams.TransMode {
+func DowngradeTransMode(mode ams.TransMode) ams.TransMode {
 	switch mode {
 	case ams.TransModeServerOnChange2:
 		return ams.TransModeServerOnChange
@@ -581,4 +581,14 @@ func isSumCommandUnsupportedError(err error) bool {
 	return rc == ams.ReturnCodeDeviceServiceNotSupported ||
 		rc == ams.ReturnCodeGlobalUnknownCommandID ||
 		rc == ams.ReturnCodeGlobalUnknownAdsCommand
+}
+
+// isBestEffortDeleteSuccess reports whether the handle is gone, which is all
+// best-effort cleanup wants: deleted, 0x714 (already gone), or 0x715 (client
+// identity dropped, so our handles went with it). Beckhoff's AdsLib refuses
+// 0x715; here it is routine on reconnect and counting it as failure is spam.
+func IsBestEffortDeleteSuccess(code ams.ReturnCode) bool {
+	return code == ams.ReturnCodeNoErrors ||
+		code == ams.ReturnCodeDeviceNotifyHandleInvalid ||
+		code == ams.ReturnCodeDeviceClientUnknown
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/adsconn"
+
 	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -127,7 +129,7 @@ func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName strin
 	// downgrade to the regular mode (3/4) to avoid 0x070B errors or silent failures.
 	actualMode := transMode
 	if (transMode == ams.TransModeServerCycle2 || transMode == ams.TransModeServerOnChange2) && symbol.ContextMask == 0 {
-		actualMode = downgradeTransMode(transMode)
+		actualMode = adsconn.DowngradeTransMode(transMode)
 		sess.logger.Warn("InContext mode not available for symbol (ContextMask=0), falling back",
 			"symbol", symbolName,
 			"requested", transMode.String(),
@@ -311,7 +313,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 
 		actualMode := cfg.TransmissionMode
 		if (actualMode == ams.TransModeServerCycle2 || actualMode == ams.TransModeServerOnChange2) && symbol.ContextMask == 0 {
-			actualMode = downgradeTransMode(actualMode)
+			actualMode = adsconn.DowngradeTransMode(actualMode)
 			sess.logger.Warn("InContext mode not available for symbol (ContextMask=0), falling back",
 				"symbol", cfg.SymbolName,
 				"requested", cfg.TransmissionMode.String(),
@@ -485,7 +487,7 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 	}
 	defer settle()
 
-	subResults, err := sess.client.Load().sumAddDeviceNotificationFunc(ctx, requests, onItem)
+	subResults, err := sess.client.Load().SumAddDeviceNotificationFunc(ctx, requests, onItem)
 	if err != nil {
 		// Transport-aborted batch: every entry that was about to be sent must
 		// be marked Skipped so callers can distinguish "lib didn't try" from

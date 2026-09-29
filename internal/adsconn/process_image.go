@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"context"
@@ -18,23 +18,23 @@ import (
 // symbol-based access for normal operation.
 
 // EXPERIMENTAL: ReadProcessInput reads bytes from the input process image at the given byte offset.
-func (c *Client) ReadProcessInput(ctx context.Context, byteOffset, length uint32) ([]byte, error) {
+func (c *Conn) ReadProcessInput(ctx context.Context, byteOffset, length uint32) ([]byte, error) {
 	return c.Read(ctx, uint32(ams.GroupIoImageRwib), byteOffset, length)
 }
 
 // EXPERIMENTAL: ReadProcessOutput reads bytes from the output process image at the given byte offset.
-func (c *Client) ReadProcessOutput(ctx context.Context, byteOffset, length uint32) ([]byte, error) {
+func (c *Conn) ReadProcessOutput(ctx context.Context, byteOffset, length uint32) ([]byte, error) {
 	return c.Read(ctx, uint32(ams.GroupIoImageRwob), byteOffset, length)
 }
 
 // EXPERIMENTAL: WriteProcessOutput writes bytes to the output process image at the given byte offset.
-func (c *Client) WriteProcessOutput(ctx context.Context, byteOffset uint32, data []byte) error {
+func (c *Conn) WriteProcessOutput(ctx context.Context, byteOffset uint32, data []byte) error {
 	return c.Write(ctx, uint32(ams.GroupIoImageRwob), byteOffset, data)
 }
 
 // EXPERIMENTAL: ReadProcessInputBit reads a single bit from the input process image.
 // bitIndex must be 0-7 (bit within a single byte).
-func (c *Client) ReadProcessInputBit(ctx context.Context, byteOffset uint32, bitIndex uint8) (bool, error) {
+func (c *Conn) ReadProcessInputBit(ctx context.Context, byteOffset uint32, bitIndex uint8) (bool, error) {
 	if bitIndex > 7 {
 		return false, fmt.Errorf("bitIndex must be 0-7, got %d", bitIndex)
 	}
@@ -54,7 +54,7 @@ func (c *Client) ReadProcessInputBit(ctx context.Context, byteOffset uint32, bit
 
 // EXPERIMENTAL: WriteProcessOutputBit writes a single bit to the output process image.
 // bitIndex must be 0-7 (bit within a single byte).
-func (c *Client) WriteProcessOutputBit(ctx context.Context, byteOffset uint32, bitIndex uint8, value bool) error {
+func (c *Conn) WriteProcessOutputBit(ctx context.Context, byteOffset uint32, bitIndex uint8, value bool) error {
 	if bitIndex > 7 {
 		return fmt.Errorf("bitIndex must be 0-7, got %d", bitIndex)
 	}
@@ -70,7 +70,7 @@ func (c *Client) WriteProcessOutputBit(ctx context.Context, byteOffset uint32, b
 }
 
 // EXPERIMENTAL: ReadProcessInputSize returns the size of the input process image in bytes.
-func (c *Client) ReadProcessInputSize(ctx context.Context) (uint32, error) {
+func (c *Conn) ReadProcessInputSize(ctx context.Context) (uint32, error) {
 	data, err := c.Read(ctx, uint32(ams.GroupIoImageRisize), 0, 4)
 	if err != nil {
 		return 0, err
@@ -82,11 +82,11 @@ func (c *Client) ReadProcessInputSize(ctx context.Context) (uint32, error) {
 }
 
 // EXPERIMENTAL: ClearProcessInputs writes all input process image bytes to zero.
-func (c *Client) ClearProcessInputs(ctx context.Context) error {
+func (c *Conn) ClearProcessInputs(ctx context.Context) error {
 	return c.Write(ctx, uint32(ams.GroupIoImageCleari), 0, []byte{0})
 }
 
 // EXPERIMENTAL: ClearProcessOutputs writes all output process image bytes to zero.
-func (c *Client) ClearProcessOutputs(ctx context.Context) error {
+func (c *Conn) ClearProcessOutputs(ctx context.Context) error {
 	return c.Write(ctx, uint32(ams.GroupIoImageClearo), 0, []byte{0})
 }

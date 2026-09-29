@@ -66,10 +66,10 @@ func WithLocalBindIP(ip string) SessionOption {
 func WithLocalAMS(local ams.Address) SessionOption {
 	return func(s *Session) {
 		if local.NetID != [6]byte{} {
-			s.source.NetID = local.NetID
+			s.localAddr.NetID = local.NetID
 		}
 		if local.Port != 0 {
-			s.source.Port = local.Port
+			s.localAddr.Port = local.Port
 		}
 	}
 }

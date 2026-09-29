@@ -338,7 +338,7 @@ func (sess *Session) heartbeatWatch() {
 		// is the reconnect path's job, not ours. Without this the watcher spun at
 		// the heartbeat interval for the life of the process on any session whose
 		// client died while the FSM still said Connected.
-		if c := sess.client.Load(); c == nil || (c.ctx != nil && c.ctx.Err() != nil) {
+		if c := sess.client.Load(); c == nil || c.Err() != nil {
 			continue
 		}
 		sess.notifications.lock.Lock()
@@ -416,7 +416,7 @@ func (sess *Session) heartbeatWatch() {
 		escalate := func() bool {
 			frames := uint64(0)
 			if c := sess.client.Load(); c != nil {
-				frames = c.framesSeen()
+				frames = c.FramesSeen()
 			}
 			if frames != framesAtWindow {
 				framesAtWindow = frames

@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"errors"
@@ -25,3 +25,12 @@ var ErrRouterUnresponsive = errors.New("the PLC's AMS router answered nothing; i
 // another client on this host IP, a runtime restart, or the network path are the
 // candidates.
 var ErrEstablishedDropped = errors.New("established connection dropped by the PLC or the network")
+
+// ErrBatchAborted marks the items of a per-item fallback batch that were not
+// attempted because the transport failed partway through.
+var ErrBatchAborted = errors.New("batch transport failure")
+
+// BindClient builds an *adsclient.Client over a Session's current connection.
+// adsclient sets it in init, so the root package can hand out a Client without
+// adsclient exporting a constructor that takes an internal type.
+var BindClient func(current func() *Conn) any

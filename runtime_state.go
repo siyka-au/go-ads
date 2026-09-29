@@ -46,8 +46,8 @@ func (sess *Session) runtimeStateQuietly(ctx context.Context) (ams.State, error)
 	if c == nil {
 		return ams.StateInvalid, ErrTransportClosed
 	}
-	c.beginHandshake()
-	defer c.endHandshake()
+	c.BeginHandshake()
+	defer c.EndHandshake()
 	state, err := c.ReadStateOnPort(ctx, ams.PortSystemService)
 	if err != nil {
 		return ams.StateInvalid, err
@@ -150,7 +150,7 @@ func (sess *Session) startRuntimeStateWatch() {
 					continue
 				}
 				c := sess.client.Load()
-				if c == nil || (c.ctx != nil && c.ctx.Err() != nil) {
+				if c == nil || c.Err() != nil {
 					continue
 				}
 				// requestTimeout, not the tick period: a device answering slower than
@@ -164,9 +164,9 @@ func (sess *Session) startRuntimeStateWatch() {
 				// readStateOn logs a transport fault at Error in steady state, which
 				// is exactly the log-based health signal transportFaultLevel exists
 				// to protect.
-				c.beginHandshake()
+				c.BeginHandshake()
 				state, err := c.ReadStateOnPort(ctx, ams.PortSystemService)
-				c.endHandshake()
+				c.EndHandshake()
 				cancel()
 				if err != nil {
 					// Only an answer is evidence. A timeout is what a busy device or a

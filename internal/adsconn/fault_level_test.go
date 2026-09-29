@@ -1,4 +1,4 @@
-package ads
+package adsconn
 
 import (
 	"go/ast"
@@ -29,15 +29,15 @@ import (
 
 // TestTransportFaultLevel covers the switch itself.
 func TestTransportFaultLevel(t *testing.T) {
-	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: slog.Default()}
+	c := &Conn{tx: &Transport{}, dropped: make(chan struct{}), logger: slog.Default()}
 	if got := c.transportFaultLevel(); got != slog.LevelError {
 		t.Errorf("level outside a handshake = %v, want Error", got)
 	}
-	c.beginHandshake()
+	c.BeginHandshake()
 	if got := c.transportFaultLevel(); got != slog.LevelDebug {
 		t.Errorf("level during a handshake = %v, want Debug", got)
 	}
-	c.endHandshake()
+	c.EndHandshake()
 	if got := c.transportFaultLevel(); got != slog.LevelError {
 		t.Errorf("level after the handshake = %v, want Error", got)
 	}
@@ -49,15 +49,15 @@ func TestTransportFaultLevel(t *testing.T) {
 // flag the inner end clears the outer region and the rest of the cold start logs
 // its expected faults at ERROR — the bug this replaces.
 func TestTransportFaultLevel_Nests(t *testing.T) {
-	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: slog.Default()}
+	c := &Conn{tx: &Transport{}, dropped: make(chan struct{}), logger: slog.Default()}
 
-	c.beginHandshake() // outer: ensureRoute
-	c.beginHandshake() // inner: one awaitRouteActive attempt
-	c.endHandshake()   // inner done — the outer region is still open
+	c.BeginHandshake() // outer: ensureRoute
+	c.BeginHandshake() // inner: one awaitRouteActive attempt
+	c.EndHandshake()   // inner done — the outer region is still open
 	if got := c.transportFaultLevel(); got != slog.LevelDebug {
 		t.Errorf("level with the outer handshake still open = %v, want Debug", got)
 	}
-	c.endHandshake() // outer done
+	c.EndHandshake() // outer done
 	if got := c.transportFaultLevel(); got != slog.LevelError {
 		t.Errorf("level after both regions closed = %v, want Error", got)
 	}
@@ -68,13 +68,13 @@ func TestTransportFaultLevel_Nests(t *testing.T) {
 // then need two begins to demote again, so the next real cold start logs its
 // expected faults at ERROR.
 func TestTransportFaultLevel_ClampsOverRelease(t *testing.T) {
-	c := &Client{tx: &transport{}, dropped: make(chan struct{}), logger: slog.Default()}
+	c := &Conn{tx: &Transport{}, dropped: make(chan struct{}), logger: slog.Default()}
 
-	c.endHandshake() // stray release, e.g. a double-deferred cleanup
+	c.EndHandshake() // stray release, e.g. a double-deferred cleanup
 	if got := c.handshaking.Load(); got != 0 {
 		t.Errorf("handshake count after a stray release = %d, want 0", got)
 	}
-	c.beginHandshake()
+	c.BeginHandshake()
 	if got := c.transportFaultLevel(); got != slog.LevelDebug {
 		t.Errorf("level after clamp+begin = %v, want Debug — the clamp did not hold", got)
 	}
@@ -88,14 +88,13 @@ func TestHandshakeDropLogsBelowError(t *testing.T) {
 	defer srv.Stop()
 
 	logs := &testlog.Handler{}
-	c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, time.Second,
-		WithClientLogger(slog.New(logs)))
+	c, err := dialTest(srv.Host, srv.Port, ams.Address{}, ams.Address{}, time.Second, slog.New(logs))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
 	defer func() { _ = c.Close() }()
 
-	c.beginHandshake()
+	c.BeginHandshake()
 	// Answer nothing and drop the connection on the first request, the shape of
 	// a PLC rejecting an unrouted NetID mid-probe.
 	srv.DropConnAfter(ams.CommandRead, 1)
@@ -131,32 +130,32 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 		name string
 		arm  func(srv *fakeplc.PLC)
 		// provoke must fail; the error itself is not what is under test.
-		provoke func(t *testing.T, c *Client) error
+		provoke func(t *testing.T, c *Conn) error
 		// wantMsg is the gated log line this case reaches.
 		wantMsg string
 	}{
 		{
 			name:    "read request times out",
 			arm:     func(srv *fakeplc.PLC) { srv.DelayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), stall) },
-			provoke: func(t *testing.T, c *Client) error { _, err := c.GetSymbolVersion(t.Context()); return err },
+			provoke: func(t *testing.T, c *Conn) error { _, err := c.GetSymbolVersion(t.Context()); return err },
 			wantMsg: "send request failed",
 		},
 		{
 			name:    "write request times out",
 			arm:     func(srv *fakeplc.PLC) { srv.DelayBefore(ams.CommandWrite, 0x4020, stall) },
-			provoke: func(t *testing.T, c *Client) error { return c.Write(t.Context(), 0x4020, 0, []byte{1}) },
+			provoke: func(t *testing.T, c *Conn) error { return c.Write(t.Context(), 0x4020, 0, []byte{1}) },
 			wantMsg: "error during send request for write",
 		},
 		{
 			name:    "read state times out",
 			arm:     func(srv *fakeplc.PLC) { srv.DelayBefore(ams.CommandReadState, 0, stall) },
-			provoke: func(t *testing.T, c *Client) error { _, err := c.ReadState(t.Context()); return err },
+			provoke: func(t *testing.T, c *Conn) error { _, err := c.ReadState(t.Context()); return err },
 			wantMsg: "error during read state",
 		},
 		{
 			name:    "connection dropped mid-request",
 			arm:     func(srv *fakeplc.PLC) { srv.DropConnAfter(ams.CommandRead, 1) },
-			provoke: func(t *testing.T, c *Client) error { _, err := c.GetSymbolVersion(t.Context()); return err },
+			provoke: func(t *testing.T, c *Conn) error { _, err := c.GetSymbolVersion(t.Context()); return err },
 			wantMsg: "transport down",
 		},
 	}
@@ -174,15 +173,14 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 				defer srv.Stop()
 
 				logs := &testlog.Handler{}
-				c, err := Dial(srv.Host, srv.Port, ams.Address{}, ams.Address{}, clientTimeout,
-					WithClientLogger(slog.New(logs)))
+				c, err := dialTest(srv.Host, srv.Port, ams.Address{}, ams.Address{}, clientTimeout, slog.New(logs))
 				if err != nil {
 					t.Fatalf("Dial: %v", err)
 				}
 				defer func() { _ = c.Close() }()
 
 				if inHandshake {
-					c.beginHandshake()
+					c.BeginHandshake()
 				}
 				tc.arm(srv)
 				if err := tc.provoke(t, c); err == nil {
