@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -506,9 +508,9 @@ func (sess *Session) filterValidPending(entries []pendingNotification) []pending
 	valid := make([]pendingNotification, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Config.SymbolName
-		if _, exists := sess.cache.symbols[symbolKey(name)]; exists {
+		if _, exists := sess.cache.symbols[symtab.Key(name)]; exists {
 			valid = append(valid, entry)
-		} else if _, onDemand := sess.cache.onDemandSymbols[symbolKey(name)]; onDemand {
+		} else if _, onDemand := sess.cache.onDemandSymbols[symtab.Key(name)]; onDemand {
 			valid = append(valid, entry)
 		} else {
 			sess.logger.Warn("notification symbol gone after reconnect, dropping subscription",

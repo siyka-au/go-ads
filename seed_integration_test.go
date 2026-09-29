@@ -181,7 +181,7 @@ func seedScalars(s uint32) map[string]any {
 		"fRealVar":        float32(s),
 		"fLrealVar":       float64(s),
 		"tTimeVar":        time.Duration(s) * time.Millisecond,
-		"tdTimeOfDayVar":  civilTimeOfDuration(time.Duration(int64(s)%msPerDay) * time.Millisecond),
+		"tdTimeOfDayVar":  civilTimeOfDuration(time.Duration(int64(s)%int64(24*time.Hour/time.Millisecond)) * time.Millisecond),
 		"dDateVar":        civil.DateOf(time.Unix(int64(s), 0).UTC()), // UDINT_TO_DATE keeps the day
 		"dtDateTimeVar":   civil.DateTimeOf(time.Unix(int64(s), 0).UTC()),
 		"tLtimeVar":       time.Duration(s),

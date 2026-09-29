@@ -1,6 +1,9 @@
-package ads
+package symtab
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -12,7 +15,7 @@ import (
 // TwinCAT treats symbol names case-insensitively (IEC 61131-3).
 // TC2 returns uppercase, TC3 preserves original casing — lowercasing
 // ensures consistent lookups regardless of caller or PLC casing.
-func symbolKey(name string) string { return strings.ToLower(name) }
+func Key(name string) string { return strings.ToLower(name) }
 
 // normalizeStringDataType strips trailing array/length suffixes from STRING
 // and WSTRING type names. The PLC reports types like "STRING(80)" or
@@ -38,7 +41,7 @@ func normalizeStringDataType(dt string) string {
 // lock. Value, Valid, ValueParsed and LastUpdateTime are guarded by cache.lock, as
 // is Handle -- zeroed on reload, and an observed zero simply fails the next PLC
 // call and prompts a re-resolve. Parent/Children form a tree fixed at discovery.
-type symbol struct {
+type Symbol struct {
 	FullName       string
 	LastUpdateTime time.Time
 	Name           string
@@ -60,8 +63,8 @@ type symbol struct {
 	// from the start of the parent, not bytes.
 	BitMember bool
 
-	Parent   *symbol
-	Children map[string]*symbol
+	Parent   *Symbol
+	Children map[string]*Symbol
 
 	// The session's logger, stamped on as the symbol enters the cache; nil falls
 	// back to the package default. Carried here rather than threaded through
@@ -81,7 +84,7 @@ type symbol struct {
 	// SymbolView.BaseTypeName. Same reasoning as inferenceWarned: the condition is
 	// a static property of the symbol, so repeating it per call says nothing — and
 	// a consumer may call BaseTypeName once per sample.
-	baseTypeWarned bool
+	BaseTypeWarned bool
 }
 
 // warnInferenceOnce logs the base-type inference warning the first time it
@@ -91,7 +94,7 @@ type symbol struct {
 // improvements.md), so this field has the same protection every other field on
 // symbol has. If that ever changes, this becomes a race — and a benign one, since
 // the worst outcome is a duplicate warning.
-func (s *symbol) warnInferenceOnce(msg string, args ...any) {
+func (s *Symbol) warnInferenceOnce(msg string, args ...any) {
 	if s.inferenceWarned {
 		return
 	}
@@ -101,7 +104,7 @@ func (s *symbol) warnInferenceOnce(msg string, args ...any) {
 
 // log returns the logger records about this symbol belong on: the session's if
 // the symbol came from one, the package default otherwise.
-func (s *symbol) log() *slog.Logger {
+func (s *Symbol) log() *slog.Logger {
 	if s == nil || s.logger == nil {
 		return slog.Default()
 	}
@@ -115,26 +118,82 @@ func (s *symbol) log() *slog.Logger {
 // only place that knows both the tree and the logger. Depth-bounded for the same
 // reason collectSubtreeDepth is: a malformed PLC response can present a cycle,
 // and a stack overflow is a worse outcome than an unstamped subtree.
-func stampLogger(s *symbol, lg *slog.Logger, depth int) {
-	if s == nil || lg == nil || depth >= collectSubtreeMaxDepth {
+func StampLogger(s *Symbol, lg *slog.Logger, depth int) {
+	if s == nil || lg == nil || depth >= maxTreeDepth {
 		return
 	}
 	s.logger = lg
 	for _, child := range s.Children {
-		stampLogger(child, lg, depth+1)
+		StampLogger(child, lg, depth+1)
 	}
 }
 
 // stampLoggerOnAll stamps a whole symbol map, for the bulk cache swaps.
-func stampLoggerOnAll(symbols map[string]*symbol, lg *slog.Logger) {
+func StampLoggerOnAll(symbols map[string]*Symbol, lg *slog.Logger) {
 	for _, s := range symbols {
-		stampLogger(s, lg, 0)
+		StampLogger(s, lg, 0)
 	}
 }
 
 // invalidate drops the cached value so the next read goes to the PLC. Caller
 // holds cache.lock.
-func (s *symbol) invalidate() {
+func (s *Symbol) Invalidate() {
 	s.Value = nil
 	s.ValueParsed = false
 }
+
+// ParseSymbolInfo decodes a GroupSymbolInfoByNameEx response: a symbolEntry
+// header followed by the NUL-terminated name, type and comment.
+func ParseSymbolInfo(resp []byte) (ams.SymbolInfo, error) {
+	buff := bytes.NewBuffer(resp)
+	entry := SymbolEntry{}
+	if err := binary.Read(buff, binary.LittleEndian, &entry); err != nil {
+		return ams.SymbolInfo{}, fmt.Errorf("parse symbol entry: %w", err)
+	}
+	name := make([]byte, entry.NameLength)
+	if err := binary.Read(buff, binary.LittleEndian, name); err != nil {
+		return ams.SymbolInfo{}, fmt.Errorf("read symbol name: %w", err)
+	}
+	buff.Next(1) // null terminator
+	dt := make([]byte, entry.TypeLength)
+	if err := binary.Read(buff, binary.LittleEndian, dt); err != nil {
+		return ams.SymbolInfo{}, fmt.Errorf("read symbol type: %w", err)
+	}
+	buff.Next(1) // null terminator
+	comment := make([]byte, entry.CommentLength)
+	if err := binary.Read(buff, binary.LittleEndian, comment); err != nil {
+		return ams.SymbolInfo{}, fmt.Errorf("read symbol comment: %w", err)
+	}
+	return ams.SymbolInfo{
+		Name:     string(name), // PLC-returned casing (authoritative)
+		DataType: string(dt),
+		Comment:  string(comment),
+		Group:    ams.Group(entry.IGroup),
+		Offset:   entry.IOffs,
+		Length:   entry.Size,
+		BaseType: ams.DataType(entry.DataType),
+		Flags:    ams.SymbolFlag(entry.Flags),
+	}, nil
+}
+
+// FromInfo builds a symbol from a single-name lookup. It has no children:
+// struct and array members need the full symbol and data type tables.
+func FromInfo(info ams.SymbolInfo) *Symbol {
+	return &Symbol{
+		FullName:       info.Name,
+		Name:           info.Name,
+		DataType:       normalizeStringDataType(info.DataType),
+		Comment:        info.Comment,
+		Group:          uint32(info.Group),
+		Offset:         info.Offset,
+		Length:         info.Length,
+		BaseType:       info.BaseType,
+		Flags:          info.Flags,
+		ContextMask:    info.Flags.ContextMask(),
+		LastUpdateTime: time.Now(),
+	}
+}
+
+// maxTreeDepth caps recursion over a symbol tree, as a defense against a
+// malformed or self-referential PLC response.
+const maxTreeDepth = 256

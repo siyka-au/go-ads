@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -706,6 +708,19 @@ func buildSumDeleteNotifPayload(codes []ams.ReturnCode) []byte {
 // buildSymbolInfoPayload encodes a GetSymbolInfoByName response: symbolEntry
 // struct followed by name+0, datatype+0, comment+0.
 func buildSymbolInfoPayload(name, dataType, comment string, group, offset, size uint32, baseType ams.DataType, flags ams.SymbolFlag) []byte {
+	// The wire layout, spelled out here so the fake checks the parser against
+	// the protocol rather than against the parser's own struct.
+	type symbolEntry struct {
+		EntryLength   uint32
+		IGroup        uint32
+		IOffs         uint32
+		Size          uint32
+		DataType      uint32
+		Flags         uint32
+		NameLength    uint16
+		TypeLength    uint16
+		CommentLength uint16
+	}
 	entry := symbolEntry{
 		IGroup:        group,
 		IOffs:         offset,
@@ -841,7 +856,7 @@ func newWiredTestSession(t *testing.T, srv *scriptableServer, opts ...SessionOpt
 
 	sess := &Session{
 		tx:            c.tx,
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		lifecycle:     &sessionLifecycle{closedCh: make(chan struct{})},
 		logger:        slog.Default(),

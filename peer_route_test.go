@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -94,7 +96,7 @@ func TestPeerRoute_DisabledStillFailsClearly(t *testing.T) {
 	// Its own port, not the protocol default: this test used to bind
 	// 0.0.0.0:48898 — the host's real AMS port — as a side effect.
 	fallbackPort := freeLocalPort(t)
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess, err := NewSession(context.Background(),
 		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(300*time.Millisecond),
@@ -123,7 +125,7 @@ func TestPeerRoute_DisabledStillFailsClearly(t *testing.T) {
 	// Evidence is the bind log line, not a surviving sess.peerLn: a failed Connect
 	// releases the listener now (see the defer in Connect), so the live field says
 	// nothing about whether the fallback ran.
-	if rec := logs.findByMessage("listening for inbound PLC connections"); rec == nil {
+	if rec := logs.FindByMessage("listening for inbound PLC connections"); rec == nil {
 		t.Error("no listener was ever bound: the fallback did not run, so this test would pass with it deleted")
 	}
 	if !strings.Contains(err.Error(), "answered neither GetSymbolVersion nor ReadState") {
@@ -253,9 +255,9 @@ func TestPeerRoute_HealthyDeviceDropsTheRememberedHost(t *testing.T) {
 	if perr := protocolPortIsBindable(t); perr != nil {
 		t.Skipf("port %d unavailable on this host (%v); the pre-bind cannot be observed", amsPeerListenPort, perr)
 	}
-	connect := func(t *testing.T) (*Session, *testLogHandler) {
+	connect := func(t *testing.T) (*Session, *testlog.Handler) {
 		t.Helper()
-		logs := &testLogHandler{}
+		logs := &testlog.Handler{}
 		sess, err := NewSession(context.Background(),
 			AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 			WithRequestTimeout(500*time.Millisecond),
@@ -277,7 +279,7 @@ func TestPeerRoute_HealthyDeviceDropsTheRememberedHost(t *testing.T) {
 	first, firstLogs := connect(t)
 	// The seeded entry must actually have cost this session a bound port, or the
 	// assertion below would hold with the whole mechanism deleted.
-	if firstLogs.findByMessage("device is known to answer on its own connection") == nil {
+	if firstLogs.FindByMessage("device is known to answer on its own connection") == nil {
 		t.Fatal("the seeded entry was never acted on, so this test proves nothing about invalidating it")
 	}
 	if isKnownPeerRouteHost(key) {
@@ -358,7 +360,7 @@ func TestPeerRoute_AutomaticFallback(t *testing.T) {
 	})
 	srv.answerViaPeerConnection(localAddr(amsPeerListenPort))
 
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess, err := NewSession(context.Background(),
 		AMSEndpoint{IP: srv.host, Port: srv.port, AMS: ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851}},
 		WithRequestTimeout(500*time.Millisecond),
@@ -376,8 +378,8 @@ func TestPeerRoute_AutomaticFallback(t *testing.T) {
 		skipIfPortTaken(t, err)
 		t.Fatalf("Connect did not fall back to listening: %v", err)
 	}
-	if rec := logs.findByMessage("answers on a connection it opens to us"); rec == nil {
-		if logs.findByMessage("address already in use") != nil {
+	if rec := logs.FindByMessage("answers on a connection it opens to us"); rec == nil {
+		if logs.FindByMessage("address already in use") != nil {
 			t.Skip("the protocol port was taken mid-test by something else in this binary")
 		}
 		t.Error("no log line telling the operator the fallback was used")

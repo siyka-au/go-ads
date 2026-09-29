@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -33,7 +35,7 @@ func (sess *Session) writeValueRetry(ctx context.Context, symbolName string, val
 	handle := symbol.Handle
 	sess.cache.lock.Unlock()
 
-	data, err := symbol.encode(value, datatypes)
+	data, err := symbol.Encode(value, datatypes)
 	if err != nil {
 		return fmt.Errorf("write to %q: %w", symbolName, err)
 	}
@@ -60,8 +62,8 @@ func (sess *Session) writeValueRetry(ctx context.Context, symbolName string, val
 	// the Write roundtrip. writeValuesRetry uses the same pattern at the
 	// per-item commit site; symmetric here.
 	sess.cache.lock.Lock()
-	if live := sess.cache.symbols[symbolKey(symbolName)]; live != nil {
-		live.invalidate()
+	if live := sess.cache.symbols[symtab.Key(symbolName)]; live != nil {
+		live.Invalidate()
 	}
 	sess.cache.lock.Unlock()
 
@@ -129,11 +131,11 @@ func (sess *Session) readValueRetry(ctx context.Context, symbolName string, retr
 	// decode() mutates symbol fields (Value, Valid, etc.) so it must
 	// run under lock to avoid racing with handleNotification.
 	sess.cache.lock.Lock()
-	if _, err := symbol.decode(data, 0, datatypes); err != nil {
+	if _, err := symbol.Decode(data, 0, datatypes); err != nil {
 		sess.cache.lock.Unlock()
 		return nil, fmt.Errorf("read %q: decode failed: %w", symbolName, err)
 	}
-	value := copyData(symbol.Value)
+	value := symtab.CopyValue(symbol.Value)
 	sess.cache.lock.Unlock()
 
 	sess.logger.Log(context.Background(), LevelTrace, "Read from symbol",
@@ -148,7 +150,7 @@ func (sess *Session) readValueRetry(ctx context.Context, symbolName string, retr
 // groups does not work inside sum reads on some TwinCAT versions even with correct
 // offsets; falls back to direct when no handle exists yet. Caller MUST hold
 // cache.lock -- it reads sym.Handle.
-func symbolSumAddress(sym *symbol) (group, offset uint32) {
+func symbolSumAddress(sym *symtab.Symbol) (group, offset uint32) {
 	if sym.Handle != 0 {
 		return uint32(ams.GroupSymbolValueByHandle), sym.Handle
 	}
@@ -183,7 +185,7 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 	// Resolve symbols and build SumRead requests
 	type symbolInfo struct {
 		name   string
-		symbol *symbol
+		symbol *symtab.Symbol
 	}
 	var infos []symbolInfo
 	var requests []ams.SumReadRequest
@@ -267,14 +269,14 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 		// loadSymbols swapped the cache during the SumRead roundtrip. Parse
 		// + Value mutation must target the live entry, otherwise
 		// ReadValue serves a stale value while decode silently writes the orphan.
-		live := sess.cache.symbols[symbolKey(infos[i].name)]
+		live := sess.cache.symbols[symtab.Key(infos[i].name)]
 		if live == nil {
 			sess.logger.Warn("batch read result for symbol no longer in cache; skipping",
 				"symbol", infos[i].name)
 			failed = append(failed, BatchItemError{Symbol: infos[i].name, Skipped: ErrBatchSymbolVanished})
 			continue
 		}
-		value, err := live.decode(result.Data, 0, sess.cache.datatypes)
+		value, err := live.Decode(result.Data, 0, sess.cache.datatypes)
 		if err != nil {
 			sess.logger.Error("error parsing symbol in batch read", "error", err, "symbol", infos[i].name)
 			failed = append(failed, BatchItemError{
@@ -283,7 +285,7 @@ func (sess *Session) readValuesRetry(ctx context.Context, names []string, retrie
 			})
 			continue
 		}
-		values[infos[i].name] = copyData(value)
+		values[infos[i].name] = symtab.CopyValue(value)
 	}
 
 	// Fewer results than requests: the tail has no verdict at all, which is
@@ -323,7 +325,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 
 	type symbolInfo struct {
 		name   string
-		symbol *symbol
+		symbol *symtab.Symbol
 	}
 	var infos []symbolInfo
 	var requests []ams.SumWriteRequest
@@ -344,7 +346,7 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 			continue
 		}
 
-		data, err := symbol.encode(value, datatypes)
+		data, err := symbol.Encode(value, datatypes)
 		if err != nil {
 			sess.logger.Error("error serializing symbol for batch write", "error", err, "symbol", name)
 			failed = append(failed, BatchItemError{
@@ -409,8 +411,8 @@ func (sess *Session) writeValuesRetry(ctx context.Context, values map[string]any
 		// loadSymbols swapped during the SumWrite roundtrip; clearing the
 		// orphan would leave the live entry showing stale Value.
 		if result.Error == ams.ReturnCodeNoErrors {
-			if live := sess.cache.symbols[symbolKey(infos[i].name)]; live != nil {
-				live.invalidate()
+			if live := sess.cache.symbols[symtab.Key(infos[i].name)]; live != nil {
+				live.Invalidate()
 			}
 		}
 	}

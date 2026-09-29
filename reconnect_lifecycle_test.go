@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
 )
@@ -73,7 +75,7 @@ func newDialableTestSession(t *testing.T, host string, port int, maxAttempts int
 			activeRequests: map[uint32]chan amsReply{},
 		},
 		notifications: newTestNotificationManager(),
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		// Production always has one; ensureRoute dereferences it unconditionally.
 		route:          &routeManager{},
 		logger:         slog.Default(),
@@ -337,7 +339,7 @@ func TestReconnect_FailedHandleReleaseIsRetried(t *testing.T) {
 	})
 
 	sess.notifications.lock.Lock()
-	sym := &symbol{FullName: "MAIN.retryrelease", Name: "MAIN.retryrelease", DataType: "INT", Length: 2, Handle: 0xE400}
+	sym := &symtab.Symbol{FullName: "MAIN.retryrelease", Name: "MAIN.retryrelease", DataType: "INT", Length: 2, Handle: 0xE400}
 	sess.notifications.activeNotifications[0xBE01] = activeNotification{Sym: sym, Ch: make(chan *Update, 1)}
 	sess.notifications.lock.Unlock()
 
@@ -389,7 +391,7 @@ func TestReconnect_HandleReleaseRetryIsBounded(t *testing.T) {
 	})
 
 	sess.notifications.lock.Lock()
-	sym := &symbol{FullName: "MAIN.bounded", Name: "MAIN.bounded", DataType: "INT", Length: 2, Handle: 0xE500}
+	sym := &symtab.Symbol{FullName: "MAIN.bounded", Name: "MAIN.bounded", DataType: "INT", Length: 2, Handle: 0xE500}
 	sess.notifications.activeNotifications[0xBE02] = activeNotification{Sym: sym, Ch: make(chan *Update, 1)}
 	sess.notifications.lock.Unlock()
 	sess.cache.lock.Lock()
@@ -458,7 +460,7 @@ func TestReconnect_PreReconnectHandlesReleasedWhenTransportIsUp(t *testing.T) {
 
 	// A subscription for Reconnect to snapshot.
 	sess.notifications.lock.Lock()
-	sym := &symbol{FullName: "MAIN.flap", Name: "MAIN.flap", DataType: "INT", Length: 2, Handle: 0xE200}
+	sym := &symtab.Symbol{FullName: "MAIN.flap", Name: "MAIN.flap", DataType: "INT", Length: 2, Handle: 0xE200}
 	sess.notifications.activeNotifications[0xBEEF] = activeNotification{Sym: sym, Ch: make(chan *Update, 1)}
 	sess.notifications.lock.Unlock()
 

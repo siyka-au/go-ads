@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -111,7 +113,7 @@ func (c *Client) DownloadInChunks(ctx context.Context, group uint32, totalLength
 // populated symbol with Group, Offset, Length, DataType, etc. Does NOT
 // populate Children (struct / array children require full discovery via
 // LoadSymbols / LoadSymbolList + LoadDataTypes). This is a raw RPC and bypasses the symbol cache; the caller is responsible for decoding the response.
-func (c *Client) GetSymbolInfoByName(ctx context.Context, symbolName string) (*symbol, error) {
+func (c *Client) GetSymbolInfoByName(ctx context.Context, symbolName string) (ams.SymbolInfo, error) {
 	resp, err := c.WriteRead(
 		ctx,
 		uint32(ams.GroupSymbolInfoByNameEx),
@@ -120,42 +122,13 @@ func (c *Client) GetSymbolInfoByName(ctx context.Context, symbolName string) (*s
 		append([]byte(symbolName), 0),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("GetSymbolInfoByName(%s) failed: %w", symbolName, err)
+		return ams.SymbolInfo{}, fmt.Errorf("GetSymbolInfoByName(%s) failed: %w", symbolName, err)
 	}
-	buff := bytes.NewBuffer(resp)
-	entry := symbolEntry{}
-	if err := binary.Read(buff, binary.LittleEndian, &entry); err != nil {
-		return nil, fmt.Errorf("failed to parse symbol entry for %s: %w", symbolName, err)
+	info, err := symtab.ParseSymbolInfo(resp)
+	if err != nil {
+		return ams.SymbolInfo{}, fmt.Errorf("symbol info for %s: %w", symbolName, err)
 	}
-	name := make([]byte, entry.NameLength)
-	if err := binary.Read(buff, binary.LittleEndian, name); err != nil {
-		return nil, fmt.Errorf("reading symbol name for %s: %w", symbolName, err)
-	}
-	buff.Next(1) // null terminator
-	dt := make([]byte, entry.TypeLength)
-	if err := binary.Read(buff, binary.LittleEndian, dt); err != nil {
-		return nil, fmt.Errorf("reading symbol type for %s: %w", symbolName, err)
-	}
-	buff.Next(1) // null terminator
-	comment := make([]byte, entry.CommentLength)
-	if err := binary.Read(buff, binary.LittleEndian, comment); err != nil {
-		return nil, fmt.Errorf("reading symbol comment for %s: %w", symbolName, err)
-	}
-	dataType := normalizeStringDataType(string(dt))
-	flags := ams.SymbolFlag(entry.Flags)
-	return &symbol{
-		FullName:       string(name), // PLC-returned casing (authoritative)
-		Name:           string(name),
-		DataType:       dataType,
-		Comment:        string(comment),
-		Group:          entry.IGroup,
-		Offset:         entry.IOffs,
-		Length:         entry.Size,
-		BaseType:       ams.DataType(entry.DataType),
-		Flags:          flags,
-		ContextMask:    flags.ContextMask(),
-		LastUpdateTime: time.Now(),
-	}, nil
+	return info, nil
 }
 
 // GetHandleByName resolves a symbol name to its PLC-side handle. Wire RPC;

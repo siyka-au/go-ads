@@ -15,6 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -27,7 +31,7 @@ import (
 // Validates: R-CACHE-004.
 func TestZeroOldSymbolHandles(t *testing.T) {
 	t0 := time.Now()
-	oldMap := map[string]*symbol{
+	oldMap := map[string]*symtab.Symbol{
 		"a": {
 			Name:           "a",
 			Handle:         0x1234,
@@ -52,7 +56,7 @@ func TestZeroOldSymbolHandles(t *testing.T) {
 
 	zeroOldSymbolHandles(oldMap)
 
-	for _, p := range []*symbol{pa, pb, pc} {
+	for _, p := range []*symtab.Symbol{pa, pb, pc} {
 		if p.Handle != 0 {
 			t.Errorf("%s.Handle = 0x%X, want 0", p.Name, p.Handle)
 		}
@@ -80,10 +84,10 @@ func TestZeroOldSymbolHandles(t *testing.T) {
 // Validates: R-CACHE-004 (defensive).
 func TestZeroOldSymbolHandles_NilSafe(t *testing.T) {
 	zeroOldSymbolHandles(nil)
-	zeroOldSymbolHandles(map[string]*symbol{})
+	zeroOldSymbolHandles(map[string]*symtab.Symbol{})
 
-	sym := &symbol{Handle: 7, Value: int16(1), Valid: true, ValueParsed: true, LastUpdateTime: time.Now()}
-	zeroOldSymbolHandles(map[string]*symbol{"gone": nil, "MAIN.x": sym})
+	sym := &symtab.Symbol{Handle: 7, Value: int16(1), Valid: true, ValueParsed: true, LastUpdateTime: time.Now()}
+	zeroOldSymbolHandles(map[string]*symtab.Symbol{"gone": nil, "MAIN.x": sym})
 	if sym.Handle != 0 || sym.Value != nil || sym.Valid || sym.ValueParsed || !sym.LastUpdateTime.IsZero() {
 		t.Errorf("stale symbol not fully zeroed: %+v", sym)
 	}
@@ -162,7 +166,7 @@ func TestNewSession_OptionsApplied(t *testing.T) {
 //
 // Validates: R-SES-006 (option apply-time validation).
 func TestSession_OptionValidation_NoOpOnZeroValues(t *testing.T) {
-	customLogger := slog.New(&testLogHandler{})
+	customLogger := slog.New(&testlog.Handler{})
 	// Apply real options first via NewSession; then re-construct with
 	// zero-valued options and assert they did NOT clobber the default.
 	defaultBackoff := DefaultBackoffConfig()
@@ -300,7 +304,7 @@ func TestSession_OnDisconnectFiresOnceOnConcurrentTrigger(t *testing.T) {
 	sess := &Session{
 		tx:            &transport{},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:      make(chan struct{}),
@@ -502,8 +506,8 @@ func TestSession_TryRecordReloadAttempt_SlidingWindow(t *testing.T) {
 func TestSession_MarkAllHandlesStale(t *testing.T) {
 	sess := newTestConnection()
 	defer sess.lifecycle.shutdown()
-	sess.notifications.activeNotifications[42] = activeNotification{Sym: &symbol{}}
-	sess.notifications.activeNotifications[99] = activeNotification{Sym: &symbol{}}
+	sess.notifications.activeNotifications[42] = activeNotification{Sym: &symtab.Symbol{}}
+	sess.notifications.activeNotifications[99] = activeNotification{Sym: &symtab.Symbol{}}
 
 	sess.markAllHandlesStale(ReasonReloadInProgress)
 
@@ -699,7 +703,7 @@ func TestSession_ReadFromSymbol_LengthMismatchTriggersDetection(t *testing.T) {
 	// network. This emulates the post-online-change state where the cache
 	// still holds the pre-change type metadata.
 	const symName = "MAIN_DP1.nProbeA"
-	sess.cache.symbols[symbolKey(symName)] = &symbol{
+	sess.cache.symbols[symtab.Key(symName)] = &symtab.Symbol{
 		FullName: symName,
 		Name:     symName,
 		Handle:   fakeHandle,
@@ -792,7 +796,7 @@ func TestReleasePLCResources_NotificationCleanup(t *testing.T) {
 
 	sess, _ := newWiredTestSession(t, srv)
 	sess.notifications.lock.Lock()
-	sess.notifications.activeNotifications[stagedHandle] = activeNotification{Sym: &symbol{FullName: "MAIN.x"}}
+	sess.notifications.activeNotifications[stagedHandle] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.x"}}
 	sess.notifications.lock.Unlock()
 
 	sess.releasePLCResources(false)
@@ -821,7 +825,7 @@ func TestReleasePLCResources_SymbolHandleRelease_SkippedWhenDisconnected(t *test
 
 	sess, _ := newWiredTestSession(t, srv)
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey("MAIN.x")] = &symbol{
+	sess.cache.symbols[symtab.Key("MAIN.x")] = &symtab.Symbol{
 		FullName: "MAIN.x", Name: "MAIN.x", Handle: 0x12345678,
 	}
 	sess.cache.lock.Unlock()
@@ -849,7 +853,7 @@ func TestReleasePLCResources_SymbolHandleRelease_FiredWhenConnected(t *testing.T
 
 	sess, _ := newWiredTestSession(t, srv)
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey("MAIN.x")] = &symbol{
+	sess.cache.symbols[symtab.Key("MAIN.x")] = &symtab.Symbol{
 		FullName: "MAIN.x", Name: "MAIN.x", Handle: stagedHandle,
 	}
 	sess.cache.lock.Unlock()
@@ -997,8 +1001,8 @@ func TestAutoReload_DeletesOldHandlesBeforeResubscribe(t *testing.T) {
 
 	sess, _ := newWiredTestSession(t, srv)
 	sess.notifications.lock.Lock()
-	sess.notifications.activeNotifications[0xA1A1] = activeNotification{Sym: &symbol{FullName: "MAIN.x"}, Ch: nil}
-	sess.notifications.activeNotifications[0xB2B2] = activeNotification{Sym: &symbol{FullName: "MAIN.y"}, Ch: nil}
+	sess.notifications.activeNotifications[0xA1A1] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.x"}, Ch: nil}
+	sess.notifications.activeNotifications[0xB2B2] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.y"}, Ch: nil}
 	sess.notifications.lock.Unlock()
 
 	// LoadSymbols is expected to fail (no upload-info handler registered).
@@ -1139,12 +1143,12 @@ func TestReadFromSymbol_SymbolNotFoundReResolvesTheCachedHandle(t *testing.T) {
 	sess.maxReloadAttempts = 3
 	sess.reloadWindow = 60 * time.Second
 
-	sym := &symbol{
+	sym := &symtab.Symbol{
 		Name: "MAIN.a", FullName: "MAIN.a", DataType: "INT",
 		Length: 2, Handle: staleHandle, Value: int16(1), Valid: true,
 	}
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey("MAIN.a")] = sym
+	sess.cache.symbols[symtab.Key("MAIN.a")] = sym
 	sess.cache.lock.Unlock()
 
 	ctx := context.Background()

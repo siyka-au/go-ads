@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -25,7 +27,7 @@ func TestDroppedDoesNotDiscardArrivedReply(t *testing.T) {
 		srv.answerThenClose(ams.CommandRead, 1)
 
 		c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, 2*time.Second,
-			WithClientLogger(slog.New(&testLogHandler{})))
+			WithClientLogger(slog.New(&testlog.Handler{})))
 		if err != nil {
 			t.Fatalf("Dial: %v", err)
 		}

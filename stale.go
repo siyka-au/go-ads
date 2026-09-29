@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -224,7 +226,7 @@ func (sess *Session) reloadSymbols() error {
 		for k, v := range sess.cache.onDemandSymbols {
 			oldSymbols[k] = v
 		}
-		sess.cache.symbols = make(map[string]*symbol)
+		sess.cache.symbols = make(map[string]*symtab.Symbol)
 		sess.bumpEpoch()
 		sess.cache.lock.Unlock()
 

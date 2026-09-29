@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -183,7 +185,7 @@ func (sess *Session) AddSymbolNotification(ctx context.Context, symbolName strin
 	// THIRD loadSymbols could run between cache.lock release and notifications.lock
 	// acquire and re-strand `fresh`.
 	sess.cache.lock.Lock()
-	fresh := sess.cache.symbols[symbolKey(symbolName)]
+	fresh := sess.cache.symbols[symtab.Key(symbolName)]
 	cacheGen := sess.epoch()
 	sess.cache.lock.Unlock()
 	if fresh == nil {
@@ -279,14 +281,14 @@ func (sess *Session) AddSymbolNotifications(ctx context.Context, configs []Notif
 	type symbolInfo struct {
 		configIndex int // index into configs/results
 		config      NotificationConfig
-		symbol      *symbol
+		symbol      *symtab.Symbol
 	}
 	var infos []symbolInfo
 	var requests []ams.SumNotificationRequest
 	batchSeen := make(map[string]struct{}, len(configs))
 
 	for i, cfg := range configs {
-		key := symbolKey(cfg.SymbolName)
+		key := symtab.Key(cfg.SymbolName)
 		if _, dup := existing[key]; dup {
 			results[i].Skipped = fmt.Errorf("symbol %q: %w", cfg.SymbolName, ErrNotificationDuplicate)
 			sess.logger.Warn("duplicate notification rejected (already subscribed)", "symbol", cfg.SymbolName)
@@ -534,7 +536,7 @@ func (sess *Session) commitNotification(cfg NotificationConfig, handle uint32, c
 	// PLC round-trip may have been stranded by a concurrent loadSymbols /
 	// online-change reload that swapped cache.symbols.
 	sess.cache.lock.Lock()
-	fresh := sess.cache.symbols[symbolKey(cfg.SymbolName)]
+	fresh := sess.cache.symbols[symtab.Key(cfg.SymbolName)]
 	sess.cache.lock.Unlock()
 
 	sess.notifications.lock.Lock()
@@ -575,7 +577,7 @@ func (sess *Session) commitNotification(cfg NotificationConfig, handle uint32, c
 // removeNotificationConfig removes the first config matching symbolName.
 // Must be called with notifications.lock held.
 func (sess *Session) removeNotificationConfig(symbolName string) {
-	key := symbolKey(symbolName)
+	key := symtab.Key(symbolName)
 	if _, ok := sess.notifications.configsByKey[key]; !ok {
 		return
 	}

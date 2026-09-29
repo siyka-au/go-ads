@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -263,7 +265,7 @@ func TestLogDropVerdict_CarriesTheLocalPortAndFrameCounts(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess := newDialableTestSession(t, srv.host, srv.port, 0)
 	sess.logger = slog.New(logs)
 	if err := sess.dialAndStart(); err != nil {
@@ -278,14 +280,14 @@ func TestLogDropVerdict_CarriesTheLocalPortAndFrameCounts(t *testing.T) {
 	}
 	c.logDropVerdict(io.EOF)
 
-	rec := logs.findByMessage("transport down")
+	rec := logs.FindByMessage("transport down")
 	if rec == nil {
 		t.Fatal(`no drop record containing "transport down" — the AST guard and two message-matching tests depend on that substring`)
 	}
-	if !rec.hasAttr("localPort") {
+	if !rec.HasAttr("localPort") {
 		t.Error("the drop line carries no localPort: a packet capture cannot be correlated after the fact")
 	}
-	if !rec.hasAttr("framesPrimary") || !rec.hasAttr("framesPeer") {
+	if !rec.HasAttr("framesPrimary") || !rec.HasAttr("framesPeer") {
 		t.Error("the drop line carries no frame counts: the verdict cannot be checked from the log")
 	}
 }
@@ -294,7 +296,7 @@ func TestLogDropVerdict_CarriesTheLocalPortAndFrameCounts(t *testing.T) {
 // split. A connection that carried frames was being served, so the route is the
 // wrong thing to send the reader after.
 func TestLogDropVerdict_EstablishedDropDoesNotBlameTheRoute(t *testing.T) {
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	var c Client
 	c.logger = slog.New(logs)
 	c.ctx = context.Background()
@@ -303,17 +305,17 @@ func TestLogDropVerdict_EstablishedDropDoesNotBlameTheRoute(t *testing.T) {
 
 	c.logDropVerdict(io.EOF)
 
-	rec := logs.findByMessage("PLC dropped an established connection, transport down")
+	rec := logs.FindByMessage("PLC dropped an established connection, transport down")
 	if rec == nil {
 		t.Fatal("an established drop was not reported as one")
 	}
-	if hint := rec.attr("hint"); hint == "" {
+	if hint := rec.Attr("hint"); hint == "" {
 		t.Fatal("the established-drop line carries no hint")
 	}
-	if got := rec.attr("hint"); !strings.Contains(got, "per-host TCP slot") {
+	if got := rec.Attr("hint"); !strings.Contains(got, "per-host TCP slot") {
 		t.Errorf("the established-drop hint does not name eviction, which is the top suspect: %q", got)
 	}
-	if logs.findByMessage("PLC closed connection, transport down") != nil {
+	if logs.FindByMessage("PLC closed connection, transport down") != nil {
 		t.Error("an established drop also produced the route-suspect line")
 	}
 }
@@ -482,7 +484,7 @@ func TestNextFlapCount_MetronomeEscalates(t *testing.T) {
 // allowlist, so the level is what makes an outage visible downstream.
 func TestReconnect_LogsAtError(t *testing.T) {
 	srv := startScriptableServer(t)
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess := newDialableTestSession(t, srv.host, srv.port, 1)
 	sess.logger = slog.New(logs)
 	t.Cleanup(func() { sess.markClosed() })
@@ -495,7 +497,7 @@ func TestReconnect_LogsAtError(t *testing.T) {
 		t.Fatal("Reconnect against a stopped server returned nil")
 	}
 
-	errs := logs.recordsByLevel(slog.LevelError)
+	errs := logs.RecordsByLevel(slog.LevelError)
 	if len(errs) == 0 {
 		t.Fatal("a failed reconnect logged no error: umh-core sees a healthy component while no data is read")
 	}
@@ -526,7 +528,7 @@ func TestReconnect_LogsAtError(t *testing.T) {
 // cause on each attempt.
 func TestReconnect_LogsEveryFailedAttemptAtError(t *testing.T) {
 	srv := startScriptableServer(t)
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	const attempts = 3
 	sess := newDialableTestSession(t, srv.host, srv.port, attempts)
 	sess.logger = slog.New(logs)
@@ -538,7 +540,7 @@ func TestReconnect_LogsEveryFailedAttemptAtError(t *testing.T) {
 	}
 
 	var failures int
-	for _, rec := range logs.recordsByLevel(slog.LevelError) {
+	for _, rec := range logs.RecordsByLevel(slog.LevelError) {
 		if strings.Contains(rec.Message, "reconnect dial/start failed") ||
 			strings.Contains(rec.Message, "reconnect step failed") {
 			failures++

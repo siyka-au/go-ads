@@ -7,6 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -24,7 +28,7 @@ import (
 // tests: cache + lifecycle. No client, no transport.
 func newViewTestSession() *Session {
 	return &Session{
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		lifecycle:     &sessionLifecycle{closedCh: make(chan struct{})},
 		logger:        slog.Default(),
@@ -32,8 +36,8 @@ func newViewTestSession() *Session {
 }
 
 // captureSymbol seeds the cache with a symbol and returns a SymbolView.
-func captureSymbol(sess *Session, name string, value any, parsed bool) (SymbolView, *symbol) {
-	sym := &symbol{
+func captureSymbol(sess *Session, name string, value any, parsed bool) (SymbolView, *symtab.Symbol) {
+	sym := &symtab.Symbol{
 		FullName:    name,
 		Name:        name,
 		DataType:    "INT",
@@ -44,7 +48,7 @@ func captureSymbol(sess *Session, name string, value any, parsed bool) (SymbolVi
 		Handle:      0xFEEDFACE,
 	}
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey(name)] = sym
+	sess.cache.symbols[symtab.Key(name)] = sym
 	sess.cache.lock.Unlock()
 	v, _ := sess.GetSymbol(context.Background(), name) // takes cache.lock internally for view()
 	return v, sym
@@ -103,24 +107,24 @@ func TestSymbolView_IsValid(t *testing.T) {
 func TestSymbolView_ChildrenReturnsFreshMap(t *testing.T) {
 	sess := newViewTestSession()
 
-	child := &symbol{
+	child := &symtab.Symbol{
 		FullName: "MAIN.s.f",
 		Name:     "f",
 		DataType: "INT",
 		Length:   2,
 		Handle:   0xC0DE0001,
 	}
-	parent := &symbol{
+	parent := &symtab.Symbol{
 		FullName: "MAIN.s",
 		Name:     "s",
 		DataType: "ST_X",
-		Children: map[string]*symbol{"f": child},
+		Children: map[string]*symtab.Symbol{"f": child},
 		Handle:   0xC0DE0002,
 	}
 	child.Parent = parent
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey(parent.FullName)] = parent
-	sess.cache.symbols[symbolKey(child.FullName)] = child
+	sess.cache.symbols[symtab.Key(parent.FullName)] = parent
+	sess.cache.symbols[symtab.Key(child.FullName)] = child
 	sess.cache.lock.Unlock()
 
 	pv, err := sess.GetSymbol(context.Background(), parent.FullName)
@@ -157,15 +161,15 @@ func TestSymbolView_ChildrenReturnsFreshMap(t *testing.T) {
 func TestSymbolView_ChildrenWalk_FnMayTakeCacheLock(t *testing.T) {
 	sess := newViewTestSession()
 
-	leaf := &symbol{FullName: "MAIN.s.f", Name: "f", DataType: "INT", Length: 2, Handle: 0xBABE0001}
-	parent := &symbol{
+	leaf := &symtab.Symbol{FullName: "MAIN.s.f", Name: "f", DataType: "INT", Length: 2, Handle: 0xBABE0001}
+	parent := &symtab.Symbol{
 		FullName: "MAIN.s", Name: "s", DataType: "ST_X",
-		Children: map[string]*symbol{"f": leaf}, Handle: 0xBABE0002,
+		Children: map[string]*symtab.Symbol{"f": leaf}, Handle: 0xBABE0002,
 	}
 	leaf.Parent = parent
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey(parent.FullName)] = parent
-	sess.cache.symbols[symbolKey(leaf.FullName)] = leaf
+	sess.cache.symbols[symtab.Key(parent.FullName)] = parent
+	sess.cache.symbols[symtab.Key(leaf.FullName)] = leaf
 	sess.cache.lock.Unlock()
 
 	pv, err := sess.GetSymbol(context.Background(), parent.FullName)
@@ -256,10 +260,10 @@ func TestSymbolView_FieldReadAfterClose(t *testing.T) {
 func TestCollectSubtreeDepthCap(t *testing.T) {
 	// Build a symbol cycle: A -> B -> A. addOffset cannot produce this in
 	// real cache data, but defensively we should not stack-overflow.
-	a := &symbol{Name: "A", FullName: "A"}
-	b := &symbol{Name: "B", FullName: "A.B"}
-	a.Children = map[string]*symbol{"B": b}
-	b.Children = map[string]*symbol{"A": a}
+	a := &symtab.Symbol{Name: "A", FullName: "A"}
+	b := &symtab.Symbol{Name: "B", FullName: "A.B"}
+	a.Children = map[string]*symtab.Symbol{"B": b}
+	b.Children = map[string]*symtab.Symbol{"A": a}
 
 	conn := newTestConnection()
 	defer conn.lifecycle.shutdown()
@@ -288,7 +292,7 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 		// BaseType=DataTypeReal32 should resolve to "REAL" regardless of any
 		// table entry or size that might disagree.
 		sess := newViewTestSession()
-		sess.cache.datatypes = map[string]SymbolUploadDataType{
+		sess.cache.datatypes = map[string]symtab.TypeInfo{
 			"FakeAlias": {DataType: "INT"}, // would mis-resolve if layer 2 ran
 		}
 		view := SymbolView{
@@ -306,7 +310,7 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 		// BaseType=DataTypeBigType (composite) forces layer 1 to return "";
 		// layer 2 looks up "MyAlias" in the table and returns its DataType.
 		sess := newViewTestSession()
-		sess.cache.datatypes = map[string]SymbolUploadDataType{
+		sess.cache.datatypes = map[string]symtab.TypeInfo{
 			"MyAlias": {DataType: "DINT"},
 		}
 		view := SymbolView{
@@ -400,13 +404,13 @@ func TestBaseTypeName_LayeredResolution(t *testing.T) {
 //
 // Once per symbol, because a consumer may call this per sample.
 func TestBaseTypeName_UnresolvableWarnsOnceWithARemedy(t *testing.T) {
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess := newViewTestSession()
 	sess.logger = slog.New(logs)
 
 	// The latch lives on the cached symbol, so the view must correspond to one.
 	const name = "MAIN.eMachineState"
-	sess.cache.symbols[symbolKey(name)] = &symbol{
+	sess.cache.symbols[symtab.Key(name)] = &symtab.Symbol{
 		FullName: name,
 		DataType: "E_MachineState",
 		BaseType: ams.DataTypeBigType,
@@ -424,20 +428,20 @@ func TestBaseTypeName_UnresolvableWarnsOnceWithARemedy(t *testing.T) {
 		t.Fatalf("BaseTypeName = %q, want \"\": a 4-byte width cannot be inferred", got)
 	}
 
-	rec := logs.findByMessage("cannot resolve the base type")
+	rec := logs.FindByMessage("cannot resolve the base type")
 	if rec == nil {
 		t.Fatal("no warning for an unresolvable base type — this is the silent case the plugin worked around")
 	}
 	if rec.Level != slog.LevelWarn {
 		t.Errorf("level = %v, want Warn", rec.Level)
 	}
-	if got := rec.attr("symbol"); got != name {
+	if got := rec.Attr("symbol"); got != name {
 		t.Errorf("symbol attr = %q, want %q", got, name)
 	}
-	if got := rec.attr("size"); got != "4" {
+	if got := rec.Attr("size"); got != "4" {
 		t.Errorf("size attr = %q, want 4 — the width is the reason it cannot be inferred", got)
 	}
-	if hint := rec.attr("hint"); !strings.Contains(hint, "LoadSymbols") {
+	if hint := rec.Attr("hint"); !strings.Contains(hint, "LoadSymbols") {
 		t.Errorf("hint does not name the remedy: %q", hint)
 	}
 
@@ -445,7 +449,7 @@ func TestBaseTypeName_UnresolvableWarnsOnceWithARemedy(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_ = view.BaseTypeName()
 	}
-	if n := logs.countByMessage("cannot resolve the base type"); n != 1 {
+	if n := logs.CountByMessage("cannot resolve the base type"); n != 1 {
 		t.Errorf("warning count = %d after 6 calls, want 1: a per-sample caller would flood the log", n)
 	}
 }
@@ -458,20 +462,20 @@ func TestBaseTypeName_ResolvableDoesNotWarn(t *testing.T) {
 		name     string
 		baseType ams.DataType
 		length   uint32
-		table    map[string]SymbolUploadDataType
+		table    map[string]symtab.TypeInfo
 		want     string
 	}{
 		{name: "protocol base type", baseType: ams.DataTypeReal32, length: 4, want: "REAL"},
 		{
 			name: "datatype table", baseType: ams.DataTypeBigType, length: 4,
-			table: map[string]SymbolUploadDataType{"MyAlias": {DataType: "DINT"}}, want: "DINT",
+			table: map[string]symtab.TypeInfo{"MyAlias": {DataType: "DINT"}}, want: "DINT",
 		},
 		{name: "inferred from a 1-byte width", baseType: ams.DataTypeBigType, length: 1, want: "SINT"},
 		{name: "inferred from a 2-byte width", baseType: ams.DataTypeBigType, length: 2, want: "INT"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			logs := &testLogHandler{}
+			logs := &testlog.Handler{}
 			sess := newViewTestSession()
 			sess.logger = slog.New(logs)
 			if tc.table != nil {
@@ -484,7 +488,7 @@ func TestBaseTypeName_ResolvableDoesNotWarn(t *testing.T) {
 			if got := view.BaseTypeName(); got != tc.want {
 				t.Errorf("BaseTypeName = %q, want %q", got, tc.want)
 			}
-			if n := logs.countByMessage("cannot resolve the base type"); n != 0 {
+			if n := logs.CountByMessage("cannot resolve the base type"); n != 0 {
 				t.Errorf("warned %d times for a base type it could resolve", n)
 			}
 		})
@@ -496,18 +500,18 @@ func TestBaseTypeName_ResolvableDoesNotWarn(t *testing.T) {
 // samples start arriving as unconverted strings) and the read path must then stay
 // quiet — one latch serves both, or the fix trades one flood for another.
 func TestWarnUnresolvedBaseType_SubscribeThenReadWarnsOnce(t *testing.T) {
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess := newViewTestSession()
 	sess.logger = slog.New(logs)
 
 	const name = "MAIN.eState"
-	sess.cache.symbols[symbolKey(name)] = &symbol{
+	sess.cache.symbols[symtab.Key(name)] = &symtab.Symbol{
 		FullName: name, DataType: "E_State", BaseType: ams.DataTypeBigType, Length: 4,
 	}
 
 	// Subscribe-time call.
 	sess.warnUnresolvedBaseType(name)
-	if n := logs.countByMessage("cannot resolve the base type"); n != 1 {
+	if n := logs.CountByMessage("cannot resolve the base type"); n != 1 {
 		t.Fatalf("warnings after subscribe = %d, want 1", n)
 	}
 
@@ -516,7 +520,7 @@ func TestWarnUnresolvedBaseType_SubscribeThenReadWarnsOnce(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_ = view.BaseTypeName()
 	}
-	if n := logs.countByMessage("cannot resolve the base type"); n != 1 {
+	if n := logs.CountByMessage("cannot resolve the base type"); n != 1 {
 		t.Errorf("warnings after reads = %d, want 1: the subscribe-time latch must cover the read path", n)
 	}
 }
@@ -525,18 +529,18 @@ func TestWarnUnresolvedBaseType_SubscribeThenReadWarnsOnce(t *testing.T) {
 // re-derived when the warning is considered, so a session that loads the datatype
 // table before subscribing never warns about symbols the table explains.
 func TestWarnUnresolvedBaseType_QuietOnceTheTableArrives(t *testing.T) {
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess := newViewTestSession()
 	sess.logger = slog.New(logs)
 
 	const name = "MAIN.eState"
-	sess.cache.symbols[symbolKey(name)] = &symbol{
+	sess.cache.symbols[symtab.Key(name)] = &symtab.Symbol{
 		FullName: name, DataType: "E_State", BaseType: ams.DataTypeBigType, Length: 4,
 	}
-	sess.cache.datatypes = map[string]SymbolUploadDataType{"E_State": {DataType: "DINT"}}
+	sess.cache.datatypes = map[string]symtab.TypeInfo{"E_State": {DataType: "DINT"}}
 
 	sess.warnUnresolvedBaseType(name)
-	if n := logs.countByMessage("cannot resolve the base type"); n != 0 {
+	if n := logs.CountByMessage("cannot resolve the base type"); n != 0 {
 		t.Errorf("warned %d times although the datatype table resolves this symbol", n)
 	}
 }
@@ -545,7 +549,7 @@ func TestWarnUnresolvedBaseType_QuietOnceTheTableArrives(t *testing.T) {
 // that silently flattened groups could make an assertion pass on a key the real
 // handler would have written as "group.key".
 func TestTestLogHandler_QualifiesGroups(t *testing.T) {
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	lg := slog.New(logs)
 
 	lg.WithGroup("net").With("port", 48898).Info("dialed", "peer", "10.0.0.1")
@@ -553,26 +557,26 @@ func TestTestLogHandler_QualifiesGroups(t *testing.T) {
 	lg.Info("emptyGroupKeyInlines", slog.Group("", slog.String("k", "v")))
 	lg.Info("emptyGroupIgnored", slog.Group("g"))
 
-	rec := logs.findByMessage("dialed")
+	rec := logs.FindByMessage("dialed")
 	if rec == nil {
 		t.Fatal("no record captured")
 	}
-	if got := rec.attr("net.port"); got != "48898" {
+	if got := rec.Attr("net.port"); got != "48898" {
 		t.Errorf("WithGroup+With key = %q, want net.port=48898 (attrs: %v)", got, rec.Attrs)
 	}
-	if got := rec.attr("net.peer"); got != "10.0.0.1" {
+	if got := rec.Attr("net.peer"); got != "10.0.0.1" {
 		t.Errorf("record attr under group = %q, want net.peer=10.0.0.1 (attrs: %v)", got, rec.Attrs)
 	}
 
-	inline := logs.findByMessage("inline")
-	if got := inline.attr("drop.frames"); got != "12" {
+	inline := logs.FindByMessage("inline")
+	if got := inline.Attr("drop.frames"); got != "12" {
 		t.Errorf("slog.Group key = %q, want drop.frames=12 (attrs: %v)", got, inline.Attrs)
 	}
 
-	if got := logs.findByMessage("emptyGroupKeyInlines").attr("k"); got != "v" {
+	if got := logs.FindByMessage("emptyGroupKeyInlines").Attr("k"); got != "v" {
 		t.Errorf("an empty group key must inline its attributes, got %q", got)
 	}
-	if r := logs.findByMessage("emptyGroupIgnored"); len(r.Attrs) != 0 {
+	if r := logs.FindByMessage("emptyGroupIgnored"); len(r.Attrs) != 0 {
 		t.Errorf("a group with no attributes must be ignored, got %v", r.Attrs)
 	}
 }
@@ -584,22 +588,22 @@ func TestTestLogHandler_QualifiesGroups(t *testing.T) {
 // test asserting on "request_id" would then fail for a reason that exists only
 // in the helper.
 func TestTestLogHandler_GroupQualifiesOnlyLaterAttrs(t *testing.T) {
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	lg := slog.New(logs)
 
 	lg.With("request_id", "abc").WithGroup("net").With("port", 48898).Info("dialed")
 
-	rec := logs.findByMessage("dialed")
+	rec := logs.FindByMessage("dialed")
 	if rec == nil {
 		t.Fatal("no record captured")
 	}
-	if got, want := rec.attr("request_id"), "abc"; got != want {
+	if got, want := rec.Attr("request_id"), "abc"; got != want {
 		t.Errorf("attr added before the group = %q, want request_id=%q (attrs: %v)", got, want, rec.Attrs)
 	}
-	if rec.hasAttr("net.request_id") {
+	if rec.HasAttr("net.request_id") {
 		t.Errorf("a group must not qualify an attribute added before it (attrs: %v)", rec.Attrs)
 	}
-	if got, want := rec.attr("net.port"), "48898"; got != want {
+	if got, want := rec.Attr("net.port"), "48898"; got != want {
 		t.Errorf("attr added after the group = %q, want net.port=%q (attrs: %v)", got, want, rec.Attrs)
 	}
 }
@@ -617,28 +621,103 @@ func (g groupLogValuer) LogValue() slog.Value {
 // an unresolved value would be stored as one opaque scalar — and a redaction
 // assertion could pass against text the real handler never wrote.
 func TestTestLogHandler_ResolvesLogValuer(t *testing.T) {
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	lg := slog.New(logs)
 
 	lg.Info("valued", "conn", groupLogValuer{port: 48898})
 	lg.Info("secret", "password", secret("hunter2"))
 
-	rec := logs.findByMessage("valued")
+	rec := logs.FindByMessage("valued")
 	if rec == nil {
 		t.Fatal("no record captured")
 	}
-	if got, want := rec.attr("conn.port"), "48898"; got != want {
+	if got, want := rec.Attr("conn.port"), "48898"; got != want {
 		t.Errorf("LogValuer group child = %q, want conn.port=%q (attrs: %v)", got, want, rec.Attrs)
 	}
-	if got, want := rec.attr("conn.proto"), "tcp"; got != want {
+	if got, want := rec.Attr("conn.proto"), "tcp"; got != want {
 		t.Errorf("LogValuer group child = %q, want conn.proto=%q (attrs: %v)", got, want, rec.Attrs)
 	}
-	if rec.hasAttr("conn") {
+	if rec.HasAttr("conn") {
 		t.Errorf("an unresolved LogValuer was stored as a scalar (attrs: %v)", rec.Attrs)
 	}
 
-	pw := logs.findByMessage("secret")
-	if got, want := pw.attr("password"), "[REDACTED]"; got != want {
+	pw := logs.FindByMessage("secret")
+	if got, want := pw.Attr("password"), "[REDACTED]"; got != want {
 		t.Errorf("secret attr = %q, want %q (attrs: %v)", got, want, pw.Attrs)
+	}
+}
+
+// TestBaseTypeName_StructMemberWithTableLoaded reproduces 192.168.3.70 (TC2 2.10):
+// with the table loaded, members reported "" or BYTE and warned to load the table.
+func TestBaseTypeName_StructMemberWithTableLoaded(t *testing.T) {
+	logs := &testlog.Handler{}
+	sess := newViewTestSession()
+	sess.logger = slog.New(logs)
+
+	datatypes := map[string]symtab.TypeInfo{
+		"ST_Status": {
+			Name:          "ST_Status",
+			DatatypeEntry: symtab.DatatypeEntry{Size: 93, SubItems: 3},
+			Children: map[string]*symtab.TypeInfo{
+				"sMachineName": {Name: "sMachineName", DataType: "STRING", DatatypeEntry: symtab.DatatypeEntry{Size: 81, Offs: 0, DataType: uint32(ams.DataTypeString)}},
+				"fSpeed":       {Name: "fSpeed", DataType: "LREAL", DatatypeEntry: symtab.DatatypeEntry{Size: 8, Offs: 84, DataType: uint32(ams.DataTypeReal64)}},
+				"bError":       {Name: "bError", DataType: "BOOL", DatatypeEntry: symtab.DatatypeEntry{Size: 1, Offs: 92, DataType: uint32(ams.DataTypeBool)}},
+			},
+		},
+		// The controllers key BOOL to its storage type, which is the lookup
+		// that made a BOOL member report BYTE.
+		"BOOL": {Name: "BOOL", DataType: "BYTE", DatatypeEntry: symtab.DatatypeEntry{Size: 1}},
+	}
+	sess.cache.datatypes = datatypes
+
+	root := symtab.AddSymbol(symtab.UploadSymbol{
+		Name:        "MAIN.stStatus",
+		DataType:    "ST_Status",
+		SymbolEntry: symtab.SymbolEntry{Size: 93, DataType: uint32(ams.DataTypeBigType)},
+	}, datatypes, nil)
+	sess.cache.symbols[symtab.Key(root.FullName)] = root
+	symtab.AddChildren(root, sess.cache.symbols)
+
+	tests := []struct {
+		member string
+		want   string
+	}{
+		{member: "MAIN.stStatus.sMachineName", want: "STRING"},
+		{member: "MAIN.stStatus.fSpeed", want: "LREAL"},
+		{member: "MAIN.stStatus.bError", want: "BOOL"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.member, func(t *testing.T) {
+			sym, ok := sess.cache.symbols[symtab.Key(tc.member)]
+			if !ok {
+				t.Fatalf("member %q not in the cache", tc.member)
+			}
+			if got := viewOf(sym, sess).BaseTypeName(); got != tc.want {
+				t.Errorf("BaseTypeName = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	if n := logs.CountByMessage("cannot resolve the base type"); n != 0 {
+		t.Errorf("warned %d times with the datatype table loaded; the hint asks for the option that is already on", n)
+	}
+}
+
+// TestBaseTypeName_DeclaredParseableType: TC2 reports no ADST_ code and no table
+// entry for DT/DATE/TOD, yet the parser handles those names directly.
+func TestBaseTypeName_DeclaredParseableType(t *testing.T) {
+	logs := &testlog.Handler{}
+	sess := newViewTestSession()
+	sess.logger = slog.New(logs)
+
+	const name = "MAIN.stStatus.dtLastUpdate"
+	sess.cache.symbols[symtab.Key(name)] = &symtab.Symbol{FullName: name, DataType: "DT", Length: 4}
+
+	view := SymbolView{FullName: name, DataType: "DT", Length: 4, conn: sess}
+	if got := view.BaseTypeName(); got != "DT" {
+		t.Errorf("BaseTypeName = %q, want %q", got, "DT")
+	}
+	if n := logs.CountByMessage("cannot resolve the base type"); n != 0 {
+		t.Errorf("warned %d times about a type the parser resolves by name", n)
 	}
 }

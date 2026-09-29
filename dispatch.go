@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -87,7 +89,7 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 	// FRESH cache.datatypes against the OLD symbol's DataType key may
 	// mismatch. If the symbol is gone from the live cache, log + skip.
 	sess.cache.lock.Lock()
-	live := sess.cache.symbols[symbolKey(fullName)]
+	live := sess.cache.symbols[symtab.Key(fullName)]
 	if live == nil {
 		sess.cache.lock.Unlock()
 		sess.logger.Warn("notification target symbol no longer in cache; skipping parse",
@@ -110,14 +112,14 @@ func (sess *Session) dispatchSample(ctx context.Context, handle uint32, timestam
 		sess.handleStaleDetection(ams.ReturnCodeDeviceSymbolNoFound)
 		return
 	}
-	value, err := live.decode(content, 0, sess.cache.datatypes)
+	value, err := live.Decode(content, 0, sess.cache.datatypes)
 	if err != nil {
 		sess.cache.lock.Unlock()
 		sess.logger.Error("error during parse of notification",
 			"handle", handle, "symbol", fullName, "dataType", live.DataType, "error", err)
 		return
 	}
-	value = copyData(value)
+	value = symtab.CopyValue(value)
 	sess.cache.lock.Unlock()
 
 	sess.logger.Log(context.Background(), LevelTrace, "update received", "update", value)

@@ -40,6 +40,27 @@ func (f SymbolFlag) Has(flag SymbolFlag) bool {
 	return f&flag == flag
 }
 
+// SymbolInfo is a symbol's metadata as the device reports it for one name
+// (GroupSymbolInfoByNameEx): where it lives and what type it has.
+type SymbolInfo struct {
+	// Name is the symbol's full name in the device's own casing.
+	Name string
+	// DataType is the declared type name, e.g. "INT", "STRING(80)", "ST_Motor".
+	DataType string
+	Comment  string
+	// Group and Offset address the value for Read/Write.
+	Group  Group
+	Offset uint32
+	// Length is the value's size in bytes.
+	Length uint32
+	// BaseType is the primitive the value is stored as, or DataTypeBigType for
+	// structs, arrays and other composites.
+	BaseType DataType
+	Flags    SymbolFlag
+}
+
+// SymbolUploadInfo gives the counts and byte sizes of the device's symbol and
+// data type tables, as reported by GroupSymbolUploadInfo2.
 type SymbolUploadInfo struct {
 	SymbolCount    uint32
 	SymbolLength   uint32

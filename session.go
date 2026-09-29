@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 	"github.com/siyka-au/go-ads/v3/router"
 )
@@ -207,7 +209,7 @@ func NewSession(ctx context.Context, remote AMSEndpoint, opts ...SessionOption) 
 			orphanSem:           make(chan struct{}, orphanDeleteMaxConcurrency),
 		},
 		cache: &symbolCache{
-			symbols:         map[string]*symbol{},
+			symbols:         map[string]*symtab.Symbol{},
 			onDemandSymbols: map[string]bool{},
 		},
 		tx: &transport{

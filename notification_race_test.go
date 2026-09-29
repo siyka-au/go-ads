@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -34,8 +36,8 @@ import (
 // preSeedTypedSymbol primes the cache with a symbol whose handle is non-zero
 // so getSymbol resolves without a GetHandleByName roundtrip. INT/2 parses
 // against a nil datatypes map.
-func preSeedTypedSymbol(sess *Session, name string, handle uint32) *symbol {
-	sym := &symbol{
+func preSeedTypedSymbol(sess *Session, name string, handle uint32) *symtab.Symbol {
+	sym := &symtab.Symbol{
 		FullName: name,
 		Name:     name,
 		DataType: "INT",
@@ -43,7 +45,7 @@ func preSeedTypedSymbol(sess *Session, name string, handle uint32) *symbol {
 		Handle:   handle,
 	}
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey(name)] = sym
+	sess.cache.symbols[symtab.Key(name)] = sym
 	sess.cache.lock.Unlock()
 	return sym
 }
@@ -1078,7 +1080,7 @@ func TestOrphanDeleteAbortReason(t *testing.T) {
 			name: "handle reappeared in activeNotifications",
 			setup: func(sess *Session) {
 				sess.notifications.lock.Lock()
-				sess.notifications.activeNotifications[0x4242] = activeNotification{Sym: &symbol{FullName: "MAIN.x"}}
+				sess.notifications.activeNotifications[0x4242] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.x"}}
 				sess.notifications.lock.Unlock()
 			},
 			wantAbort:  true,

@@ -1,4 +1,4 @@
-package ads
+package symtab
 
 import (
 	"encoding/binary"
@@ -117,9 +117,9 @@ func TestDecodeScalarErrors(t *testing.T) {
 // decode must leave the typed value in Value for aliases and enums too, resolved
 // through the datatype table to the base type.
 func TestDecodeStoresTypedValue(t *testing.T) {
-	datatypes := map[string]SymbolUploadDataType{"E_Mode": {Name: "E_Mode", DataType: "INT"}}
-	sym := &symbol{DataType: "E_Mode", Length: 2}
-	if _, err := sym.decode(u16(3), 0, datatypes); err != nil {
+	datatypes := map[string]TypeInfo{"E_Mode": {Name: "E_Mode", DataType: "INT"}}
+	sym := &Symbol{DataType: "E_Mode", Length: 2}
+	if _, err := sym.Decode(u16(3), 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
 	if sym.Value != int16(3) {
@@ -128,19 +128,19 @@ func TestDecodeStoresTypedValue(t *testing.T) {
 }
 
 func TestDataTreeStruct(t *testing.T) {
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		"ST_X": {
-			Name: "ST_X", DataType: "ST_X", DatatypeEntry: datatypeEntry{Size: 12},
-			Children: map[string]*SymbolUploadDataType{
-				"bOn":   {Name: "bOn", DataType: "BOOL", DatatypeEntry: datatypeEntry{Offs: 0, Size: 1}},
-				"tWait": {Name: "tWait", DataType: "TIME", DatatypeEntry: datatypeEntry{Offs: 4, Size: 4}},
-				"dDay":  {Name: "dDay", DataType: "DATE", DatatypeEntry: datatypeEntry{Offs: 8, Size: 4}},
+			Name: "ST_X", DataType: "ST_X", DatatypeEntry: DatatypeEntry{Size: 12},
+			Children: map[string]*TypeInfo{
+				"bOn":   {Name: "bOn", DataType: "BOOL", DatatypeEntry: DatatypeEntry{Offs: 0, Size: 1}},
+				"tWait": {Name: "tWait", DataType: "TIME", DatatypeEntry: DatatypeEntry{Offs: 4, Size: 4}},
+				"dDay":  {Name: "dDay", DataType: "DATE", DatatypeEntry: DatatypeEntry{Offs: 8, Size: 4}},
 			},
 		},
 	}
-	sym := addSymbol(symbolUploadSymbol{Name: "MAIN.st", DataType: "ST_X", SymbolEntry: symbolEntry{Size: 12}}, datatypes, nil)
+	sym := AddSymbol(UploadSymbol{Name: "MAIN.st", DataType: "ST_X", SymbolEntry: SymbolEntry{Size: 12}}, datatypes, nil)
 	data := append(append([]byte{1, 0, 0, 0}, u32(90061001)...), u32(86400)...)
-	if _, err := sym.decode(data, 0, datatypes); err != nil {
+	if _, err := sym.Decode(data, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]any{
@@ -155,18 +155,18 @@ func TestDataTreeStruct(t *testing.T) {
 
 func TestDataTree2DArray(t *testing.T) {
 	const typeName = "ARRAY [0..2,0..2] OF INT"
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		typeName: {
-			Name: typeName, DataType: "INT", DatatypeEntry: datatypeEntry{Size: 18, ArrayDim: 2},
+			Name: typeName, DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 18, ArrayDim: 2},
 			Children: makeArrayChildren([]datatypeArrayInfo{{0, 3}, {0, 3}}, "INT", 18, nil),
 		},
 	}
-	sym := addSymbol(symbolUploadSymbol{Name: "MAIN.a", DataType: typeName, SymbolEntry: symbolEntry{Size: 18}}, datatypes, nil)
+	sym := AddSymbol(UploadSymbol{Name: "MAIN.a", DataType: typeName, SymbolEntry: SymbolEntry{Size: 18}}, datatypes, nil)
 	var data []byte
 	for i := range 9 {
 		data = append(data, u16(uint16(32766+i))...) // crosses 32767 → -32768
 	}
-	if _, err := sym.decode(data, 0, datatypes); err != nil {
+	if _, err := sym.Decode(data, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
 	want := []any{
@@ -255,29 +255,29 @@ func TestEncodeScalarErrors(t *testing.T) {
 	}
 }
 
-func testStructSymbol(t *testing.T) (*symbol, map[string]SymbolUploadDataType) {
+func testStructSymbol(t *testing.T) (*Symbol, map[string]TypeInfo) {
 	t.Helper()
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		"ST_X": {
-			Name: "ST_X", DataType: "ST_X", DatatypeEntry: datatypeEntry{Size: 12},
-			Children: map[string]*SymbolUploadDataType{
-				"bOn":   {Name: "bOn", DataType: "BOOL", DatatypeEntry: datatypeEntry{Offs: 0, Size: 1}},
-				"tWait": {Name: "tWait", DataType: "TIME", DatatypeEntry: datatypeEntry{Offs: 4, Size: 4}},
-				"dDay":  {Name: "dDay", DataType: "DATE", DatatypeEntry: datatypeEntry{Offs: 8, Size: 4}},
+			Name: "ST_X", DataType: "ST_X", DatatypeEntry: DatatypeEntry{Size: 12},
+			Children: map[string]*TypeInfo{
+				"bOn":   {Name: "bOn", DataType: "BOOL", DatatypeEntry: DatatypeEntry{Offs: 0, Size: 1}},
+				"tWait": {Name: "tWait", DataType: "TIME", DatatypeEntry: DatatypeEntry{Offs: 4, Size: 4}},
+				"dDay":  {Name: "dDay", DataType: "DATE", DatatypeEntry: DatatypeEntry{Offs: 8, Size: 4}},
 			},
 		},
 	}
-	return addSymbol(symbolUploadSymbol{Name: "MAIN.st", DataType: "ST_X", SymbolEntry: symbolEntry{Size: 12}}, datatypes, nil), datatypes
+	return AddSymbol(UploadSymbol{Name: "MAIN.st", DataType: "ST_X", SymbolEntry: SymbolEntry{Size: 12}}, datatypes, nil), datatypes
 }
 
 func TestEncodeStructRoundTrip(t *testing.T) {
 	sym, datatypes := testStructSymbol(t)
 	want := map[string]any{"bOn": true, "tWait": 90 * time.Minute, "dDay": civil.Date{Year: 2026, Month: 9, Day: 28}}
-	b, err := sym.encode(want, datatypes)
+	b, err := sym.Encode(want, datatypes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sym.decode(b, 0, datatypes); err != nil {
+	if _, err := sym.Decode(b, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(sym.Value, want) {
@@ -293,7 +293,7 @@ func TestEncodeStructRejectsIncompleteOrUnknown(t *testing.T) {
 		"not a map":      []any{true},
 		"member type":    map[string]any{"bOn": 1, "tWait": time.Second, "dDay": civil.Date{Year: 2000, Month: 1, Day: 1}},
 	} {
-		if _, err := sym.encode(v, datatypes); err == nil {
+		if _, err := sym.Encode(v, datatypes); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
@@ -301,19 +301,19 @@ func TestEncodeStructRejectsIncompleteOrUnknown(t *testing.T) {
 
 func TestEncode2DArrayRoundTrip(t *testing.T) {
 	const typeName = "ARRAY [0..1,0..2] OF DINT"
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		typeName: {
-			Name: typeName, DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 24, ArrayDim: 2},
+			Name: typeName, DataType: "DINT", DatatypeEntry: DatatypeEntry{Size: 24, ArrayDim: 2},
 			Children: makeArrayChildren([]datatypeArrayInfo{{0, 2}, {0, 3}}, "DINT", 24, nil),
 		},
 	}
-	sym := addSymbol(symbolUploadSymbol{Name: "MAIN.a", DataType: typeName, SymbolEntry: symbolEntry{Size: 24}}, datatypes, nil)
+	sym := AddSymbol(UploadSymbol{Name: "MAIN.a", DataType: typeName, SymbolEntry: SymbolEntry{Size: 24}}, datatypes, nil)
 	want := []any{[]any{int32(1), int32(-2), int32(3)}, []any{int32(math.MinInt32), int32(0), int32(math.MaxInt32)}}
-	b, err := sym.encode(want, datatypes)
+	b, err := sym.Encode(want, datatypes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sym.decode(b, 0, datatypes); err != nil {
+	if _, err := sym.Decode(b, 0, datatypes); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(sym.Value, want) {
@@ -324,7 +324,7 @@ func TestEncode2DArrayRoundTrip(t *testing.T) {
 		"extra row":   []any{want[0], want[1], want[1]},
 		"not a slice": map[string]any{},
 	} {
-		if _, err := sym.encode(v, datatypes); err == nil {
+		if _, err := sym.Encode(v, datatypes); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
@@ -332,23 +332,23 @@ func TestEncode2DArrayRoundTrip(t *testing.T) {
 
 // bitStructSymbol builds a 2-byte struct of 16 BIT members, as TwinCAT reports
 // them: flag 0x20 set, Offs and Size in bits.
-func bitStructSymbol() (*symbol, map[string]SymbolUploadDataType) {
-	children := map[string]*SymbolUploadDataType{}
+func bitStructSymbol() (*Symbol, map[string]TypeInfo) {
+	children := map[string]*TypeInfo{}
 	for i := range 16 {
 		name := fmt.Sprintf("b%d", i)
-		children[name] = &SymbolUploadDataType{Name: name, DataType: "BIT",
-			DatatypeEntry: datatypeEntry{Offs: uint32(i), Size: 1, Flags: 0xA2, DataType: 33}}
+		children[name] = &TypeInfo{Name: name, DataType: "BIT",
+			DatatypeEntry: DatatypeEntry{Offs: uint32(i), Size: 1, Flags: 0xA2, DataType: 33}}
 	}
-	datatypes := map[string]SymbolUploadDataType{
-		"ST_Bits": {Name: "ST_Bits", DatatypeEntry: datatypeEntry{Size: 2, Flags: 0x81}, Children: children},
+	datatypes := map[string]TypeInfo{
+		"ST_Bits": {Name: "ST_Bits", DatatypeEntry: DatatypeEntry{Size: 2, Flags: 0x81}, Children: children},
 	}
-	return addSymbol(symbolUploadSymbol{Name: "MAIN.bits", DataType: "ST_Bits", SymbolEntry: symbolEntry{Size: 2}}, datatypes, nil), datatypes
+	return AddSymbol(UploadSymbol{Name: "MAIN.bits", DataType: "ST_Bits", SymbolEntry: SymbolEntry{Size: 2}}, datatypes, nil), datatypes
 }
 
 func TestDecodeBitMembers(t *testing.T) {
 	sym, datatypes := bitStructSymbol()
 	for _, pattern := range []uint16{0, 0xFFFF, 0x0001, 0x8000, 0x5555, 0xAAAA, 0x1234} {
-		got, err := sym.decode(u16(pattern), 0, datatypes)
+		got, err := sym.Decode(u16(pattern), 0, datatypes)
 		if err != nil {
 			t.Fatalf("%#04x: %v", pattern, err)
 		}
@@ -368,7 +368,7 @@ func TestEncodeBitMembers(t *testing.T) {
 		for i := range 16 {
 			v[fmt.Sprintf("b%d", i)] = pattern&(1<<i) != 0
 		}
-		got, err := sym.encode(v, datatypes)
+		got, err := sym.Encode(v, datatypes)
 		if err != nil {
 			t.Fatalf("%#04x: %v", pattern, err)
 		}
@@ -376,7 +376,7 @@ func TestEncodeBitMembers(t *testing.T) {
 			t.Errorf("%#04x: encoded % x", pattern, got)
 		}
 	}
-	if _, err := sym.encode(map[string]any{"b0": 1}, datatypes); err == nil {
+	if _, err := sym.Encode(map[string]any{"b0": 1}, datatypes); err == nil {
 		t.Error("a non-bool BIT: expected an error")
 	}
 }
@@ -385,18 +385,18 @@ func TestEncodeBitMembers(t *testing.T) {
 // each level must hold at depth.
 func TestDataTree3DArray(t *testing.T) {
 	const typeName = "ARRAY [0..1,0..2,-1..1] OF INT"
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		typeName: {
-			Name: typeName, DataType: "INT", DatatypeEntry: datatypeEntry{Size: 36, ArrayDim: 3},
+			Name: typeName, DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 36, ArrayDim: 3},
 			Children: makeArrayChildren([]datatypeArrayInfo{{0, 2}, {0, 3}, {uint32(0xFFFFFFFF), 3}}, "INT", 36, nil),
 		},
 	}
-	sym := addSymbol(symbolUploadSymbol{Name: "MAIN.a3", DataType: typeName, SymbolEntry: symbolEntry{Size: 36}}, datatypes, nil)
+	sym := AddSymbol(UploadSymbol{Name: "MAIN.a3", DataType: typeName, SymbolEntry: SymbolEntry{Size: 36}}, datatypes, nil)
 	var data []byte
 	for i := range 18 {
 		data = append(data, u16(uint16(i))...)
 	}
-	got, err := sym.decode(data, 0, datatypes)
+	got, err := sym.Decode(data, 0, datatypes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestDataTree3DArray(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
-	back, err := sym.encode(want, datatypes)
+	back, err := sym.Encode(want, datatypes)
 	if err != nil || !reflect.DeepEqual(back, data) {
 		t.Errorf("encode: % x, %v", back, err)
 	}

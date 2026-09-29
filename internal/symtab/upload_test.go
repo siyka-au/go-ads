@@ -1,10 +1,9 @@
-package ads
+package symtab
 
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"log/slog"
 	"math"
 	"reflect"
 	"strconv"
@@ -65,13 +64,13 @@ func TestMakeArrayChildren_NegativeLowerBound(t *testing.T) {
 // Decoding an ARRAY[-9..9] gives a 19-element slice starting at index -9.
 func TestDecodeNegativeBoundArray(t *testing.T) {
 	const typeName = "ARRAY [-9..9] OF DINT"
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		typeName: {
-			Name: typeName, DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 76, ArrayDim: 1},
+			Name: typeName, DataType: "DINT", DatatypeEntry: DatatypeEntry{Size: 76, ArrayDim: 1},
 			Children: makeArrayChildren([]datatypeArrayInfo{{LBound: uint32(0xFFFFFFF7), Elements: 19}}, "DINT", 76, nil),
 		},
 	}
-	sym := addSymbol(symbolUploadSymbol{Name: "MAIN.a", DataType: typeName, SymbolEntry: symbolEntry{Size: 76}}, datatypes, nil)
+	sym := AddSymbol(UploadSymbol{Name: "MAIN.a", DataType: typeName, SymbolEntry: SymbolEntry{Size: 76}}, datatypes, nil)
 	data := make([]byte, 76)
 	want := make([]any, 19)
 	for i := range 19 {
@@ -79,7 +78,7 @@ func TestDecodeNegativeBoundArray(t *testing.T) {
 		binary.LittleEndian.PutUint32(data[i*4:], uint32(v))
 		want[i] = v
 	}
-	got, err := sym.decode(data, 0, datatypes)
+	got, err := sym.Decode(data, 0, datatypes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +113,7 @@ func TestMakeArrayChildren_HappyPath(t *testing.T) {
 // Validates: NO-SPEC (regression guard, awaiting spec backfill).
 // Pins empty-buffer parse → empty map, no error.
 func TestParseUploadSymbolInfoDataTypes_Empty(t *testing.T) {
-	datatypes, err := parseUploadSymbolInfoDataTypes([]byte{}, nil)
+	datatypes, err := ParseDataTypes([]byte{}, nil)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -128,7 +127,7 @@ func TestParseUploadSymbolInfoDataTypes_Empty(t *testing.T) {
 // Validates: NO-SPEC (regression guard, awaiting spec backfill).
 // Pins empty-buffer symbol-list parse → empty map, no error.
 func TestParseUploadSymbolInfoSymbols_Empty(t *testing.T) {
-	symbols, err := parseUploadSymbolInfoSymbols([]byte{}, nil, nil)
+	symbols, err := ParseSymbols([]byte{}, nil, nil)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -141,13 +140,13 @@ func TestParseUploadSymbolInfoSymbols_Empty(t *testing.T) {
 
 // Validates: R-SYM-007.
 func TestAddOffsetEmptySegmentName(t *testing.T) {
-	parent := &symbol{Name: "parent", FullName: "MAIN.parent"}
-	dt := &SymbolUploadDataType{
-		Children: map[string]*SymbolUploadDataType{
-			"": {Name: "", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2}},
+	parent := &Symbol{Name: "parent", FullName: "MAIN.parent"}
+	dt := &TypeInfo{
+		Children: map[string]*TypeInfo{
+			"": {Name: "", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2}},
 		},
 	}
-	children := dt.addOffset(parent, nil, 0, nil)
+	children := dt.AddOffset(parent, nil, 0, nil)
 	// Empty segment name should be skipped (F-06 fix)
 	if len(children) != 0 {
 		t.Errorf("expected 0 children for empty segment name, got %d", len(children))
@@ -156,13 +155,13 @@ func TestAddOffsetEmptySegmentName(t *testing.T) {
 
 // Validates: R-SYM-007.
 func TestAddOffsetFullNameWithDot(t *testing.T) {
-	parent := &symbol{Name: "motor", FullName: "MAIN.motor"}
-	dt := &SymbolUploadDataType{
-		Children: map[string]*SymbolUploadDataType{
-			"speed": {Name: "speed", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 0}},
+	parent := &Symbol{Name: "motor", FullName: "MAIN.motor"}
+	dt := &TypeInfo{
+		Children: map[string]*TypeInfo{
+			"speed": {Name: "speed", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 0}},
 		},
 	}
-	children := dt.addOffset(parent, nil, 0, nil)
+	children := dt.AddOffset(parent, nil, 0, nil)
 	child, ok := children["speed"]
 	if !ok {
 		t.Fatal("expected child 'speed'")
@@ -175,14 +174,14 @@ func TestAddOffsetFullNameWithDot(t *testing.T) {
 // Validates: R-SYM-007.
 func TestAddOffsetArrayFullName(t *testing.T) {
 	// Array children have names like "[0]", "[1]" — should use parent.FullName (F-05 fix)
-	parent := &symbol{Name: "arr", FullName: "MAIN.arr"}
-	dt := &SymbolUploadDataType{
-		Children: map[string]*SymbolUploadDataType{
-			"[0]": {Name: "[0]", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 0}},
-			"[1]": {Name: "[1]", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 2}},
+	parent := &Symbol{Name: "arr", FullName: "MAIN.arr"}
+	dt := &TypeInfo{
+		Children: map[string]*TypeInfo{
+			"[0]": {Name: "[0]", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 0}},
+			"[1]": {Name: "[1]", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 2}},
 		},
 	}
-	children := dt.addOffset(parent, nil, 0, nil)
+	children := dt.AddOffset(parent, nil, 0, nil)
 	child0, ok := children["[0]"]
 	if !ok {
 		t.Fatal("expected child '[0]'")
@@ -199,47 +198,47 @@ func TestParseEnumNestedInStruct(t *testing.T) {
 	// Without the isEnumDataType guard, addOffset would expand these
 	// constants as struct children, breaking parse.
 	t.Run("non-strict enum with children", func(t *testing.T) {
-		datatypes := map[string]SymbolUploadDataType{
+		datatypes := map[string]TypeInfo{
 			"E_MotorState": {
 				Name:     "E_MotorState",
 				DataType: "DINT",
-				DatatypeEntry: datatypeEntry{
+				DatatypeEntry: DatatypeEntry{
 					Size:     4,
 					SubItems: 3, // enum has 3 constants
 				},
-				Children: map[string]*SymbolUploadDataType{
-					"Idle":    {Name: "Idle", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4}},
-					"Running": {Name: "Running", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4}},
-					"Error":   {Name: "Error", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4}},
+				Children: map[string]*TypeInfo{
+					"Idle":    {Name: "Idle", DataType: "DINT", DatatypeEntry: DatatypeEntry{Size: 4}},
+					"Running": {Name: "Running", DataType: "DINT", DatatypeEntry: DatatypeEntry{Size: 4}},
+					"Error":   {Name: "Error", DataType: "DINT", DatatypeEntry: DatatypeEntry{Size: 4}},
 				},
 			},
 			"ST_Motor": {
 				Name:     "ST_Motor",
 				DataType: "",
-				DatatypeEntry: datatypeEntry{
+				DatatypeEntry: DatatypeEntry{
 					Size:     8,
 					SubItems: 2,
 				},
-				Children: map[string]*SymbolUploadDataType{
-					"state": {Name: "state", DataType: "E_MotorState", DatatypeEntry: datatypeEntry{Size: 4, Offs: 0}},
-					"speed": {Name: "speed", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 4}},
+				Children: map[string]*TypeInfo{
+					"state": {Name: "state", DataType: "E_MotorState", DatatypeEntry: DatatypeEntry{Size: 4, Offs: 0}},
+					"speed": {Name: "speed", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 4}},
 				},
 			},
 		}
 
-		motorSym := &symbol{
+		motorSym := &Symbol{
 			Name: "motor", FullName: "MAIN.motor",
 			DataType: "ST_Motor", Length: 8, Group: 0x4040,
 		}
 		dt := datatypes["ST_Motor"]
-		motorSym.Children = dt.addOffset(motorSym, datatypes, motorSym.Group, nil)
+		motorSym.Children = dt.AddOffset(motorSym, datatypes, motorSym.Group, nil)
 
 		// Wire data: state=2 (Running, DINT), speed=1500 (INT)
 		data := make([]byte, 8)
 		binary.LittleEndian.PutUint32(data[0:4], 2)
 		binary.LittleEndian.PutUint16(data[4:6], 1500)
 
-		value, err := motorSym.decode(data, 0, datatypes)
+		value, err := motorSym.Decode(data, 0, datatypes)
 		if err != nil {
 			t.Fatalf("decode error: %v", err)
 		}
@@ -269,11 +268,11 @@ func TestParseEnumNestedInStruct(t *testing.T) {
 	// Strict enum (TC3 with {attribute 'strict'}): no sub-items in datatype,
 	// just a base type. This is what TC3 actually reports for qualified enums.
 	t.Run("strict enum no children", func(t *testing.T) {
-		datatypes := map[string]SymbolUploadDataType{
+		datatypes := map[string]TypeInfo{
 			"E_MachineState": {
 				Name:     "E_MachineState",
 				DataType: "DINT",
-				DatatypeEntry: datatypeEntry{
+				DatatypeEntry: DatatypeEntry{
 					Size:     4,
 					SubItems: 0, // strict: no enum constants exposed
 				},
@@ -281,29 +280,29 @@ func TestParseEnumNestedInStruct(t *testing.T) {
 			"ST_Motor": {
 				Name:     "ST_Motor",
 				DataType: "",
-				DatatypeEntry: datatypeEntry{
+				DatatypeEntry: DatatypeEntry{
 					Size:     8,
 					SubItems: 2,
 				},
-				Children: map[string]*SymbolUploadDataType{
-					"state": {Name: "state", DataType: "E_MachineState", DatatypeEntry: datatypeEntry{Size: 4, Offs: 0}},
-					"speed": {Name: "speed", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 4}},
+				Children: map[string]*TypeInfo{
+					"state": {Name: "state", DataType: "E_MachineState", DatatypeEntry: DatatypeEntry{Size: 4, Offs: 0}},
+					"speed": {Name: "speed", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 4}},
 				},
 			},
 		}
 
-		motorSym := &symbol{
+		motorSym := &Symbol{
 			Name: "motor", FullName: "MAIN.motor",
 			DataType: "ST_Motor", Length: 8, Group: 0x4040,
 		}
 		dt := datatypes["ST_Motor"]
-		motorSym.Children = dt.addOffset(motorSym, datatypes, motorSym.Group, nil)
+		motorSym.Children = dt.AddOffset(motorSym, datatypes, motorSym.Group, nil)
 
 		data := make([]byte, 8)
 		binary.LittleEndian.PutUint32(data[0:4], 4) // ERROR=4
 		binary.LittleEndian.PutUint16(data[4:6], 750)
 
-		value, err := motorSym.decode(data, 0, datatypes)
+		value, err := motorSym.Decode(data, 0, datatypes)
 		if err != nil {
 			t.Fatalf("decode error: %v", err)
 		}
@@ -339,14 +338,14 @@ func TestParseEnumWithoutDatatypes(t *testing.T) {
 	}
 	for _, tt := range successCases {
 		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{
+			sym := &Symbol{
 				Name:     "testEnum",
 				FullName: "MAIN.testEnum",
 				DataType: tt.dataType,
 				Length:   tt.size,
 			}
 			// Pass nil datatypes — simulates on-demand mode
-			value, err := sym.decode(tt.data, 0, nil)
+			value, err := sym.Decode(tt.data, 0, nil)
 			if err != nil {
 				t.Fatalf("decode error: %v", err)
 			}
@@ -369,13 +368,13 @@ func TestParseEnumWithoutDatatypes(t *testing.T) {
 	}
 	for _, tt := range refusedCases {
 		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{
+			sym := &Symbol{
 				Name:     "testEnum",
 				FullName: "MAIN.testEnum",
 				DataType: tt.dataType,
 				Length:   tt.size,
 			}
-			_, err := sym.decode(make([]byte, tt.size), 0, nil)
+			_, err := sym.Decode(make([]byte, tt.size), 0, nil)
 			if err == nil {
 				t.Fatalf("expected decode to refuse %d-byte inference, got nil", tt.size)
 			}
@@ -384,11 +383,11 @@ func TestParseEnumWithoutDatatypes(t *testing.T) {
 
 	// Verify non-standard sizes still error
 	t.Run("3-byte unknown type still errors", func(t *testing.T) {
-		sym := &symbol{
+		sym := &Symbol{
 			Name: "weird", FullName: "MAIN.weird",
 			DataType: "UNKNOWN_TYPE", Length: 3,
 		}
-		_, err := sym.decode([]byte{1, 2, 3}, 0, nil)
+		_, err := sym.Decode([]byte{1, 2, 3}, 0, nil)
 		if err == nil {
 			t.Fatal("expected error for 3-byte unknown type")
 		}
@@ -400,35 +399,35 @@ func TestArrayTypedefNotMistakenForEnum(t *testing.T) {
 	// A typedef array like "TYPE MyInts : ARRAY[0..2] OF INT;" has
 	// Children (array elements) and DataType="INT" — same as an enum.
 	// ArrayDim distinguishes them: arrays have ArrayDim > 0.
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		"MyInts": {
 			Name:     "MyInts",
 			DataType: "INT",
-			DatatypeEntry: datatypeEntry{
+			DatatypeEntry: DatatypeEntry{
 				Size:     6, // 3 x INT(2)
 				ArrayDim: 1,
 			},
-			Children: map[string]*SymbolUploadDataType{
-				"[0]": {Name: "[0]", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 0}},
-				"[1]": {Name: "[1]", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 2}},
-				"[2]": {Name: "[2]", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 4}},
+			Children: map[string]*TypeInfo{
+				"[0]": {Name: "[0]", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 0}},
+				"[1]": {Name: "[1]", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 2}},
+				"[2]": {Name: "[2]", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 4}},
 			},
 		},
 		"ST_WithArray": {
 			Name:     "ST_WithArray",
 			DataType: "",
-			DatatypeEntry: datatypeEntry{
+			DatatypeEntry: DatatypeEntry{
 				Size:     8,
 				SubItems: 2,
 			},
-			Children: map[string]*SymbolUploadDataType{
-				"values": {Name: "values", DataType: "MyInts", DatatypeEntry: datatypeEntry{Size: 6, Offs: 0}},
-				"count":  {Name: "count", DataType: "INT", DatatypeEntry: datatypeEntry{Size: 2, Offs: 6}},
+			Children: map[string]*TypeInfo{
+				"values": {Name: "values", DataType: "MyInts", DatatypeEntry: DatatypeEntry{Size: 6, Offs: 0}},
+				"count":  {Name: "count", DataType: "INT", DatatypeEntry: DatatypeEntry{Size: 2, Offs: 6}},
 			},
 		},
 	}
 
-	parent := &symbol{
+	parent := &Symbol{
 		Name:     "s",
 		FullName: "MAIN.s",
 		DataType: "ST_WithArray",
@@ -437,7 +436,7 @@ func TestArrayTypedefNotMistakenForEnum(t *testing.T) {
 		Offset:   0,
 	}
 	dt := datatypes["ST_WithArray"]
-	parent.Children = dt.addOffset(parent, datatypes, parent.Group, nil)
+	parent.Children = dt.AddOffset(parent, datatypes, parent.Group, nil)
 
 	// "values" child must have array element children expanded
 	valuesChild, ok := parent.Children["values"]
@@ -455,7 +454,7 @@ func TestArrayTypedefNotMistakenForEnum(t *testing.T) {
 	binary.LittleEndian.PutUint16(data[4:6], 30)
 	binary.LittleEndian.PutUint16(data[6:8], 3)
 
-	value, err := parent.decode(data, 0, datatypes)
+	value, err := parent.Decode(data, 0, datatypes)
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -473,13 +472,13 @@ func TestArrayTypedefNotMistakenForEnum(t *testing.T) {
 // Validates: NO-SPEC (regression guard, awaiting spec backfill).
 // Pins addChildren utility — child symbol added to parent map under FullName key.
 func TestAddChildren(t *testing.T) {
-	child := &symbol{Name: "x", FullName: "s.x", DataType: "INT", Length: 2}
-	parent := &symbol{
+	child := &Symbol{Name: "x", FullName: "s.x", DataType: "INT", Length: 2}
+	parent := &Symbol{
 		Name: "s", FullName: "s", DataType: "ST_S", Length: 2,
-		Children: map[string]*symbol{"x": child},
+		Children: map[string]*Symbol{"x": child},
 	}
-	symbols := map[string]*symbol{"s": parent}
-	addChildren(parent, symbols)
+	symbols := map[string]*Symbol{"s": parent}
+	AddChildren(parent, symbols)
 	if _, ok := symbols["s.x"]; !ok {
 		t.Error("expected child 's.x' to be added to symbols map")
 	}
@@ -488,15 +487,15 @@ func TestAddChildren(t *testing.T) {
 // Validates: NO-SPEC (regression guard, awaiting spec backfill).
 // Pins addChildren no-clobber: pre-existing entry under same key is preserved.
 func TestAddChildrenNoDuplicates(t *testing.T) {
-	child := &symbol{Name: "x", FullName: "s.x", DataType: "INT", Length: 2}
-	parent := &symbol{
+	child := &Symbol{Name: "x", FullName: "s.x", DataType: "INT", Length: 2}
+	parent := &Symbol{
 		Name: "s", FullName: "s", DataType: "ST_S", Length: 2,
-		Children: map[string]*symbol{"x": child},
+		Children: map[string]*Symbol{"x": child},
 	}
 	// Pre-populate to ensure it doesn't overwrite
-	existing := &symbol{Name: "x", FullName: "s.x", DataType: "DINT", Length: 4}
-	symbols := map[string]*symbol{"s": parent, "s.x": existing}
-	addChildren(parent, symbols)
+	existing := &Symbol{Name: "x", FullName: "s.x", DataType: "DINT", Length: 4}
+	symbols := map[string]*Symbol{"s": parent, "s.x": existing}
+	AddChildren(parent, symbols)
 	if symbols["s.x"].DataType != "DINT" {
 		t.Error("addChildren should not overwrite existing symbols")
 	}
@@ -595,25 +594,25 @@ func TestMakeArrayChildren_2D(t *testing.T) {
 func TestAddSymbol_2DArrayParses(t *testing.T) {
 	const typeName = "ARRAY [0..2,0..2] OF INT"
 	levels := []datatypeArrayInfo{{LBound: 0, Elements: 3}, {LBound: 0, Elements: 3}}
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		typeName: {
 			Name:          typeName,
 			DataType:      "INT",
-			DatatypeEntry: datatypeEntry{Size: 18, ArrayDim: 2},
+			DatatypeEntry: DatatypeEntry{Size: 18, ArrayDim: 2},
 			Children:      makeArrayChildren(levels, "INT", 18, nil),
 		},
 	}
-	sym := addSymbol(symbolUploadSymbol{
+	sym := AddSymbol(UploadSymbol{
 		Name:        "MAIN.a",
 		DataType:    typeName,
-		SymbolEntry: symbolEntry{Size: 18},
+		SymbolEntry: SymbolEntry{Size: 18},
 	}, datatypes, nil)
 
 	data := make([]byte, 18)
 	for i := range 9 {
 		binary.LittleEndian.PutUint16(data[i*2:], uint16(i))
 	}
-	if _, err := sym.decode(data, 0, datatypes); err != nil {
+	if _, err := sym.Decode(data, 0, datatypes); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	for row := range 3 {
@@ -704,7 +703,7 @@ func TestInferBaseType(t *testing.T) {
 		{0, 0, ""},
 	}
 	for _, tt := range tests {
-		got := inferBaseType(tt.size, tt.baseType)
+		got := InferBaseType(tt.size, tt.baseType)
 		if got != tt.want {
 			t.Errorf("inferBaseType(size=%d, baseType=%d) = %q, want %q", tt.size, tt.baseType, got, tt.want)
 		}
@@ -720,7 +719,7 @@ func TestParseUploadSymbolInfoSymbols_SingleSymbol(t *testing.T) {
 	dt := []byte("INT")
 	comment := []byte("")
 
-	entry := symbolEntry{
+	entry := SymbolEntry{
 		IGroup:        0x4020,
 		IOffs:         0,
 		Size:          2,
@@ -757,7 +756,7 @@ func TestParseUploadSymbolInfoSymbols_SingleSymbol(t *testing.T) {
 	buf = append(buf, comment...)
 	buf = append(buf, 0) // null terminator
 
-	symbols, err := parseUploadSymbolInfoSymbols(buf, nil, nil)
+	symbols, err := ParseSymbols(buf, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -785,124 +784,9 @@ func TestParseUploadSymbolInfoSymbols_SingleSymbol(t *testing.T) {
 // Validates: R-CMD-007.
 func TestParseUploadSymbolInfoSymbols_TruncatedEntry(t *testing.T) {
 	// Only 10 bytes — not enough for a symbolEntry header
-	_, err := parseUploadSymbolInfoSymbols([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, nil)
+	_, err := ParseSymbols([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, nil)
 	if err == nil {
 		t.Error("expected error for truncated data")
-	}
-}
-
-// --- symbolSumAddress ---
-
-// Validates: R-SUM-008.
-func TestSymbolSumAddress_PrefersHandleOverDirect(t *testing.T) {
-	// Handle-based addressing preferred for sum commands because direct
-	// process image addressing (0x4040) fails inside sum reads on some PLCs.
-	sym := &symbol{
-		Group:  0x4020,
-		Offset: 0x1234,
-		Handle: 0xABCD,
-		Length: 4,
-	}
-	group, offset := symbolSumAddress(sym)
-	if group != uint32(ams.GroupSymbolValueByHandle) {
-		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolValueByHandle)", group, uint32(ams.GroupSymbolValueByHandle))
-	}
-	if offset != 0xABCD {
-		t.Errorf("offset = 0x%X, want 0xABCD (handle)", offset)
-	}
-}
-
-// Validates: R-SUM-008.
-func TestSymbolSumAddress_HandleOnlyNoGroup(t *testing.T) {
-	// Handle-based when Group is 0
-	sym := &symbol{
-		Group:  0,
-		Offset: 0,
-		Handle: 0xABCD,
-		Length: 4,
-	}
-	group, offset := symbolSumAddress(sym)
-	if group != uint32(ams.GroupSymbolValueByHandle) {
-		t.Errorf("group = 0x%X, want 0x%X (GroupSymbolValueByHandle)", group, uint32(ams.GroupSymbolValueByHandle))
-	}
-	if offset != 0xABCD {
-		t.Errorf("offset = 0x%X, want 0xABCD (handle)", offset)
-	}
-}
-
-// Validates: R-SUM-008.
-func TestSymbolSumAddress_DirectFallbackNoHandle(t *testing.T) {
-	// Falls back to direct group/offset when no handle is available
-	sym := &symbol{
-		Group:  0x4020,
-		Offset: 0x0100,
-		Handle: 0,
-		Length: 2,
-	}
-	group, offset := symbolSumAddress(sym)
-	if group != 0x4020 {
-		t.Errorf("group = 0x%X, want 0x4020", group)
-	}
-	if offset != 0x0100 {
-		t.Errorf("offset = 0x%X, want 0x0100", offset)
-	}
-}
-
-// Validates: R-SUM-008.
-func TestSymbolSumAddress_DirectFallbackChildAccumulatesOffset(t *testing.T) {
-	// Without handles, child symbols accumulate offsets from parent chain.
-	parent := &symbol{
-		Group:  0x4040,
-		Offset: 0x1000, // absolute offset in PLC memory
-		Handle: 0,
-		Length: 100,
-	}
-	child := &symbol{
-		Group:  0x4040,
-		Offset: 0x0010, // relative offset within parent struct
-		Handle: 0,
-		Length: 4,
-		Parent: parent,
-	}
-	group, offset := symbolSumAddress(child)
-	if group != 0x4040 {
-		t.Errorf("group = 0x%X, want 0x4040", group)
-	}
-	if offset != 0x1010 { // 0x1000 + 0x0010
-		t.Errorf("offset = 0x%X, want 0x1010 (parent 0x1000 + child 0x0010)", offset)
-	}
-}
-
-// Validates: R-SUM-008.
-func TestSymbolSumAddress_DirectFallbackNestedChild(t *testing.T) {
-	// Deeply nested symbol without handles: grandparent → parent → child
-	grandparent := &symbol{
-		Group:  0x4040,
-		Offset: 0x2000, // absolute
-		Handle: 0,
-		Length: 200,
-	}
-	parent := &symbol{
-		Group:  0x4040,
-		Offset: 0x0080, // relative within grandparent
-		Handle: 0,
-		Length: 50,
-		Parent: grandparent,
-	}
-	child := &symbol{
-		Group:  0x4040,
-		Offset: 0x0004, // relative within parent
-		Handle: 0,
-		Length: 2,
-		Parent: parent,
-	}
-	group, offset := symbolSumAddress(child)
-	if group != 0x4040 {
-		t.Errorf("group = 0x%X, want 0x4040", group)
-	}
-	// 0x2000 + 0x0080 + 0x0004 = 0x2084
-	if offset != 0x2084 {
-		t.Errorf("offset = 0x%X, want 0x2084 (0x2000 + 0x0080 + 0x0004)", offset)
 	}
 }
 
@@ -914,27 +798,27 @@ func TestAddOffsetDepthCap(t *testing.T) {
 	// Build a self-cycle: type "MyStruct" has a child of type "MyStruct".
 	// Real PLCs reject this at compile time; the wire response could in
 	// theory contain it through a buggy or malicious target.
-	cyclic := SymbolUploadDataType{
+	cyclic := TypeInfo{
 		DataType: "MyStruct",
-		Children: map[string]*SymbolUploadDataType{
+		Children: map[string]*TypeInfo{
 			"member": {
 				Name:     "member",
 				DataType: "MyStruct",
-				DatatypeEntry: datatypeEntry{
+				DatatypeEntry: DatatypeEntry{
 					Size: 4,
 					Offs: 0,
 				},
 			},
 		},
 	}
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		"MyStruct": cyclic,
 	}
 
-	parent := &symbol{Name: "root", FullName: "root", Length: 4}
+	parent := &Symbol{Name: "root", FullName: "root", Length: 4}
 	// Should NOT stack-overflow even though the cycle would otherwise recurse
 	// indefinitely.
-	children := cyclic.addOffset(parent, datatypes, 0x4020, nil)
+	children := cyclic.AddOffset(parent, datatypes, 0x4020, nil)
 	if len(children) == 0 {
 		t.Fatal("expected at least one child before depth cap fired")
 	}
@@ -949,7 +833,7 @@ func TestParseUploadSymbolInfoSymbols_EntryLengthTooShort(t *testing.T) {
 	// Actual consumed = 30 + 5+1 + 4+1 + 0+1 = 42 bytes.
 	// Set EntryLength = 10 (too short) to trigger skip < 0.
 	buf := new(bytes.Buffer)
-	entry := symbolEntry{
+	entry := SymbolEntry{
 		EntryLength:   10, // intentionally too small
 		IGroup:        0x4020,
 		IOffs:         0,
@@ -967,7 +851,7 @@ func TestParseUploadSymbolInfoSymbols_EntryLengthTooShort(t *testing.T) {
 	buf.WriteByte(0)         // null terminator
 	buf.WriteByte(0)         // comment null terminator
 
-	_, err := parseUploadSymbolInfoSymbols(buf.Bytes(), nil, nil)
+	_, err := ParseSymbols(buf.Bytes(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error for EntryLength shorter than bytes consumed, got nil")
 	}
@@ -976,28 +860,28 @@ func TestParseUploadSymbolInfoSymbols_EntryLengthTooShort(t *testing.T) {
 // TestAddOffsetChildBaseType: a struct member or array element carries the ADST_
 // code from its datatype entry, as addSymbol already does for a top-level symbol.
 func TestAddOffsetChildBaseType(t *testing.T) {
-	datatypes := map[string]SymbolUploadDataType{
+	datatypes := map[string]TypeInfo{
 		"ST_Inner": {
 			Name:          "ST_Inner",
-			DatatypeEntry: datatypeEntry{Size: 4, SubItems: 1, DataType: uint32(ams.DataTypeBigType)},
-			Children: map[string]*SymbolUploadDataType{
-				"nDeep": {Name: "nDeep", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4, DataType: uint32(ams.DataTypeInt32)}},
+			DatatypeEntry: DatatypeEntry{Size: 4, SubItems: 1, DataType: uint32(ams.DataTypeBigType)},
+			Children: map[string]*TypeInfo{
+				"nDeep": {Name: "nDeep", DataType: "DINT", DatatypeEntry: DatatypeEntry{Size: 4, DataType: uint32(ams.DataTypeInt32)}},
 			},
 		},
 	}
-	dt := &SymbolUploadDataType{
+	dt := &TypeInfo{
 		Name:          "ST_Outer",
-		DatatypeEntry: datatypeEntry{Size: 93, SubItems: 4},
-		Children: map[string]*SymbolUploadDataType{
-			"bError":   {Name: "bError", DataType: "BOOL", DatatypeEntry: datatypeEntry{Size: 1, Offs: 0, DataType: uint32(ams.DataTypeBool)}},
-			"sMachine": {Name: "sMachine", DataType: "STRING", DatatypeEntry: datatypeEntry{Size: 81, Offs: 4, DataType: uint32(ams.DataTypeString)}},
-			"[0]":      {Name: "[0]", DataType: "DINT", DatatypeEntry: datatypeEntry{Size: 4, Offs: 85, DataType: uint32(ams.DataTypeInt32)}},
-			"stInner":  {Name: "stInner", DataType: "ST_Inner", DatatypeEntry: datatypeEntry{Size: 4, Offs: 89, DataType: uint32(ams.DataTypeBigType)}},
+		DatatypeEntry: DatatypeEntry{Size: 93, SubItems: 4},
+		Children: map[string]*TypeInfo{
+			"bError":   {Name: "bError", DataType: "BOOL", DatatypeEntry: DatatypeEntry{Size: 1, Offs: 0, DataType: uint32(ams.DataTypeBool)}},
+			"sMachine": {Name: "sMachine", DataType: "STRING", DatatypeEntry: DatatypeEntry{Size: 81, Offs: 4, DataType: uint32(ams.DataTypeString)}},
+			"[0]":      {Name: "[0]", DataType: "DINT", DatatypeEntry: DatatypeEntry{Size: 4, Offs: 85, DataType: uint32(ams.DataTypeInt32)}},
+			"stInner":  {Name: "stInner", DataType: "ST_Inner", DatatypeEntry: DatatypeEntry{Size: 4, Offs: 89, DataType: uint32(ams.DataTypeBigType)}},
 		},
 	}
 
-	parent := &symbol{Name: "outer", FullName: "MAIN.outer", DataType: "ST_Outer", Length: 93}
-	children := dt.addOffset(parent, datatypes, 0x4040, nil)
+	parent := &Symbol{Name: "outer", FullName: "MAIN.outer", DataType: "ST_Outer", Length: 93}
+	children := dt.AddOffset(parent, datatypes, 0x4040, nil)
 
 	want := map[string]ams.DataType{
 		"bError":   ams.DataTypeBool,
@@ -1023,80 +907,5 @@ func TestAddOffsetChildBaseType(t *testing.T) {
 	}
 	if deep.BaseType != ams.DataTypeInt32 {
 		t.Errorf("grandchild nDeep BaseType = %d, want %d (DINT)", deep.BaseType, ams.DataTypeInt32)
-	}
-}
-
-// TestBaseTypeName_StructMemberWithTableLoaded reproduces 192.168.3.70 (TC2 2.10):
-// with the table loaded, members reported "" or BYTE and warned to load the table.
-func TestBaseTypeName_StructMemberWithTableLoaded(t *testing.T) {
-	logs := &testLogHandler{}
-	sess := newViewTestSession()
-	sess.logger = slog.New(logs)
-
-	datatypes := map[string]SymbolUploadDataType{
-		"ST_Status": {
-			Name:          "ST_Status",
-			DatatypeEntry: datatypeEntry{Size: 93, SubItems: 3},
-			Children: map[string]*SymbolUploadDataType{
-				"sMachineName": {Name: "sMachineName", DataType: "STRING", DatatypeEntry: datatypeEntry{Size: 81, Offs: 0, DataType: uint32(ams.DataTypeString)}},
-				"fSpeed":       {Name: "fSpeed", DataType: "LREAL", DatatypeEntry: datatypeEntry{Size: 8, Offs: 84, DataType: uint32(ams.DataTypeReal64)}},
-				"bError":       {Name: "bError", DataType: "BOOL", DatatypeEntry: datatypeEntry{Size: 1, Offs: 92, DataType: uint32(ams.DataTypeBool)}},
-			},
-		},
-		// The controllers key BOOL to its storage type, which is the lookup
-		// that made a BOOL member report BYTE.
-		"BOOL": {Name: "BOOL", DataType: "BYTE", DatatypeEntry: datatypeEntry{Size: 1}},
-	}
-	sess.cache.datatypes = datatypes
-
-	root := addSymbol(symbolUploadSymbol{
-		Name:        "MAIN.stStatus",
-		DataType:    "ST_Status",
-		SymbolEntry: symbolEntry{Size: 93, DataType: uint32(ams.DataTypeBigType)},
-	}, datatypes, nil)
-	sess.cache.symbols[symbolKey(root.FullName)] = root
-	addChildren(root, sess.cache.symbols)
-
-	tests := []struct {
-		member string
-		want   string
-	}{
-		{member: "MAIN.stStatus.sMachineName", want: "STRING"},
-		{member: "MAIN.stStatus.fSpeed", want: "LREAL"},
-		{member: "MAIN.stStatus.bError", want: "BOOL"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.member, func(t *testing.T) {
-			sym, ok := sess.cache.symbols[symbolKey(tc.member)]
-			if !ok {
-				t.Fatalf("member %q not in the cache", tc.member)
-			}
-			if got := sym.view(sess).BaseTypeName(); got != tc.want {
-				t.Errorf("BaseTypeName = %q, want %q", got, tc.want)
-			}
-		})
-	}
-
-	if n := logs.countByMessage("cannot resolve the base type"); n != 0 {
-		t.Errorf("warned %d times with the datatype table loaded; the hint asks for the option that is already on", n)
-	}
-}
-
-// TestBaseTypeName_DeclaredParseableType: TC2 reports no ADST_ code and no table
-// entry for DT/DATE/TOD, yet the parser handles those names directly.
-func TestBaseTypeName_DeclaredParseableType(t *testing.T) {
-	logs := &testLogHandler{}
-	sess := newViewTestSession()
-	sess.logger = slog.New(logs)
-
-	const name = "MAIN.stStatus.dtLastUpdate"
-	sess.cache.symbols[symbolKey(name)] = &symbol{FullName: name, DataType: "DT", Length: 4}
-
-	view := SymbolView{FullName: name, DataType: "DT", Length: 4, conn: sess}
-	if got := view.BaseTypeName(); got != "DT" {
-		t.Errorf("BaseTypeName = %q, want %q", got, "DT")
-	}
-	if n := logs.countByMessage("cannot resolve the base type"); n != 0 {
-		t.Errorf("warned %d times about a type the parser resolves by name", n)
 	}
 }

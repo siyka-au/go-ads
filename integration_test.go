@@ -16,6 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 
 	"cloud.google.com/go/civil"
@@ -1326,7 +1330,7 @@ func TestIntegrationRouteForceRegistration(t *testing.T) {
 		t.Skip("ADS_SKIP_ROUTE_REGISTER=true: route registration is disabled for this run")
 	}
 
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	conn := setupConnectionWithDefaults(t, connDefaults{
 		ip:        "192.168.3.224",
 		targetAMS: "5.154.236.19.1.1",
@@ -1335,7 +1339,7 @@ func TestIntegrationRouteForceRegistration(t *testing.T) {
 
 	// Connect has always honoured the option; assert it so a failure further down
 	// is unambiguous about which half broke.
-	if n := logs.countByMessage("registering route (force mode)"); n != 1 {
+	if n := logs.CountByMessage("registering route (force mode)"); n != 1 {
 		t.Fatalf("connect registered the route %d times, want 1: force mode must register on Connect", n)
 	}
 
@@ -1348,13 +1352,13 @@ func TestIntegrationRouteForceRegistration(t *testing.T) {
 	conn.tx.connMu.Unlock()
 	waitForReconnect(t, conn, 30*time.Second)
 
-	if n := logs.countByMessage("registering route (forced/fallback)"); n < 1 {
+	if n := logs.CountByMessage("registering route (forced/fallback)"); n < 1 {
 		t.Errorf("the reconnect registered the route %d times, want at least 1: WithForceRouteRegistration promises registration on every Reconnect (R-ROUTE-005)", n)
 	}
 	// The exact line the once-per-session latch logs when it overrules force. Its
 	// presence is the defect this test was written for, so name it rather than
 	// relying only on the count above.
-	if rec := logs.findByMessage("route already registered by this session"); rec != nil {
+	if rec := logs.FindByMessage("route already registered by this session"); rec != nil {
 		t.Errorf("the latch overruled force mode on reconnect: %q", rec.Message)
 	}
 
@@ -1568,7 +1572,7 @@ func TestIntegrationProbeSumCommands(t *testing.T) {
 	// Build requests for 2 symbols
 	type symReq struct {
 		name   string
-		symbol *symbol
+		symbol *symtab.Symbol
 		group  uint32
 		offset uint32
 	}
@@ -2036,7 +2040,7 @@ func TestIntegrationSumWritePartialFailure(t *testing.T) {
 	conn.cache.lock.Lock()
 	datatypes := conn.cache.datatypes
 	conn.cache.lock.Unlock()
-	mixedData, _ := sym.encode(mixedWriteVal, datatypes)
+	mixedData, _ := sym.Encode(mixedWriteVal, datatypes)
 
 	requests := []ams.SumWriteRequest{
 		{Group: validGroup, Offset: validOffset, Data: mixedData}, // valid

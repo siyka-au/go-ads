@@ -10,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -30,7 +34,7 @@ import (
 // lifecycle. No client; tests that need network use the echo helper.
 func newNotifTestSession() *Session {
 	return &Session{
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		lifecycle:     &sessionLifecycle{closedCh: make(chan struct{})},
 		logger:        slog.Default(),
@@ -40,8 +44,8 @@ func newNotifTestSession() *Session {
 // preSeedSymbol primes the cache with a symbol that has a non-zero handle
 // so getSymbol returns immediately without taking the GetHandleByName
 // network path.
-func preSeedSymbol(sess *Session, name string) *symbol {
-	sym := &symbol{
+func preSeedSymbol(sess *Session, name string) *symtab.Symbol {
+	sym := &symtab.Symbol{
 		FullName: name,
 		Name:     name,
 		DataType: "INT",
@@ -49,7 +53,7 @@ func preSeedSymbol(sess *Session, name string) *symbol {
 		Handle:   0xC0DE,
 	}
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey(name)] = sym
+	sess.cache.symbols[symtab.Key(name)] = sym
 	sess.cache.lock.Unlock()
 	return sym
 }
@@ -248,7 +252,7 @@ func TestAddSymbolNotification_StrandedSymbol_DetectedByEpoch(t *testing.T) {
 	// re-fetch finds nil → fresh==nil branch fires.
 	time.Sleep(30 * time.Millisecond)
 	sess.cache.lock.Lock()
-	delete(sess.cache.symbols, symbolKey("MAIN.x"))
+	delete(sess.cache.symbols, symtab.Key("MAIN.x"))
 	sess.bumpEpoch()
 	sess.cache.lock.Unlock()
 
@@ -576,7 +580,7 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	logHandler := &testLogHandler{}
+	logHandler := &testlog.Handler{}
 	logger := slog.New(logHandler)
 
 	sess, _ := newWiredTestSession(t, srv)
@@ -588,7 +592,7 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 	sess.notifications.pending = []pendingNotification{
 		{Config: NotificationConfig{SymbolName: "MAIN.x", TransmissionMode: ams.TransModeServerOnChange}},
 	}
-	sess.notifications.configsByKey[symbolKey("MAIN.x")] = struct{}{}
+	sess.notifications.configsByKey[symtab.Key("MAIN.x")] = struct{}{}
 	sess.notifications.notificationChannel = ch
 	sess.notifications.lock.Unlock()
 
@@ -599,7 +603,7 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 	// to empty so the post-roundtrip re-fetch finds nil and Skipped fires.
 	srv.onWriteRead(ams.GroupSumupAddDeviceNotification, func(_ []byte) []byte {
 		sess.cache.lock.Lock()
-		sess.cache.symbols = map[string]*symbol{}
+		sess.cache.symbols = map[string]*symtab.Symbol{}
 		sess.cache.lock.Unlock()
 		h := sumHandle.Add(1) - 1
 		return buildSumAddNotifPayload([]sumNotifResponse{{Handle: h, Error: ams.ReturnCodeNoErrors}})
@@ -643,7 +647,7 @@ func TestResubscribeRetry_UpToMax(t *testing.T) {
 	}
 
 	// At least one WARN log about dropping configs after max retries.
-	if logHandler.findByMessage("dropping configs after max retries") == nil {
+	if logHandler.FindByMessage("dropping configs after max retries") == nil {
 		t.Errorf("expected WARN log 'dropping configs after max retries' was not emitted")
 	}
 }
@@ -681,7 +685,7 @@ func TestBestEffortDeleteNotifications_MixedSuccess(t *testing.T) {
 			})
 		})
 
-		logHandler := &testLogHandler{}
+		logHandler := &testlog.Handler{}
 		sess, _ := newWiredTestSession(t, srv)
 		sess.logger = slog.New(logHandler)
 
@@ -691,7 +695,7 @@ func TestBestEffortDeleteNotifications_MixedSuccess(t *testing.T) {
 		}
 		// One handle did not clean up, so there must be a WARN log
 		// reporting the partial cleanup.
-		if logHandler.findByMessage("some handles not cleaned up") == nil {
+		if logHandler.FindByMessage("some handles not cleaned up") == nil {
 			t.Errorf("expected WARN 'some handles not cleaned up' (mixed-success path)")
 		}
 	})
@@ -730,7 +734,7 @@ func TestSumNotificationResultTriState(t *testing.T) {
 
 	// Three symbols cached up-front: x, y, z.
 	for _, name := range []string{"MAIN.x", "MAIN.y", "MAIN.z"} {
-		sess.cache.symbols[symbolKey(name)] = &symbol{
+		sess.cache.symbols[symtab.Key(name)] = &symtab.Symbol{
 			FullName:    name,
 			DataType:    "INT",
 			Length:      2,
@@ -748,7 +752,7 @@ func TestSumNotificationResultTriState(t *testing.T) {
 		// Mid-roundtrip: delete z from the cache so the post-roundtrip
 		// re-resolve fails for that handle, triggering the TOCTOU branch.
 		sess.cache.lock.Lock()
-		delete(sess.cache.symbols, symbolKey("MAIN.z"))
+		delete(sess.cache.symbols, symtab.Key("MAIN.z"))
 		sess.cache.lock.Unlock()
 		return buildSumAddNotifPayload([]sumNotifResponse{
 			{Handle: 0x1001, Error: ams.ReturnCodeNoErrors},
@@ -980,7 +984,7 @@ func TestAddSymbolNotification_DeclaredButNotLiveSymbolIsNotADuplicate(t *testin
 // REFUSES the symbol upload so a reload can never be what rescues the session —
 // recovery has to come from the on-demand re-resolve. uploadInfoReads therefore
 // counts reload attempts, which is how the no-storm assertions are made.
-func seedStaleSymbol(t *testing.T, srv *scriptableServer, handleLookups, staleAdds, uploadInfoReads *atomic.Int32, opts ...SessionOption) (*Session, *symbol) {
+func seedStaleSymbol(t *testing.T, srv *scriptableServer, handleLookups, staleAdds, uploadInfoReads *atomic.Int32, opts ...SessionOption) (*Session, *symtab.Symbol) {
 	t.Helper()
 	srv.onWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
 		handleLookups.Add(1)
@@ -1008,12 +1012,12 @@ func seedStaleSymbol(t *testing.T, srv *scriptableServer, handleLookups, staleAd
 	sess.maxReloadAttempts = 3
 	sess.reloadWindow = 60 * time.Second
 
-	sym := &symbol{
+	sym := &symtab.Symbol{
 		Name: "MAIN.a", FullName: "MAIN.a", DataType: "INT",
 		Length: 2, Handle: staleTestStaleHandle, Valid: true,
 	}
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey("MAIN.a")] = sym
+	sess.cache.symbols[symtab.Key("MAIN.a")] = sym
 	sess.cache.lock.Unlock()
 	return sess, sym
 }
@@ -1026,7 +1030,7 @@ const (
 
 // awaitHandleZeroed polls the cached handle until it is invalidated, bounded and
 // short so a regression fails fast instead of hanging to the package timeout.
-func awaitHandleZeroed(t *testing.T, sess *Session, sym *symbol) {
+func awaitHandleZeroed(t *testing.T, sess *Session, sym *symtab.Symbol) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -1270,7 +1274,7 @@ func TestAddSymbolNotifications_StaleItemLogsAtWarnNotError(t *testing.T) {
 			srv := startScriptableServer(t)
 			defer srv.stop()
 
-			logs := &testLogHandler{}
+			logs := &testlog.Handler{}
 			var handleLookups, staleAdds, uploadInfoReads atomic.Int32
 			sess, _ := seedStaleSymbol(t, srv, &handleLookups, &staleAdds, &uploadInfoReads,
 				WithLogger(slog.New(logs)))
@@ -1285,9 +1289,9 @@ func TestAddSymbolNotifications_StaleItemLogsAtWarnNotError(t *testing.T) {
 				t.Fatalf("batch subscribe: %v", err)
 			}
 
-			rec := logs.findByMessage("error adding notification in batch")
+			rec := logs.FindByMessage("error adding notification in batch")
 			if rec == nil {
-				rec = logs.findByMessage("notification batch: item rejected")
+				rec = logs.FindByMessage("notification batch: item rejected")
 			}
 			if rec == nil {
 				t.Fatalf("no per-item log record for code %v; the code still reaches the caller in the results, "+

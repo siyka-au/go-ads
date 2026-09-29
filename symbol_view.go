@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"slices"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -66,7 +68,7 @@ func (v SymbolView) IsValid() bool { return v.conn != nil && v.FullName != "" }
 func (v SymbolView) BaseTypeName() string {
 	// parse() switches on the declared name first, so it wins: TC3 stamps DT
 	// with the ADST_ code for its storage type and still parses a timestamp.
-	if slices.Contains(parseableTypes, v.DataType) {
+	if slices.Contains(symtab.ParseableTypes, v.DataType) {
 		return v.DataType
 	}
 	if name := v.BaseType.IECName(); name != "" {
@@ -84,7 +86,7 @@ func (v SymbolView) BaseTypeName() string {
 			}
 		}
 	}
-	if inferred := inferBaseType(v.Length, v.BaseType); inferred != "" {
+	if inferred := symtab.InferBaseType(v.Length, v.BaseType); inferred != "" {
 		return inferred
 	}
 	// Unresolvable, and until now silently so: a 4- or 8-byte user-defined type
@@ -115,8 +117,8 @@ func (v SymbolView) warnUnresolvedBaseType() {
 // nothing. Logged after the lock is released -- the handler is user-supplied.
 func (sess *Session) warnUnresolvedBaseType(symbolName string) {
 	sess.cache.lock.Lock()
-	sym, ok := sess.cache.symbols[symbolKey(symbolName)]
-	if !ok || sym.baseTypeWarned {
+	sym, ok := sess.cache.symbols[symtab.Key(symbolName)]
+	if !ok || sym.BaseTypeWarned {
 		sess.cache.lock.Unlock()
 		return
 	}
@@ -126,17 +128,17 @@ func (sess *Session) warnUnresolvedBaseType(symbolName string) {
 	_, inTable := sess.cache.datatypes[dataType]
 	sess.cache.lock.Unlock()
 
-	if baseType.IECName() != "" || inTable || inferBaseType(length, baseType) != "" ||
-		slices.Contains(parseableTypes, dataType) {
+	if baseType.IECName() != "" || inTable || symtab.InferBaseType(length, baseType) != "" ||
+		slices.Contains(symtab.ParseableTypes, dataType) {
 		return
 	}
 
 	sess.cache.lock.Lock()
-	if sym.baseTypeWarned {
+	if sym.BaseTypeWarned {
 		sess.cache.lock.Unlock()
 		return
 	}
-	sym.baseTypeWarned = true
+	sym.BaseTypeWarned = true
 	sess.cache.lock.Unlock()
 
 	sess.logger.Warn("cannot resolve the base type of a user-defined type; no datatype table is loaded",
@@ -160,7 +162,7 @@ func (v SymbolView) Children() map[string]SymbolView {
 		return nil
 	}
 	v.conn.cache.lock.Lock()
-	s := v.conn.cache.symbols[symbolKey(v.FullName)]
+	s := v.conn.cache.symbols[symtab.Key(v.FullName)]
 	if s == nil || len(s.Children) == 0 {
 		v.conn.cache.lock.Unlock()
 		return nil
@@ -170,7 +172,7 @@ func (v SymbolView) Children() map[string]SymbolView {
 		if c == nil {
 			continue
 		}
-		out[k] = c.view(v.conn)
+		out[k] = viewOf(c, v.conn)
 	}
 	v.conn.cache.lock.Unlock()
 	return out
@@ -188,7 +190,7 @@ func (v SymbolView) ChildrenWalk(fn func(SymbolView) bool) {
 		return
 	}
 	v.conn.cache.lock.Lock()
-	root := v.conn.cache.symbols[symbolKey(v.FullName)]
+	root := v.conn.cache.symbols[symtab.Key(v.FullName)]
 	if root == nil {
 		v.conn.cache.lock.Unlock()
 		return
@@ -212,11 +214,11 @@ func (v SymbolView) ChildrenWalk(fn func(SymbolView) bool) {
 // dozen levels.
 const collectSubtreeMaxDepth = 256
 
-func collectSubtree(s *symbol, conn *Session, out *[]SymbolView) {
+func collectSubtree(s *symtab.Symbol, conn *Session, out *[]SymbolView) {
 	collectSubtreeDepth(s, conn, out, 0)
 }
 
-func collectSubtreeDepth(s *symbol, conn *Session, out *[]SymbolView, depth int) {
+func collectSubtreeDepth(s *symtab.Symbol, conn *Session, out *[]SymbolView, depth int) {
 	if depth >= collectSubtreeMaxDepth {
 		connLogger(conn).Warn("collectSubtree hit depth cap; possible Children cycle or malformed symbol tree",
 			"symbol", s.FullName,
@@ -227,14 +229,14 @@ func collectSubtreeDepth(s *symbol, conn *Session, out *[]SymbolView, depth int)
 		if c == nil {
 			continue
 		}
-		*out = append(*out, c.view(conn))
+		*out = append(*out, viewOf(c, conn))
 		collectSubtreeDepth(c, conn, out, depth+1)
 	}
 }
 
-// view builds a SymbolView for s. Caller must hold cache.lock so the
+// viewOf builds a SymbolView for s. Caller must hold cache.lock so the
 // snapshot of metadata + value is internally consistent. O(1).
-func (s *symbol) view(conn *Session) SymbolView {
+func viewOf(s *symtab.Symbol, conn *Session) SymbolView {
 	return SymbolView{
 		Name:        s.Name,
 		FullName:    s.FullName,
@@ -250,7 +252,7 @@ func (s *symbol) view(conn *Session) SymbolView {
 		Parsed:      s.Valid,
 		IsRoot:      s.Parent == nil,
 		BitMember:   s.BitMember,
-		Value:       copyData(s.Value),
+		Value:       symtab.CopyValue(s.Value),
 		conn:        conn,
 	}
 }

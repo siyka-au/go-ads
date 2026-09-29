@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
 )
 
 // reconnect_test.go — reconnect FSM unit tests.
@@ -24,7 +26,7 @@ func newReconnectTestSession() *Session {
 	return &Session{
 		tx:            &transport{},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:      make(chan struct{}),
@@ -215,7 +217,7 @@ func TestReconnectExhaustsMaxAttemptsTransitionsToClosed(t *testing.T) {
 			activeRequests: map[uint32]chan amsReply{},
 		},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:             make(chan struct{}),
@@ -282,7 +284,7 @@ func TestReconnectExhaustConcurrentClose_NoPanic(t *testing.T) {
 				activeRequests: map[uint32]chan amsReply{},
 			},
 			notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
-			cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+			cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 			logger:        slog.Default(),
 			lifecycle: &sessionLifecycle{
 				closedCh:             make(chan struct{}),
@@ -365,7 +367,7 @@ func TestReconnect_FlapDetection_AccumulatesAcrossCycles(t *testing.T) {
 			activeRequests: map[uint32]chan amsReply{},
 		},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:             make(chan struct{}),
@@ -432,7 +434,7 @@ func TestReconnect_WipesActiveNotificationsBeforeRetryLoop(t *testing.T) {
 			activeRequests: map[uint32]chan amsReply{},
 		},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
 		lifecycle: &sessionLifecycle{
 			closedCh:             make(chan struct{}),
@@ -460,8 +462,8 @@ func TestReconnect_WipesActiveNotificationsBeforeRetryLoop(t *testing.T) {
 	// Stage pre-reconnect handles. Fix 3's snapshot+wipe must capture these
 	// before the retry loop starts.
 	sess.notifications.lock.Lock()
-	sess.notifications.activeNotifications[0xAAAA] = activeNotification{Sym: &symbol{FullName: "MAIN.x"}}
-	sess.notifications.activeNotifications[0xBBBB] = activeNotification{Sym: &symbol{FullName: "MAIN.y"}}
+	sess.notifications.activeNotifications[0xAAAA] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.x"}}
+	sess.notifications.activeNotifications[0xBBBB] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.y"}}
 	sess.notifications.lock.Unlock()
 
 	_ = sess.Reconnect(ctx)

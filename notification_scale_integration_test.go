@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -43,7 +45,7 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 		want = n
 	}
 
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	conn := setupConnectionWithDefaults(t, connDefaults{
 		ip:        "192.168.3.224",
 		targetAMS: "5.154.236.19.1.1",
@@ -126,10 +128,10 @@ collect:
 
 	// The reaper firing on our own handles is the specific regression; catch it
 	// even in the (unexpected) case where every symbol still got through.
-	if rec := logs.findByMessage("does not own"); rec != nil {
+	if rec := logs.FindByMessage("does not own"); rec != nil {
 		t.Errorf("orphan reaper deleted a handle created by this session: %q", rec.Message)
 	}
-	if rec := logs.findByMessage("received notification for unknown handle"); rec != nil {
+	if rec := logs.FindByMessage("received notification for unknown handle"); rec != nil {
 		t.Errorf("unknown-handle warning during batch subscribe (early sample not buffered): %q", rec.Message)
 	}
 }

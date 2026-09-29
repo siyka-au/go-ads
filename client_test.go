@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -629,7 +631,7 @@ func TestHandleReceive_UnknownInvokeID(t *testing.T) {
 func TestHandleReceive_TooShort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	conn := &Session{
 		lifecycle: &sessionLifecycle{ctx: ctx},
 		logger:    slog.New(logs),
@@ -640,7 +642,7 @@ func TestHandleReceive_TooShort(t *testing.T) {
 	// Less than 32 bytes — should return early
 	conn.client.Load().handleReceive(ctx, []byte{1, 2, 3, 4, 5})
 
-	if logs.findByMessage("header too short") == nil {
+	if logs.FindByMessage("header too short") == nil {
 		t.Error("short packet did not hit the length guard; it fell through to header decode")
 	}
 	if len(conn.tx.activeRequests) != 0 {
@@ -1254,7 +1256,7 @@ func TestReadFrames_SourceRaceWithLocalHandshake(t *testing.T) {
 		<-served
 	})
 
-	handler := &testLogHandler{}
+	handler := &testlog.Handler{}
 	placeholder := ams.Address{NetID: [6]byte{127, 0, 0, 1, 1, 1}, Port: 33333}
 	c, err := Dial(addr.IP.String(), addr.Port, ams.Address{NetID: [6]byte{5, 1, 2, 3, 1, 1}, Port: 851},
 		placeholder, time.Second, WithClientLogger(slog.New(handler)))
@@ -1289,7 +1291,7 @@ func TestReadFrames_SourceRaceWithLocalHandshake(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	logged := false
 	for time.Now().Before(deadline) {
-		if handler.findByMessage("PLC closed connection, transport down") != nil {
+		if handler.FindByMessage("PLC closed connection, transport down") != nil {
 			logged = true
 			break
 		}

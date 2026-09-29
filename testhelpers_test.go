@@ -5,104 +5,15 @@ import (
 	"context"
 	"encoding/binary"
 	"log/slog"
-	"math"
 	"net"
-	"reflect"
-	"slices"
 	"strconv"
-	"strings"
-	"sync"
 	"testing"
 	"time"
-	"unicode/utf16"
+
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 )
-
-// Float comparison tolerances — single source of truth
-const (
-	toleranceFloat32 = 1e-6  // relative, for REAL (float32 round-trip)
-	toleranceFloat64 = 1e-10 // relative, for LREAL (float64 round-trip)
-)
-
-// --- Assertion helpers ---
-
-func requireNoError(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func assertEqual(t *testing.T, got, want string) {
-	t.Helper()
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func assertFloatApprox(t *testing.T, got, want, tol float64) {
-	t.Helper()
-	if want == 0 {
-		if math.Abs(got) > tol {
-			t.Errorf("got %v, want ~0 (tolerance %v)", got, tol)
-		}
-		return
-	}
-	if math.Abs((got-want)/want) > tol {
-		t.Errorf("got %v, want %v (relative tolerance %v)", got, want, tol)
-	}
-}
-
-// --- Byte-encoding helpers for test data construction ---
-
-func le16(v int16) []byte {
-	b := make([]byte, 2)
-	binary.LittleEndian.PutUint16(b, uint16(v))
-	return b
-}
-
-func leu16(v uint16) []byte {
-	b := make([]byte, 2)
-	binary.LittleEndian.PutUint16(b, v)
-	return b
-}
-
-func le32(v int32) []byte {
-	b := make([]byte, 4)
-	binary.LittleEndian.PutUint32(b, uint32(v))
-	return b
-}
-
-func leu32(v uint32) []byte {
-	b := make([]byte, 4)
-	binary.LittleEndian.PutUint32(b, v)
-	return b
-}
-
-func le64(v int64) []byte {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(v))
-	return b
-}
-
-func leu64(v uint64) []byte {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, v)
-	return b
-}
-
-func leF32(v float32) []byte {
-	b := make([]byte, 4)
-	binary.LittleEndian.PutUint32(b, math.Float32bits(v))
-	return b
-}
-
-func leF64(v float64) []byte {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, math.Float64bits(v))
-	return b
-}
 
 // --- Notification packet builders ---
 
@@ -181,7 +92,7 @@ func newTestConnection() *Session {
 	conn := &Session{
 		lifecycle:     &sessionLifecycle{ctx: ctx, shutdown: cancel},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		logger:        slog.Default(),
 	}
 	conn.client.Store(&Client{
@@ -198,189 +109,6 @@ func newTestConnection() *Session {
 // Session.handleNotification via the installed callback.
 func (conn *Session) drivePacket(ctx context.Context, packet []byte) error {
 	return conn.client.Load().deviceNotification(ctx, packet)
-}
-
-// --- testLogHandler — captures slog records for assertions ---
-
-// logRecord captures a single log entry for test assertions.
-//
-// Attrs is rendered with %v rather than kept as `any`: every assertion this
-// suite makes on an attribute is "is it there, and does it say what I expect",
-// and comparing strings keeps those assertions readable. Attributes used to be
-// discarded entirely, which made a whole class of log content — the local port
-// on a drop, the frame counts behind a drop verdict — untestable, so an empty
-// field was indistinguishable from a correct one.
-type logRecord struct {
-	Level   slog.Level
-	Message string
-	Attrs   map[string]string
-}
-
-// attr returns the value of the named attribute, or "" when the record does not
-// carry it. The two cases are distinguished by hasAttr.
-func (r *logRecord) attr(key string) string { return r.Attrs[key] }
-
-// hasAttr reports whether the record carries the named attribute at all, so a
-// test can tell "absent" from "present but empty" — the difference between a log
-// site that was never reached and one that logged a zero value.
-func (r *logRecord) hasAttr(key string) bool {
-	_, ok := r.Attrs[key]
-	return ok
-}
-
-// testLogHandler is a minimal slog.Handler that captures log records for testing.
-//
-// WithAttrs returns a derived handler that records into the same store, so
-// attributes attached by the library through logger.With() (which is how the
-// session tags records) survive into the assertions instead of being dropped.
-type testLogHandler struct {
-	records []logRecord
-	mu      sync.Mutex
-
-	// parent, with and groups are set only on derived handlers. The zero value is
-	// a usable root handler, which is how every test constructs one.
-	parent *testLogHandler
-	with   []attrBatch
-	groups []string
-}
-
-// attrBatch is the attributes from one WithAttrs call together with the group
-// prefix that was open when it was made.
-//
-// The prefix has to travel with the batch rather than being read from the
-// handler at Handle time: slog's contract is that a group qualifies only the
-// attributes added after it, so logger.With("request_id", x).WithGroup("net")
-// must still record "request_id", not "net.request_id".
-type attrBatch struct {
-	prefix []string
-	attrs  []slog.Attr
-}
-
-// root returns the handler that owns the record store.
-func (h *testLogHandler) root() *testLogHandler {
-	for h.parent != nil {
-		h = h.parent
-	}
-	return h
-}
-
-func (h *testLogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
-
-// collectAttr records one attribute under its group-qualified key, flattening
-// slog.Group values recursively.
-//
-// Groups are qualified rather than dropped because a handler that silently
-// flattens them can make a test pass on a key the real handler would have
-// written as "group.key" — the kind of green that means nothing. Nothing in the
-// library groups attributes today; this keeps the helper honest if that changes.
-func collectAttr(dst map[string]string, prefix []string, a slog.Attr) {
-	// Resolve before the kind check. A slog.LogValuer — secret in this package is
-	// one — may return a group, and an unresolved value would land in the map as a
-	// single opaque scalar instead of its children.
-	a.Value = a.Value.Resolve()
-	if a.Value.Kind() == slog.KindGroup {
-		inner := a.Value.Group()
-		if len(inner) == 0 {
-			return // slog: a group with no attributes is ignored
-		}
-		next := prefix
-		if a.Key != "" { // an empty group key inlines its attributes
-			next = append(append([]string{}, prefix...), a.Key)
-		}
-		for _, sub := range inner {
-			collectAttr(dst, next, sub)
-		}
-		return
-	}
-	key := a.Key
-	if len(prefix) > 0 {
-		key = strings.Join(prefix, ".") + "." + key
-	}
-	dst[key] = a.Value.String()
-}
-
-func (h *testLogHandler) Handle(_ context.Context, r slog.Record) error {
-	attrs := make(map[string]string, r.NumAttrs()+len(h.with))
-	for _, batch := range h.with {
-		for _, a := range batch.attrs {
-			collectAttr(attrs, batch.prefix, a)
-		}
-	}
-	r.Attrs(func(a slog.Attr) bool {
-		collectAttr(attrs, h.groups, a)
-		return true
-	})
-	root := h.root()
-	root.mu.Lock()
-	root.records = append(root.records, logRecord{Level: r.Level, Message: r.Message, Attrs: attrs})
-	root.mu.Unlock()
-	return nil
-}
-
-func (h *testLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	if len(attrs) == 0 {
-		return h
-	}
-	// h.groups is never mutated in place — WithGroup builds a fresh slice — so the
-	// batch can share it. attrs is the caller's slice and is copied.
-	merged := make([]attrBatch, 0, len(h.with)+1)
-	merged = append(merged, h.with...)
-	merged = append(merged, attrBatch{prefix: h.groups, attrs: slices.Clone(attrs)})
-	return &testLogHandler{parent: h.root(), with: merged, groups: h.groups}
-}
-
-func (h *testLogHandler) WithGroup(name string) slog.Handler {
-	if name == "" {
-		return h // slog: an empty group name must return the receiver
-	}
-	return &testLogHandler{
-		parent: h.root(),
-		with:   h.with,
-		groups: append(append([]string{}, h.groups...), name),
-	}
-}
-
-func (h *testLogHandler) findByMessage(msg string) *logRecord {
-	root := h.root()
-	root.mu.Lock()
-	defer root.mu.Unlock()
-	for _, r := range root.records {
-		if strings.Contains(r.Message, msg) {
-			return &r
-		}
-	}
-	return nil
-}
-
-// --- WSTRING / UTF-16LE helpers ---
-
-func encodeUTF16LE(s string) []byte {
-	encoded := utf16.Encode([]rune(s))
-	buf := make([]byte, len(encoded)*2)
-	for i, r := range encoded {
-		binary.LittleEndian.PutUint16(buf[i*2:], r)
-	}
-	return buf
-}
-
-// --- symbol encode/decode round-trip helper ---
-
-// testValueRoundTrip encodes value for a fresh symbol of dataType, decodes the
-// bytes with another, and requires the identical Go value back.
-func testValueRoundTrip(t *testing.T, dataType string, length uint32, value any) {
-	t.Helper()
-	sym := &symbol{DataType: dataType, Length: length}
-	data, err := sym.encode(value, nil)
-	if err != nil {
-		t.Fatalf("encode(%s, %#v): %v", dataType, value, err)
-	}
-	got, err := (&symbol{DataType: dataType, Length: length}).decode(data, 0, nil)
-	if err != nil {
-		t.Fatalf("decode(%s): %v", dataType, err)
-	}
-	if !reflect.DeepEqual(got, value) {
-		t.Errorf("round trip %s: wrote %#v (%T), got back %#v (%T)", dataType, value, value, got, got)
-	}
 }
 
 // --- helpers for the AMS peer-listener tests ---
@@ -405,41 +133,4 @@ func freeLocalPort(t *testing.T) int {
 
 func localAddr(port int) string {
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-}
-
-// all returns a copy of every record captured so far. Named for the question,
-// not the field it reads, because the field is already called records.
-func (h *testLogHandler) all() []logRecord {
-	root := h.root()
-	root.mu.Lock()
-	defer root.mu.Unlock()
-	return slices.Clone(root.records)
-}
-
-// recordsByLevel returns the captured records logged at exactly level, for
-// assertions about whether something was an error or merely a warning.
-func (h *testLogHandler) recordsByLevel(level slog.Level) []logRecord {
-	var out []logRecord
-	for _, r := range h.all() {
-		if r.Level == level {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// countByMessage reports how many records contain msg. Separate from
-// findByMessage because "did this happen at all" and "did this happen once
-// rather than every tick" are different questions.
-func (h *testLogHandler) countByMessage(msg string) int {
-	root := h.root()
-	root.mu.Lock()
-	defer root.mu.Unlock()
-	n := 0
-	for _, r := range root.records {
-		if strings.Contains(r.Message, msg) {
-			n++
-		}
-	}
-	return n
 }

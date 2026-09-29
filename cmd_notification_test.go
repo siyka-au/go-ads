@@ -12,6 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -116,13 +120,13 @@ func TestDeviceNotification_SingleSample(t *testing.T) {
 
 	// Register a notification for handle 42
 	ch := make(chan *Update, 10)
-	sym := &symbol{
+	sym := &symtab.Symbol{
 		FullName: "MAIN.testVar",
 		DataType: "INT",
 		Length:   2,
 	}
 	conn.notifications.activeNotifications[42] = activeNotification{Sym: sym, Ch: ch}
-	conn.cache.symbols[symbolKey(sym.FullName)] = sym
+	conn.cache.symbols[symtab.Key(sym.FullName)] = sym
 
 	// Build INT value = 1234
 	data := make([]byte, 2)
@@ -176,7 +180,7 @@ func TestDeviceNotification_UnknownHandle(t *testing.T) {
 
 // Validates: R-NOT-007.
 func TestDeviceNotification_UnknownHandleDuringClose(t *testing.T) {
-	handler := &testLogHandler{}
+	handler := &testlog.Handler{}
 	conn := newTestConnection()
 	conn.logger = slog.New(handler)
 	conn.lifecycle.closedCh = make(chan struct{})
@@ -196,7 +200,7 @@ func TestDeviceNotification_UnknownHandleDuringClose(t *testing.T) {
 	}
 
 	// During Close(), stale notifications should be Debug, not Warn
-	rec := handler.findByMessage("received notification for deleted handle")
+	rec := handler.FindByMessage("received notification for deleted handle")
 	if rec == nil {
 		t.Fatal("expected debug log for stale notification during close")
 	}
@@ -207,7 +211,7 @@ func TestDeviceNotification_UnknownHandleDuringClose(t *testing.T) {
 
 // Validates: R-NOT-007.
 func TestDeviceNotification_UnknownHandleNormalCondition(t *testing.T) {
-	handler := &testLogHandler{}
+	handler := &testlog.Handler{}
 	conn := newTestConnection()
 	conn.logger = slog.New(handler)
 	defer conn.lifecycle.shutdown()
@@ -222,7 +226,7 @@ func TestDeviceNotification_UnknownHandleNormalCondition(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	rec := handler.findByMessage("received notification for unknown handle")
+	rec := handler.FindByMessage("received notification for unknown handle")
 	if rec == nil {
 		t.Fatal("expected warn log for unknown handle in normal conditions")
 	}
@@ -237,12 +241,12 @@ func TestDeviceNotification_MultipleStampsAndSamples(t *testing.T) {
 	defer conn.lifecycle.shutdown()
 
 	ch := make(chan *Update, 10)
-	sym1 := &symbol{FullName: "var1", DataType: "BYTE", Length: 1}
-	sym2 := &symbol{FullName: "var2", DataType: "BYTE", Length: 1}
+	sym1 := &symtab.Symbol{FullName: "var1", DataType: "BYTE", Length: 1}
+	sym2 := &symtab.Symbol{FullName: "var2", DataType: "BYTE", Length: 1}
 	conn.notifications.activeNotifications[1] = activeNotification{Sym: sym1, Ch: ch}
 	conn.notifications.activeNotifications[2] = activeNotification{Sym: sym2, Ch: ch}
-	conn.cache.symbols[symbolKey(sym1.FullName)] = sym1
-	conn.cache.symbols[symbolKey(sym2.FullName)] = sym2
+	conn.cache.symbols[symtab.Key(sym1.FullName)] = sym1
+	conn.cache.symbols[symtab.Key(sym2.FullName)] = sym2
 
 	stamps := []struct {
 		timestamp uint64
@@ -346,9 +350,9 @@ func TestDeviceNotification_BoolType(t *testing.T) {
 	defer conn.lifecycle.shutdown()
 
 	ch := make(chan *Update, 5)
-	sym := &symbol{FullName: "MAIN.bFlag", DataType: "BOOL", Length: 1}
+	sym := &symtab.Symbol{FullName: "MAIN.bFlag", DataType: "BOOL", Length: 1}
 	conn.notifications.activeNotifications[10] = activeNotification{Sym: sym, Ch: ch}
-	conn.cache.symbols[symbolKey(sym.FullName)] = sym
+	conn.cache.symbols[symtab.Key(sym.FullName)] = sym
 
 	packet := buildNotificationPacket(10, 0, []byte{1})
 	err := conn.drivePacket(conn.lifecycle.ctx, packet)
@@ -372,9 +376,9 @@ func TestDeviceNotification_StringType(t *testing.T) {
 	defer conn.lifecycle.shutdown()
 
 	ch := make(chan *Update, 5)
-	sym := &symbol{FullName: "MAIN.sName", DataType: "STRING", Length: 20}
+	sym := &symtab.Symbol{FullName: "MAIN.sName", DataType: "STRING", Length: 20}
 	conn.notifications.activeNotifications[11] = activeNotification{Sym: sym, Ch: ch}
-	conn.cache.symbols[symbolKey(sym.FullName)] = sym
+	conn.cache.symbols[symtab.Key(sym.FullName)] = sym
 
 	strData := make([]byte, 20)
 	copy(strData, "Hello\x00")
@@ -435,13 +439,13 @@ func TestWindowsFiletimeConversion(t *testing.T) {
 			defer conn.lifecycle.shutdown()
 
 			ch := make(chan *Update, 1)
-			sym := &symbol{
+			sym := &symtab.Symbol{
 				FullName: "MAIN.x",
 				DataType: "INT",
 				Length:   2,
 			}
 			conn.notifications.activeNotifications[7] = activeNotification{Sym: sym, Ch: ch}
-			conn.cache.symbols[symbolKey(sym.FullName)] = sym
+			conn.cache.symbols[symtab.Key(sym.FullName)] = sym
 
 			data := make([]byte, 2)
 			binary.LittleEndian.PutUint16(data, 1)
@@ -492,13 +496,13 @@ func TestNotification_TerminalZeroByteSample_TriggersDetection(t *testing.T) {
 	}
 
 	ch := make(chan *Update, 4)
-	sym := &symbol{
+	sym := &symtab.Symbol{
 		FullName: "MAIN.x",
 		DataType: "DINT",
 		Length:   4,
 	}
 	conn.notifications.activeNotifications[42] = activeNotification{Sym: sym, Ch: ch}
-	conn.cache.symbols[symbolKey(sym.FullName)] = sym
+	conn.cache.symbols[symtab.Key(sym.FullName)] = sym
 
 	// Inject 0-byte terminal sample. drivePacket may or may not return an
 	// error from the now-skipped parse path — what matters is the callback
@@ -533,7 +537,7 @@ func TestNotification_StaleFlag_OneShotAfterDetection(t *testing.T) {
 	defer sess.lifecycle.shutdown()
 
 	ch := make(chan *Update, 4)
-	sym := &symbol{
+	sym := &symtab.Symbol{
 		FullName: "MAIN.x", DataType: "INT", Length: 2,
 	}
 	const handle uint32 = 7
@@ -541,7 +545,7 @@ func TestNotification_StaleFlag_OneShotAfterDetection(t *testing.T) {
 	sess.notifications.activeNotifications[handle] = activeNotification{Sym: sym, Ch: ch}
 	sess.notifications.lock.Unlock()
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey(sym.FullName)] = sym
+	sess.cache.symbols[symtab.Key(sym.FullName)] = sym
 	sess.cache.lock.Unlock()
 
 	// Mark stale (simulates prior R-CACHE-009 detection under Ignore).
@@ -586,8 +590,8 @@ func TestNotification_StaleFlag_IgnoreMarksAllHandles(t *testing.T) {
 
 	const h1, h2 uint32 = 11, 22
 	sess.notifications.lock.Lock()
-	sess.notifications.activeNotifications[h1] = activeNotification{Sym: &symbol{FullName: "a"}}
-	sess.notifications.activeNotifications[h2] = activeNotification{Sym: &symbol{FullName: "b"}}
+	sess.notifications.activeNotifications[h1] = activeNotification{Sym: &symtab.Symbol{FullName: "a"}}
+	sess.notifications.activeNotifications[h2] = activeNotification{Sym: &symtab.Symbol{FullName: "b"}}
 	sess.notifications.lock.Unlock()
 
 	// Trigger detection through the strategy dispatcher.
@@ -638,13 +642,13 @@ func TestNotification_ListenerPathTriggersIgnoreMarksOtherHandles(t *testing.T) 
 	const hDead, hLive uint32 = 100, 200
 	chDead := make(chan *Update, 4)
 	chLive := make(chan *Update, 4)
-	symDead := &symbol{FullName: "MAIN.dead", DataType: "DINT", Length: 4}
-	symLive := &symbol{FullName: "MAIN.live", DataType: "INT", Length: 2}
+	symDead := &symtab.Symbol{FullName: "MAIN.dead", DataType: "DINT", Length: 4}
+	symLive := &symtab.Symbol{FullName: "MAIN.live", DataType: "INT", Length: 2}
 
 	conn.notifications.activeNotifications[hDead] = activeNotification{Sym: symDead, Ch: chDead}
 	conn.notifications.activeNotifications[hLive] = activeNotification{Sym: symLive, Ch: chLive}
-	conn.cache.symbols[symbolKey(symDead.FullName)] = symDead
-	conn.cache.symbols[symbolKey(symLive.FullName)] = symLive
+	conn.cache.symbols[symtab.Key(symDead.FullName)] = symDead
+	conn.cache.symbols[symtab.Key(symLive.FullName)] = symLive
 
 	// Inject 0-byte terminal sample on hDead — listener path fires
 	// handleStaleDetection(0x710), Ignore branch must mark BOTH handles.
@@ -912,7 +916,7 @@ func TestOrphanDelete_AbortsWhenHandleReappearsInActiveNotifications(t *testing.
 	// goroutine's re-check (under notifications.lock, just before the RPC
 	// is dispatched) must see this and abort.
 	sess.notifications.lock.Lock()
-	sess.notifications.activeNotifications[0xACEACE] = activeNotification{Sym: &symbol{FullName: "MAIN.x"}}
+	sess.notifications.activeNotifications[0xACEACE] = activeNotification{Sym: &symtab.Symbol{FullName: "MAIN.x"}}
 	sess.notifications.lock.Unlock()
 
 	time.Sleep(500 * time.Millisecond)
@@ -956,7 +960,7 @@ func TestOrphanDelete_RPCFailureNonFatal(t *testing.T) {
 // reconnect -- the one time orphans actually arrive in bulk -- the episode ended
 // on the next healthy sample and every orphan warned again.
 func TestDeviceNotification_UnknownHandleWarnsOnceWhileInterleaved(t *testing.T) {
-	handler := &testLogHandler{}
+	handler := &testlog.Handler{}
 	conn := newTestConnection()
 	conn.logger = slog.New(handler)
 	defer conn.lifecycle.shutdown()
@@ -966,7 +970,7 @@ func TestDeviceNotification_UnknownHandleWarnsOnceWhileInterleaved(t *testing.T)
 	ch := make(chan *Update, 64)
 	conn.notifications.lock.Lock()
 	conn.notifications.activeNotifications[owned] = activeNotification{
-		Sym: conn.cache.symbols[symbolKey("MAIN.owned")], Ch: ch,
+		Sym: conn.cache.symbols[symtab.Key("MAIN.owned")], Ch: ch,
 	}
 	conn.notifications.lock.Unlock()
 
@@ -983,7 +987,7 @@ func TestDeviceNotification_UnknownHandleWarnsOnceWhileInterleaved(t *testing.T)
 	}
 
 	warns := 0
-	for _, rec := range handler.recordsByLevel(slog.LevelWarn) {
+	for _, rec := range handler.RecordsByLevel(slog.LevelWarn) {
 		if strings.Contains(rec.Message, "received notification for unknown handle") {
 			warns++
 		}

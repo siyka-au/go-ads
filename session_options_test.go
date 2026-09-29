@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
 )
 
 // Validates: R-SES-011.
@@ -187,13 +189,13 @@ func TestWithLocalBindIP(t *testing.T) {
 	})
 
 	t.Run("invalid IP ignored with Warn", func(t *testing.T) {
-		handler := &testLogHandler{}
+		handler := &testlog.Handler{}
 		s := &Session{logger: slog.New(handler)}
 		WithLocalBindIP("not-an-ip-address")(s)
 		if s.localBindIP != nil {
 			t.Errorf("invalid IP should leave localBindIP nil, got %v", s.localBindIP)
 		}
-		if rec := handler.findByMessage("WithLocalBindIP: invalid IP"); rec == nil {
+		if rec := handler.FindByMessage("WithLocalBindIP: invalid IP"); rec == nil {
 			t.Error("expected Warn log for invalid IP, got none")
 		}
 	})

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -23,7 +25,7 @@ func (sess *Session) ListSymbols() (map[string]SymbolView, error) {
 	}
 	out := make(map[string]SymbolView, len(sess.cache.symbols))
 	for _, v := range sess.cache.symbols {
-		out[v.FullName] = v.view(sess)
+		out[v.FullName] = viewOf(v, sess)
 	}
 	return out, nil
 }
@@ -123,7 +125,7 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 			return fmt.Errorf("failed to download datatypes: %w", err)
 		}
 	}
-	datatypes, err := parseUploadSymbolInfoDataTypes(datatypesData, sess.logger)
+	datatypes, err := symtab.ParseDataTypes(datatypesData, sess.logger)
 	if err != nil {
 		return fmt.Errorf("failed to parse datatypes: %w", err)
 	}
@@ -147,7 +149,7 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 			return fmt.Errorf("failed to download symbols: %w", err)
 		}
 	}
-	symbols, err := parseUploadSymbolInfoSymbols(symbolsData, datatypes, sess.logger)
+	symbols, err := symtab.ParseSymbols(symbolsData, datatypes, sess.logger)
 	if err != nil {
 		return fmt.Errorf("failed to parse symbols: %w", err)
 	}
@@ -158,7 +160,7 @@ func (sess *Session) LoadSymbolsSlow(ctx context.Context, cfg SlowDiscoveryConfi
 	// Stamp the session's logger onto every symbol as the cache takes ownership,
 	// so records produced later while parsing or serialising them reach the
 	// caller's handler instead of stderr. See symbol.logger.
-	stampLoggerOnAll(symbols, sess.logger)
+	symtab.StampLoggerOnAll(symbols, sess.logger)
 	sess.cache.symbols = symbols
 	sess.cache.symbolsFullyLoaded = true
 	sess.cache.onDemandSymbols = map[string]bool{}
@@ -182,7 +184,7 @@ func (sess *Session) GetSymbol(ctx context.Context, symbolName string) (SymbolVi
 	}
 	sess.cache.lock.Lock()
 	defer sess.cache.lock.Unlock()
-	return sym.view(sess), nil
+	return viewOf(sym, sess), nil
 }
 
 // logSymbolGot traces a symbol without handing the live *symbol to the logger:
@@ -190,7 +192,7 @@ func (sess *Session) GetSymbol(ctx context.Context, symbolName string) (SymbolVi
 // under cache.lock from the recvWorker. -race stayed green only because slog skips
 // args at a disabled level, so the defect was armed for the field, never CI. The
 // snapshot is taken under the lock and logged after releasing it.
-func (sess *Session) logSymbolGot(sym *symbol) {
+func (sess *Session) logSymbolGot(sym *symtab.Symbol) {
 	ctx := context.Background()
 	if !sess.logger.Enabled(ctx, LevelTrace) {
 		return
@@ -207,9 +209,9 @@ func (sess *Session) logSymbolGot(sym *symbol) {
 // getSymbol returns the internal *symbol for the named symbol. Used by
 // in-package code paths that need direct access to mutable symbol state
 // (notifications, reads, writes). External callers should use GetSymbol.
-func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol, error) {
+func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symtab.Symbol, error) {
 	sess.cache.lock.Lock()
-	localSymbol, ok := sess.cache.symbols[symbolKey(symbolName)]
+	localSymbol, ok := sess.cache.symbols[symtab.Key(symbolName)]
 	needHandle := ok && localSymbol.Handle == 0
 	sess.cache.lock.Unlock()
 
@@ -229,7 +231,7 @@ func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol,
 			// writing the acquired handle into it would leak the PLC
 			// handle (no live cache entry tracks it) and leave the live
 			// entry with Handle=0.
-			currentEntry, stillInMap := sess.cache.symbols[symbolKey(symbolName)]
+			currentEntry, stillInMap := sess.cache.symbols[symtab.Key(symbolName)]
 			swapped := !stillInMap || currentEntry != localSymbol
 			switch {
 			case swapped:
@@ -260,10 +262,11 @@ func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol,
 	}
 
 	// On-demand resolution: query the PLC for this specific symbol
-	sym, err := sess.client.Load().GetSymbolInfoByName(ctx, symbolName)
+	info, err := sess.client.Load().GetSymbolInfoByName(ctx, symbolName)
 	if err != nil {
 		return nil, fmt.Errorf("symbol %q not found and on-demand lookup failed: %w", symbolName, err)
 	}
+	sym := symtab.FromInfo(info)
 
 	handle, err := sess.client.Load().GetHandleByName(ctx, symbolName)
 	if err != nil {
@@ -273,7 +276,7 @@ func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol,
 
 	sess.cache.lock.Lock()
 	// Check if another goroutine resolved this symbol while we were waiting
-	if existing, ok := sess.cache.symbols[symbolKey(symbolName)]; ok {
+	if existing, ok := sess.cache.symbols[symtab.Key(symbolName)]; ok {
 		sess.cache.lock.Unlock()
 		// Release the handle we just acquired since another goroutine beat us
 		handleBytes := make([]byte, 4)
@@ -284,9 +287,9 @@ func (sess *Session) getSymbol(ctx context.Context, symbolName string) (*symbol,
 		}
 		return existing, nil
 	}
-	stampLogger(sym, sess.logger, 0)
-	sess.cache.symbols[symbolKey(symbolName)] = sym
-	sess.cache.onDemandSymbols[symbolKey(symbolName)] = true
+	symtab.StampLogger(sym, sess.logger, 0)
+	sess.cache.symbols[symtab.Key(symbolName)] = sym
+	sess.cache.onDemandSymbols[symtab.Key(symbolName)] = true
 	sess.cache.lock.Unlock()
 
 	// Debug, not Info: one record per symbol per resolution. A consumer with 40
@@ -407,7 +410,7 @@ func (sess *Session) LoadSymbolList(ctx context.Context, cfg SlowDiscoveryConfig
 	}
 
 	// Parse without datatypes — no child expansion
-	symbols, err := parseUploadSymbolInfoSymbols(symbolsData, nil, sess.logger)
+	symbols, err := symtab.ParseSymbols(symbolsData, nil, sess.logger)
 	if err != nil {
 		return fmt.Errorf("failed to parse symbols: %w", err)
 	}
@@ -416,7 +419,7 @@ func (sess *Session) LoadSymbolList(ctx context.Context, cfg SlowDiscoveryConfig
 	// Stamp the session's logger onto every symbol as the cache takes ownership,
 	// so records produced later while parsing or serialising them reach the
 	// caller's handler instead of stderr. See symbol.logger.
-	stampLoggerOnAll(symbols, sess.logger)
+	symtab.StampLoggerOnAll(symbols, sess.logger)
 	sess.cache.symbols = symbols
 	sess.cache.symbolListLoaded = true
 	sess.cache.onDemandSymbols = map[string]bool{}
@@ -464,7 +467,7 @@ func (sess *Session) LoadDataTypes(ctx context.Context, cfg SlowDiscoveryConfig)
 		}
 	}
 
-	datatypes, err := parseUploadSymbolInfoDataTypes(datatypesData, sess.logger)
+	datatypes, err := symtab.ParseDataTypes(datatypesData, sess.logger)
 	if err != nil {
 		return fmt.Errorf("failed to parse datatypes: %w", err)
 	}
@@ -495,7 +498,7 @@ func (sess *Session) rebuildSymbolChildrenLocked() {
 
 	// Collect top-level symbol names (those without a dot, i.e., not children)
 	// We rebuild from the original top-level symbols only
-	topLevel := make(map[string]*symbol)
+	topLevel := make(map[string]*symtab.Symbol)
 	for name, sym := range sess.cache.symbols {
 		topLevel[name] = sym
 	}
@@ -503,8 +506,8 @@ func (sess *Session) rebuildSymbolChildrenLocked() {
 	for _, sym := range topLevel {
 		dt, ok := sess.cache.datatypes[sym.DataType]
 		if ok {
-			sym.Children = dt.addOffset(sym, sess.cache.datatypes, sym.Group, sess.logger)
-			addChildren(sym, sess.cache.symbols)
+			sym.Children = dt.AddOffset(sym, sess.cache.datatypes, sym.Group, sess.logger)
+			symtab.AddChildren(sym, sess.cache.symbols)
 		}
 	}
 

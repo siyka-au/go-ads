@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -83,7 +85,7 @@ func TestHandshakeDropLogsBelowError(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
 
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, time.Second,
 		WithClientLogger(slog.New(logs)))
 	if err != nil {
@@ -101,13 +103,11 @@ func TestHandshakeDropLogsBelowError(t *testing.T) {
 
 	// Let the listen goroutine observe the EOF and log it.
 	deadline := time.Now().Add(2 * time.Second)
-	for logs.findByMessage("transport down") == nil && time.Now().Before(deadline) {
+	for logs.FindByMessage("transport down") == nil && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	logs.mu.Lock()
-	defer logs.mu.Unlock()
-	for _, r := range logs.records {
+	for _, r := range logs.All() {
 		if r.Level >= slog.LevelError {
 			t.Errorf("ERROR logged during a handshake: %q — one such line trips a downstream health check", r.Message)
 		}
@@ -171,7 +171,7 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 				srv := startScriptableServer(t)
 				defer srv.stop()
 
-				logs := &testLogHandler{}
+				logs := &testlog.Handler{}
 				c, err := Dial(srv.host, srv.port, ams.Address{}, ams.Address{}, clientTimeout,
 					WithClientLogger(slog.New(logs)))
 				if err != nil {
@@ -189,10 +189,10 @@ func TestHandshakeGating_PerSite(t *testing.T) {
 
 				// The listen-goroutine sites log after the call returns.
 				deadline := time.Now().Add(2 * time.Second)
-				for logs.findByMessage(tc.wantMsg) == nil && time.Now().Before(deadline) {
+				for logs.FindByMessage(tc.wantMsg) == nil && time.Now().Before(deadline) {
 					time.Sleep(10 * time.Millisecond)
 				}
-				rec := logs.findByMessage(tc.wantMsg)
+				rec := logs.FindByMessage(tc.wantMsg)
 				if rec == nil {
 					t.Fatalf("no %q log line — the provocation never reached the site under test", tc.wantMsg)
 				}

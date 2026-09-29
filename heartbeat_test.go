@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -741,7 +743,7 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 	})
 	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess, c := newWiredTestSession(t, srv,
 		WithNotificationHeartbeat(50*time.Millisecond, 2),
 		WithLogger(slog.New(logs)))
@@ -763,7 +765,7 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 	// the watcher should not even reach its complaint. A bounded count here would
 	// be satisfied by the backoff alone and would leave the transport check
 	// untested.
-	if got := logs.countByMessage("no notification heartbeat within the allowed window"); got != 0 {
+	if got := logs.CountByMessage("no notification heartbeat within the allowed window"); got != 0 {
 		t.Errorf("watcher complained %d time(s) in ~30 ticks against a closed transport: it is retrying a resubscribe that cannot "+
 			"work, and would keep doing so for the life of the process", got)
 	}
@@ -771,9 +773,9 @@ func TestHeartbeat_DoesNotSpinWhenTheTransportIsGone(t *testing.T) {
 	// And it must stop for good once the session is closed.
 	sess.markClosed()
 	time.Sleep(300 * time.Millisecond)
-	before := logs.countByMessage("no notification heartbeat within the allowed window")
+	before := logs.CountByMessage("no notification heartbeat within the allowed window")
 	time.Sleep(500 * time.Millisecond)
-	if after := logs.countByMessage("no notification heartbeat within the allowed window"); after != before {
+	if after := logs.CountByMessage("no notification heartbeat within the allowed window"); after != before {
 		t.Errorf("watcher logged %d more time(s) after the session was closed: the goroutine outlives its session", after-before)
 	}
 }
@@ -1223,7 +1225,7 @@ func TestHeartbeat_DeferralsKeepAConstantRate(t *testing.T) {
 	})
 	srv.onDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
 
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	sess, c := newWiredTestSession(t, srv,
 		WithNotificationHeartbeat(100*time.Millisecond, 2),
 		WithLogger(slog.New(logs)))
@@ -1241,7 +1243,7 @@ func TestHeartbeat_DeferralsKeepAConstantRate(t *testing.T) {
 	sess.recordRuntimeState(ams.StateConfig)
 	time.Sleep(1500 * time.Millisecond)
 
-	got := logs.countByMessage("re-subscribe deferred")
+	got := logs.CountByMessage("re-subscribe deferred")
 	if got < 5 {
 		t.Errorf("only %d deferrals in 1.5s (base window 200ms, so ~7 expected): the interval is growing, which means a "+
 			"deferral is being counted as a failure — it attempts nothing, so it says nothing about how hard recovery is", got)

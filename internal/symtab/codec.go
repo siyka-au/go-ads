@@ -1,4 +1,4 @@
-package ads
+package symtab
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 // decode decodes the symbol's value from data at offset into s.Value (see
 // value.go for the Go types) and returns it. A struct or array decodes each
 // child in place and assembles their values.
-func (s *symbol) decode(data []byte, offset int, datatypes map[string]SymbolUploadDataType) (any, error) {
+func (s *Symbol) Decode(data []byte, offset int, datatypes map[string]TypeInfo) (any, error) {
 	start := offset
 	// reject oversized s.Length before arithmetic. uint32 → int
 	// conversion wraps on 32-bit Go; an attacker-controlled or buggy symbol
@@ -31,7 +31,7 @@ func (s *symbol) decode(data []byte, offset int, datatypes map[string]SymbolUplo
 			if child.BitMember {
 				err = child.decodeBit(data[offset:stop])
 			} else {
-				_, err = child.decode(data[offset:stop], int(child.Offset), datatypes)
+				_, err = child.Decode(data[offset:stop], int(child.Offset), datatypes)
 			}
 			if err != nil {
 				return nil, fmt.Errorf("decoding child %q: %w", child.Name, err)
@@ -59,7 +59,7 @@ func (s *symbol) decode(data []byte, offset int, datatypes map[string]SymbolUplo
 
 // decodeBit decodes a BIT member from its parent's bytes: Offset counts bits
 // from the start of parent.
-func (s *symbol) decodeBit(parent []byte) error {
+func (s *Symbol) decodeBit(parent []byte) error {
 	if s.Length != 1 {
 		return fmt.Errorf("%s is %d bits wide; only single BIT members are supported", s.Name, s.Length)
 	}
@@ -74,14 +74,14 @@ func (s *symbol) decodeBit(parent []byte) error {
 // the wire, so it is the current value. A rate limit here once dropped any
 // change arriving within 50 ms of the previous one, so a notification returned
 // the value it was replacing.
-func (s *symbol) store(v any) {
+func (s *Symbol) store(v any) {
 	s.LastUpdateTime = time.Now()
 	s.Value = v
 	s.Valid = true
 	s.ValueParsed = true
 }
 
-var parseableTypes = []string{
+var ParseableTypes = []string{
 	"BOOL",
 	"BYTE",
 	"USINT",
@@ -122,7 +122,7 @@ var parseableTypes = []string{
 // is ambiguous (DINT/REAL, LINT/LREAL) and reading a REAL as a DINT silently
 // corrupts every parse, so those return "" and the caller points at LoadSymbols.
 // baseType is threaded through for the chain; only size is inspected today.
-func inferBaseType(size uint32, baseType ams.DataType) string {
+func InferBaseType(size uint32, baseType ams.DataType) string {
 	_ = baseType // reserved for future width+type tightening; see godoc above.
 	switch size {
 	case 1:

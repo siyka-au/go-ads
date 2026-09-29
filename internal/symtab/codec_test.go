@@ -1,4 +1,4 @@
-package ads
+package symtab
 
 import (
 	"encoding/binary"
@@ -16,9 +16,9 @@ import (
 )
 
 // decodeOK decodes data as a fresh symbol and fails the test on error.
-func decodeOK(t *testing.T, sym *symbol, data []byte, datatypes map[string]SymbolUploadDataType) any {
+func decodeOK(t *testing.T, sym *Symbol, data []byte, datatypes map[string]TypeInfo) any {
 	t.Helper()
-	v, err := sym.decode(data, 0, datatypes)
+	v, err := sym.Decode(data, 0, datatypes)
 	if err != nil {
 		t.Fatalf("decode %s: %v", sym.DataType, err)
 	}
@@ -29,8 +29,8 @@ func decodeOK(t *testing.T, sym *symbol, data []byte, datatypes map[string]Symbo
 // data buffer size before arithmetic to prevent negative slice / huge alloc.
 // Validates: R-PARSE-006.
 func TestDecode_RejectsOversizedSymbolLength(t *testing.T) {
-	sym := &symbol{Name: "x", DataType: "INT", Length: 0xFFFFFFFF}
-	_, err := sym.decode(make([]byte, 16), 0, nil)
+	sym := &Symbol{Name: "x", DataType: "INT", Length: 0xFFFFFFFF}
+	_, err := sym.Decode(make([]byte, 16), 0, nil)
 	if err == nil || !strings.Contains(err.Error(), "Length") {
 		t.Fatalf("expected an error mentioning Length, got %v", err)
 	}
@@ -40,7 +40,7 @@ func TestDecode_RejectsOversizedSymbolLength(t *testing.T) {
 // returned. The store used to skip values arriving within 50 ms of the last
 // one, so a notification carried the value it was replacing.
 func TestDecode_BackToBackChangesAreNotDropped(t *testing.T) {
-	sym := &symbol{
+	sym := &Symbol{
 		Name:     "x",
 		DataType: "UDINT",
 		Length:   4,
@@ -63,11 +63,11 @@ func TestDecode_BackToBackChangesAreNotDropped(t *testing.T) {
 // Validates: NO-SPEC.
 func TestDecodeUnknownType(t *testing.T) {
 	// Size 3 matches no standard width, so inferBaseType cannot resolve it.
-	for _, dt := range []map[string]SymbolUploadDataType{nil, {}} {
-		if _, err := (&symbol{DataType: "UNKNOWN_TYPE", Length: 3}).decode([]byte{0, 0, 0}, 0, dt); err == nil {
+	for _, dt := range []map[string]TypeInfo{nil, {}} {
+		if _, err := (&Symbol{DataType: "UNKNOWN_TYPE", Length: 3}).Decode([]byte{0, 0, 0}, 0, dt); err == nil {
 			t.Error("expected error for unknown data type")
 		}
-		if _, err := (&symbol{DataType: "UNKNOWN_TYPE", Length: 3}).encode(int8(1), dt); err == nil {
+		if _, err := (&Symbol{DataType: "UNKNOWN_TYPE", Length: 3}).Encode(int8(1), dt); err == nil {
 			t.Error("expected error writing an unknown data type")
 		}
 	}
@@ -78,13 +78,13 @@ func TestDecodeUnknownType(t *testing.T) {
 // resolution -- which used to read 40 bytes as one DINT and report "DINT Size
 // Wrong", naming a type the caller never asked for.
 func TestDecodeArrayWithoutDatatypeTable(t *testing.T) {
-	sym := &symbol{
+	sym := &Symbol{
 		Name:     "anCounters",
 		DataType: "ARRAY [0..9] OF DINT",
 		BaseType: ams.DataTypeInt32, // element type, not the aggregate
 		Length:   40,                // 10 * 4
 	}
-	_, err := sym.decode(make([]byte, 40), 0, nil)
+	_, err := sym.Decode(make([]byte, 40), 0, nil)
 	if err == nil {
 		t.Fatal("expected an error for an array with no datatype table")
 	}
@@ -101,7 +101,7 @@ func TestDecodeArrayWithoutDatatypeTable(t *testing.T) {
 // The width guard must not catch a plain scalar resolved through BaseType: a
 // type-aliased DINT has Length 4 and decodes as a DINT.
 func TestDecodeAliasScalarStillResolves(t *testing.T) {
-	sym := &symbol{Name: "aliased", DataType: "E_SomeAlias", BaseType: ams.DataTypeInt32, Length: 4}
+	sym := &Symbol{Name: "aliased", DataType: "E_SomeAlias", BaseType: ams.DataTypeInt32, Length: 4}
 	if got := decodeOK(t, sym, le32(7), nil); got != int32(7) {
 		t.Errorf("got %#v, want int32(7)", got)
 	}
@@ -109,12 +109,12 @@ func TestDecodeAliasScalarStillResolves(t *testing.T) {
 
 // Validates: NO-SPEC.
 func TestAliasResolutionThroughDatatypeTable(t *testing.T) {
-	datatypes := map[string]SymbolUploadDataType{"MyAlias": {DataType: "INT"}}
-	sym := &symbol{DataType: "MyAlias", Length: 2}
+	datatypes := map[string]TypeInfo{"MyAlias": {DataType: "INT"}}
+	sym := &Symbol{DataType: "MyAlias", Length: 2}
 	if got := decodeOK(t, sym, le16(42), datatypes); got != int16(42) {
 		t.Errorf("decode: got %#v, want int16(42)", got)
 	}
-	b, err := sym.encode(int16(123), datatypes)
+	b, err := sym.Encode(int16(123), datatypes)
 	if err != nil || !reflect.DeepEqual(b, le16(123)) {
 		t.Errorf("encode: % x, %v", b, err)
 	}
@@ -138,7 +138,7 @@ func TestDecodeWithBaseType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sym := &symbol{Name: "a", FullName: "GVL.a", DataType: "SomeAlias", Length: tt.length, BaseType: tt.baseType}
+			sym := &Symbol{Name: "a", FullName: "GVL.a", DataType: "SomeAlias", Length: tt.length, BaseType: tt.baseType}
 			if got := decodeOK(t, sym, tt.data, nil); got != tt.want {
 				t.Errorf("got %#v (%T), want %#v (%T)", got, got, tt.want, tt.want)
 			}
@@ -150,8 +150,8 @@ func TestDecodeWithBaseType(t *testing.T) {
 // the 1-/2-byte inference fallback for a user type with no datatype table.
 // Validates: NO-SPEC.
 func TestEncodeFallsBackToInferredType(t *testing.T) {
-	sym := &symbol{Name: "x", DataType: "MyEnum16", Length: 2}
-	got, err := sym.encode(42, nil)
+	sym := &Symbol{Name: "x", DataType: "MyEnum16", Length: 2}
+	got, err := sym.Encode(42, nil)
 	if err != nil {
 		t.Fatalf("expected inference fallback to succeed for a 2-byte type: %v", err)
 	}
@@ -165,8 +165,8 @@ func TestEncodeFallsBackToInferredType(t *testing.T) {
 // Validates: NO-SPEC (regression guard for REAL/LREAL ambiguity fix).
 func TestEncodeRefuses4And8ByteInferenceWithoutDatatypes(t *testing.T) {
 	for _, size := range []uint32{4, 8} {
-		sym := &symbol{Name: "x", DataType: "MyUnknownType", Length: size}
-		if _, err := sym.encode(42, nil); err == nil {
+		sym := &Symbol{Name: "x", DataType: "MyUnknownType", Length: size}
+		if _, err := sym.Encode(42, nil); err == nil {
 			t.Errorf("size=%d: expected error refusing inference (REAL/LREAL ambiguity), got nil", size)
 		}
 	}
@@ -201,7 +201,7 @@ func TestDecodeDataTooShort(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.dataType, func(t *testing.T) {
-			if _, err := (&symbol{DataType: tt.dataType, Length: tt.length}).decode(tt.data, 0, nil); err == nil {
+			if _, err := (&Symbol{DataType: tt.dataType, Length: tt.length}).Decode(tt.data, 0, nil); err == nil {
 				t.Errorf("expected error for %s with %d bytes", tt.dataType, len(tt.data))
 			}
 		})
@@ -211,7 +211,7 @@ func TestDecodeDataTooShort(t *testing.T) {
 // Validates: R-SYM-003 (partial).
 func TestDecodeSizeWrong(t *testing.T) {
 	// BOOL declared 2 bytes wide cannot decode.
-	if _, err := (&symbol{DataType: "BOOL", Length: 2}).decode([]byte{1, 0}, 0, nil); err == nil {
+	if _, err := (&Symbol{DataType: "BOOL", Length: 2}).Decode([]byte{1, 0}, 0, nil); err == nil {
 		t.Error("expected error for BOOL with wrong size")
 	}
 }
@@ -290,9 +290,9 @@ func TestValueRoundTripNaN(t *testing.T) {
 		{"REAL", 4, float32(math.NaN())},
 		{"LREAL", 8, math.NaN()},
 	} {
-		data, err := (&symbol{DataType: tt.dataType, Length: tt.length}).encode(tt.value, nil)
+		data, err := (&Symbol{DataType: tt.dataType, Length: tt.length}).Encode(tt.value, nil)
 		requireNoError(t, err)
-		got := decodeOK(t, &symbol{DataType: tt.dataType, Length: tt.length}, data, nil)
+		got := decodeOK(t, &Symbol{DataType: tt.dataType, Length: tt.length}, data, nil)
 		switch v := got.(type) {
 		case float32:
 			if !math.IsNaN(float64(v)) {
@@ -310,9 +310,9 @@ func TestValueRoundTripNaN(t *testing.T) {
 
 // -0 keeps its sign bit through the round trip.
 func TestValueRoundTripNegativeZero(t *testing.T) {
-	data, err := (&symbol{DataType: "LREAL", Length: 8}).encode(math.Copysign(0, -1), nil)
+	data, err := (&Symbol{DataType: "LREAL", Length: 8}).Encode(math.Copysign(0, -1), nil)
 	requireNoError(t, err)
-	got := decodeOK(t, &symbol{DataType: "LREAL", Length: 8}, data, nil).(float64)
+	got := decodeOK(t, &Symbol{DataType: "LREAL", Length: 8}, data, nil).(float64)
 	if got != 0 || !math.Signbit(got) {
 		t.Errorf("got %v (signbit %v), want -0", got, math.Signbit(got))
 	}
@@ -358,7 +358,7 @@ func TestEncodeInvalidValues(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := (&symbol{DataType: tt.dataType, Length: tt.length}).encode(tt.value, nil); err == nil {
+			if _, err := (&Symbol{DataType: tt.dataType, Length: tt.length}).Encode(tt.value, nil); err == nil {
 				t.Errorf("expected error for %s with %#v", tt.dataType, tt.value)
 			}
 		})
@@ -386,7 +386,7 @@ func TestDecodeSTRING(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := decodeOK(t, &symbol{DataType: "STRING", Length: tt.length}, tt.data, nil); got != tt.want {
+			if got := decodeOK(t, &Symbol{DataType: "STRING", Length: tt.length}, tt.data, nil); got != tt.want {
 				t.Errorf("got %#v, want %q", got, tt.want)
 			}
 		})
@@ -395,7 +395,7 @@ func TestDecodeSTRING(t *testing.T) {
 
 // Validates: R-PARSE-003.
 func TestEncodeSTRING_PadsWithZeros(t *testing.T) {
-	data, err := (&symbol{DataType: "STRING", Length: 10}).encode("Hi", nil)
+	data, err := (&Symbol{DataType: "STRING", Length: 10}).Encode("Hi", nil)
 	requireNoError(t, err)
 	if want := append([]byte("Hi"), make([]byte, 8)...); !reflect.DeepEqual(data, want) {
 		t.Errorf("got % x, want % x", data, want)
@@ -422,7 +422,7 @@ func TestDecodeWSTRING(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := decodeOK(t, &symbol{DataType: "WSTRING", Length: tt.length}, tt.data, nil); got != tt.want {
+			if got := decodeOK(t, &Symbol{DataType: "WSTRING", Length: tt.length}, tt.data, nil); got != tt.want {
 				t.Errorf("got %#v, want %q", got, tt.want)
 			}
 		})
@@ -433,7 +433,7 @@ func TestDecodeWSTRING(t *testing.T) {
 func TestEncodeWSTRING(t *testing.T) {
 	for _, text := range []string{"Hello", "日本語", "😀", "a", ""} {
 		t.Run(text, func(t *testing.T) {
-			data, err := (&symbol{DataType: "WSTRING", Length: 40}).encode(text, nil)
+			data, err := (&Symbol{DataType: "WSTRING", Length: 40}).Encode(text, nil)
 			requireNoError(t, err)
 			want := append(encodeUTF16LE(text), make([]byte, 40-2*len(utf16.Encode([]rune(text))))...)
 			if !reflect.DeepEqual(data, want) {
@@ -453,7 +453,7 @@ func TestEncodeWSTRINGSurrogatePairDoesNotFit(t *testing.T) {
 		t.Fatalf("expected 3 UTF-16 code units, got %d", n)
 	}
 	// Length 6 holds 2 units and the terminator: the pair would be split.
-	if _, err := (&symbol{DataType: "WSTRING", Length: 6}).encode(value, nil); err == nil {
+	if _, err := (&Symbol{DataType: "WSTRING", Length: 6}).Encode(value, nil); err == nil {
 		t.Fatal("expected an error, got nil")
 	}
 	testValueRoundTrip(t, "WSTRING", 8, value)
@@ -483,7 +483,7 @@ func TestBitValueFlagDoesNotAffectDecoding(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%s/%v", tt.dataType, tt.want), func(t *testing.T) {
-			sym := &symbol{DataType: tt.dataType, Length: tt.length, Flags: ams.SymbolFlagBitValue}
+			sym := &Symbol{DataType: tt.dataType, Length: tt.length, Flags: ams.SymbolFlagBitValue}
 			if got := decodeOK(t, sym, tt.data, nil); got != tt.want {
 				t.Errorf("got %#v, want %#v", got, tt.want)
 			}
@@ -494,7 +494,7 @@ func TestBitValueFlagDoesNotAffectDecoding(t *testing.T) {
 // Validates: R-PARSE-007.
 func TestEncodeBitSymbol(t *testing.T) {
 	for v, want := range map[bool]byte{true: 0x01, false: 0x00} {
-		data, err := (&symbol{DataType: "BOOL", Length: 1, Flags: ams.SymbolFlagBitValue}).encode(v, nil)
+		data, err := (&Symbol{DataType: "BOOL", Length: 1, Flags: ams.SymbolFlagBitValue}).Encode(v, nil)
 		if err != nil || len(data) != 1 || data[0] != want {
 			t.Errorf("%v: got % x, %v; want %02x", v, data, err, want)
 		}
@@ -546,25 +546,25 @@ func TestDecodeNestedStructThreeLevels(t *testing.T) {
 	// ST_Inner { value: INT }
 	// ST_Middle { inner: ST_Inner, count: BYTE }
 	// ST_Outer { middle: ST_Middle, flag: BOOL }
-	innerChild := &symbol{Name: "value", FullName: "o.middle.inner.value", DataType: "INT", Length: 2, Offset: 0}
-	inner := &symbol{
+	innerChild := &Symbol{Name: "value", FullName: "o.middle.inner.value", DataType: "INT", Length: 2, Offset: 0}
+	inner := &Symbol{
 		Name: "inner", FullName: "o.middle.inner", DataType: "ST_Inner", Length: 2, Offset: 0,
-		Children: map[string]*symbol{"value": innerChild},
+		Children: map[string]*Symbol{"value": innerChild},
 	}
 	innerChild.Parent = inner
 
-	countChild := &symbol{Name: "count", FullName: "o.middle.count", DataType: "BYTE", Length: 1, Offset: 2}
-	middle := &symbol{
+	countChild := &Symbol{Name: "count", FullName: "o.middle.count", DataType: "BYTE", Length: 1, Offset: 2}
+	middle := &Symbol{
 		Name: "middle", FullName: "o.middle", DataType: "ST_Middle", Length: 4, Offset: 0,
-		Children: map[string]*symbol{"inner": inner, "count": countChild},
+		Children: map[string]*Symbol{"inner": inner, "count": countChild},
 	}
 	inner.Parent = middle
 	countChild.Parent = middle
 
-	flagChild := &symbol{Name: "flag", FullName: "o.flag", DataType: "BOOL", Length: 1, Offset: 4}
-	outer := &symbol{
+	flagChild := &Symbol{Name: "flag", FullName: "o.flag", DataType: "BOOL", Length: 1, Offset: 4}
+	outer := &Symbol{
 		Name: "o", FullName: "o", DataType: "ST_Outer", Length: 5,
-		Children: map[string]*symbol{"middle": middle, "flag": flagChild},
+		Children: map[string]*Symbol{"middle": middle, "flag": flagChild},
 	}
 	middle.Parent = outer
 	flagChild.Parent = outer
@@ -592,7 +592,7 @@ func TestDecodeNestedStructThreeLevels(t *testing.T) {
 	}
 
 	// And the nested value encodes back to the same bytes.
-	back, err := outer.encode(want, nil)
+	back, err := outer.Encode(want, nil)
 	requireNoError(t, err)
 	if !reflect.DeepEqual(back, data) {
 		t.Errorf("encode: got % x, want % x", back, data)
@@ -602,14 +602,14 @@ func TestDecodeNestedStructThreeLevels(t *testing.T) {
 // Padding between members is written as zeros.
 // Validates: R-PARSE-001.
 func TestEncodeStructWithPadding(t *testing.T) {
-	parent := &symbol{
+	parent := &Symbol{
 		Name: "test", FullName: "test", DataType: "ST_Test", Length: 8,
-		Children: map[string]*symbol{
+		Children: map[string]*Symbol{
 			"field1": {Name: "field1", FullName: "test.field1", DataType: "INT", Length: 2, Offset: 0},
 			"field2": {Name: "field2", FullName: "test.field2", DataType: "DINT", Length: 4, Offset: 4},
 		},
 	}
-	data, err := parent.encode(map[string]any{"field1": int16(42), "field2": int32(100)}, nil)
+	data, err := parent.Encode(map[string]any{"field1": int16(42), "field2": int32(100)}, nil)
 	requireNoError(t, err)
 	if want := []byte{42, 0, 0, 0, 100, 0, 0, 0}; !reflect.DeepEqual(data, want) {
 		t.Errorf("got % x, want % x", data, want)
@@ -620,9 +620,9 @@ func TestEncodeStructWithPadding(t *testing.T) {
 // ones a JSON object left out, silently changing PLC state.
 // Validates: R-PARSE-001.
 func TestEncodeStructRequiresEveryMember(t *testing.T) {
-	parent := &symbol{
+	parent := &Symbol{
 		Name: "s", FullName: "s", DataType: "ST_S", Length: 2,
-		Children: map[string]*symbol{
+		Children: map[string]*Symbol{
 			"x": {Name: "x", FullName: "s.x", DataType: "BYTE", Length: 1, Offset: 0},
 			"y": {Name: "y", FullName: "s.y", DataType: "BYTE", Length: 1, Offset: 1},
 		},
@@ -632,7 +632,7 @@ func TestEncodeStructRequiresEveryMember(t *testing.T) {
 		"not a map":      "not json",
 		"member type":    map[string]any{"x": uint8(7), "y": "7"},
 	} {
-		if _, err := parent.encode(v, nil); err == nil {
+		if _, err := parent.Encode(v, nil); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
@@ -642,13 +642,13 @@ func TestEncodeStructRequiresEveryMember(t *testing.T) {
 // including when the sum overflows uint32.
 // Validates: R-WRITE-OVERFLOW-001.
 func TestEncodeChildOffsetOverflow(t *testing.T) {
-	parent := &symbol{
+	parent := &Symbol{
 		Name: "Parent", FullName: "Parent", DataType: "SomeStruct", Length: 10,
-		Children: map[string]*symbol{
+		Children: map[string]*Symbol{
 			"Field": {Name: "Field", FullName: "Parent.Field", DataType: "DINT", Offset: math.MaxUint32 - 1, Length: 4},
 		},
 	}
-	if _, err := parent.encode(map[string]any{"Field": int32(42)}, nil); err == nil {
+	if _, err := parent.Encode(map[string]any{"Field": int32(42)}, nil); err == nil {
 		t.Fatal("expected error for child Offset+Length overflow, got nil")
 	}
 }

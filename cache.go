@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
 )
 
 // zeroOldSymbolHandles invalidates each symbol in the map: Handle=0 forces
 // re-resolution, defending against the PLC reusing a handle for a different
 // symbol, and clearing the cached value stops a view of it showing
 // pre-disconnect data. Nil-safe.
-func zeroOldSymbolHandles(m map[string]*symbol) {
+func zeroOldSymbolHandles(m map[string]*symtab.Symbol) {
 	for _, s := range m {
 		if s != nil {
 			s.Handle = 0
@@ -44,7 +46,7 @@ func (sess *Session) loadSymbols(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to upload datatypes: %w", err)
 	}
-	datatypes, err := parseUploadSymbolInfoDataTypes(datatypesResponse, sess.logger)
+	datatypes, err := symtab.ParseDataTypes(datatypesResponse, sess.logger)
 	if err != nil {
 		return fmt.Errorf("failed to parse datatypes: %w", err)
 	}
@@ -52,7 +54,7 @@ func (sess *Session) loadSymbols(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to upload symbols: %w", err)
 	}
-	symbols, err := parseUploadSymbolInfoSymbols(symbolsResponse, datatypes, sess.logger)
+	symbols, err := symtab.ParseSymbols(symbolsResponse, datatypes, sess.logger)
 	if err != nil {
 		return fmt.Errorf("failed to parse symbols: %w", err)
 	}
@@ -65,7 +67,7 @@ func (sess *Session) loadSymbols(ctx context.Context) error {
 	// Stamp the session's logger onto every symbol as the cache takes ownership,
 	// so records produced later while parsing or serialising them reach the
 	// caller's handler instead of stderr. See symbol.logger.
-	stampLoggerOnAll(symbols, sess.logger)
+	symtab.StampLoggerOnAll(symbols, sess.logger)
 	sess.cache.symbols = symbols
 	sess.bumpEpoch()
 	sess.cache.lock.Unlock()
@@ -83,8 +85,8 @@ func (sess *Session) loadSymbols(ctx context.Context) error {
 // MUST capture the epoch before resolve and recheck before commit.
 type symbolCache struct {
 	lock               sync.Mutex
-	symbols            map[string]*symbol
-	datatypes          map[string]SymbolUploadDataType
+	symbols            map[string]*symtab.Symbol
+	datatypes          map[string]symtab.TypeInfo
 	symbolVersion      uint8
 	onDemandSymbols    map[string]bool
 	symbolListLoaded   bool

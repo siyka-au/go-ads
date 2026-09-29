@@ -26,7 +26,7 @@ func allLatin1() string {
 	for i := range b {
 		b[i] = byte(i + 1)
 	}
-	return latin1Decode(b)
+	return oracleLatin1Decode(b)
 }
 
 // Beckhoff's STRING_TO_WSTRING of every byte gives the same character this
@@ -116,7 +116,7 @@ func TestSeedStringWrite(t *testing.T) {
 				t.Fatalf("WriteValue %q: %v", s, err)
 			}
 			n := utf8.RuneCountInString(s)
-			enc, _ := latin1Encode(s)
+			enc, _ := oracleLatin1Encode(s)
 			// The characters, then the terminator; the rest of the buffer holds
 			// whatever an earlier, longer write left.
 			waitForValue(t, "stored bytes", bytesAny(enc, n+1), prefixOf(sess, strFB+"aStringBytes", n+1))
@@ -223,4 +223,27 @@ func TestSeedWStringToStringOnPLC(t *testing.T) {
 		check(s, s)
 	}
 	check("€ “ ”", "¬ \x1c \x1d")
+}
+
+// oracleLatin1Decode and oracleLatin1Encode are an independent reference for
+// what the PLC stores: one byte per character, U+0000-U+00FF only. Written out
+// here rather than borrowed from the library so these tests check the library
+// against the definition, not against itself.
+func oracleLatin1Decode(b []byte) string {
+	r := make([]rune, len(b))
+	for i, c := range b {
+		r[i] = rune(c)
+	}
+	return string(r)
+}
+
+func oracleLatin1Encode(s string) ([]byte, error) {
+	out := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r > 0xFF {
+			return nil, fmt.Errorf("%q is outside Latin-1", r)
+		}
+		out = append(out, byte(r))
+	}
+	return out, nil
 }

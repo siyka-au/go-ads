@@ -2,6 +2,8 @@ package ads
 
 import (
 	"testing"
+
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
 )
 
 // TestBrowseSymbols_VirtualRootGroupingPreservesCase validates that virtual
@@ -13,7 +15,7 @@ func TestBrowseSymbols_VirtualRootGroupingPreservesCase(t *testing.T) {
 	defer sess.lifecycle.shutdown()
 
 	// Seed cache: only "MAIN_DP1.nCounter" exists, no symbol named "MAIN_DP1" itself.
-	sess.cache.symbols[symbolKey("MAIN_DP1.nCounter")] = &symbol{
+	sess.cache.symbols[symtab.Key("MAIN_DP1.nCounter")] = &symtab.Symbol{
 		FullName: "MAIN_DP1.nCounter",
 		Name:     "nCounter",
 		DataType: "DINT",
@@ -55,7 +57,7 @@ func TestBrowseSymbols_VirtualChildGroupingPreservesCase(t *testing.T) {
 	// "MAIN_DP1.stStruct" themselves. browseChildren("MAIN_DP1") falls
 	// through to the prefix-scan branch (no exact-match symbol with
 	// Children present), exercising the virtual-middle-grouping case.
-	sess.cache.symbols[symbolKey("MAIN_DP1.stStruct.nField")] = &symbol{
+	sess.cache.symbols[symtab.Key("MAIN_DP1.stStruct.nField")] = &symtab.Symbol{
 		FullName: "MAIN_DP1.stStruct.nField",
 		Name:     "nField",
 		DataType: "INT",

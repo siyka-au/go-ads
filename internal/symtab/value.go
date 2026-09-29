@@ -1,4 +1,4 @@
-package ads
+package symtab
 
 import (
 	"bytes"
@@ -389,7 +389,7 @@ func uintInRange(dataType string, v any, hi uint64) (uint64, error) {
 // encode serialises v, in the shape ReadValue returns for this symbol, into
 // the symbol's bytes. A struct takes a map naming every member and nothing
 // else; an array a slice of exactly its element count, nested per dimension.
-func (s *symbol) encode(v any, datatypes map[string]SymbolUploadDataType) ([]byte, error) {
+func (s *Symbol) Encode(v any, datatypes map[string]TypeInfo) ([]byte, error) {
 	if len(s.Children) == 0 {
 		dt, err := s.scalarType(datatypes)
 		if err != nil {
@@ -405,7 +405,7 @@ func (s *symbol) encode(v any, datatypes map[string]SymbolUploadDataType) ([]byt
 		return b, nil
 	}
 	buf := make([]byte, s.Length)
-	put := func(c *symbol, cv any, label string) error {
+	put := func(c *Symbol, cv any, label string) error {
 		if c.BitMember {
 			// A BIT member sets one bit of the parent; Offset counts bits.
 			b, ok := cv.(bool)
@@ -418,7 +418,7 @@ func (s *symbol) encode(v any, datatypes map[string]SymbolUploadDataType) ([]byt
 			WriteBit(buf, int(c.Offset), b)
 			return nil
 		}
-		cb, err := c.encode(cv, datatypes)
+		cb, err := c.Encode(cv, datatypes)
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
@@ -470,18 +470,18 @@ func (s *symbol) encode(v any, datatypes map[string]SymbolUploadDataType) ([]byt
 
 // copyData returns v with its maps and slices copied, so a caller holding a
 // struct or array value cannot alter the cache's. Scalars are values already.
-func copyData(v any) any {
+func CopyValue(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, e := range x {
-			out[k] = copyData(e)
+			out[k] = CopyValue(e)
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = copyData(e)
+			out[i] = CopyValue(e)
 		}
 		return out
 	}
@@ -497,7 +497,7 @@ func isScalarType(dataType string) bool {
 // scalarType resolves the primitive a leaf symbol decodes as: its own type, the
 // base of an alias or enum from the datatype table, the ADST_ code the PLC sent,
 // or as a last resort a type inferred from its size.
-func (s *symbol) scalarType(datatypes map[string]SymbolUploadDataType) (string, error) {
+func (s *Symbol) scalarType(datatypes map[string]TypeInfo) (string, error) {
 	if isScalarType(s.DataType) {
 		return s.DataType, nil
 	}
@@ -523,7 +523,7 @@ func (s *symbol) scalarType(datatypes map[string]SymbolUploadDataType) (string, 
 	}
 	// Infer from the size when neither the ADST_ code nor the table resolves it.
 	// Only 1- and 2-byte widths — see inferBaseType for why 4/8 are refused.
-	if inferred := inferBaseType(s.Length, s.BaseType); inferred != "" {
+	if inferred := InferBaseType(s.Length, s.BaseType); inferred != "" {
 		s.warnInferenceOnce("inferring base type from size (no datatype table loaded; LoadSymbols() recommended for user-defined types)",
 			"symbol", s.DataType, "size", s.Length, "baseType", s.BaseType, "inferred", inferred)
 		return inferred, nil

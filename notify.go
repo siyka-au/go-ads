@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -17,7 +19,7 @@ import (
 // activeNotification pairs the symbol with its channel here rather than on the
 // symbol struct, keeping notifications.lock-guarded state out of cache.symbols.
 type activeNotification struct {
-	Sym *symbol
+	Sym *symtab.Symbol
 	Ch  chan<- *Update
 }
 
@@ -157,10 +159,10 @@ func (m *notificationManager) addPending(p pendingNotification) {
 // reaches this with the key already present is a legal re-declaration of a symbol
 // that is on file but not live — see hasLiveNotification.
 func (m *notificationManager) setPending(p pendingNotification) {
-	key := symbolKey(p.Config.SymbolName)
+	key := symtab.Key(p.Config.SymbolName)
 	if _, onFile := m.configsByKey[key]; onFile {
 		for i := range m.pending {
-			if symbolKey(m.pending[i].Config.SymbolName) == key {
+			if symtab.Key(m.pending[i].Config.SymbolName) == key {
 				m.pending[i] = p
 				return
 			}
@@ -176,7 +178,7 @@ func (m *notificationManager) setPending(p pendingNotification) {
 // This answers "did the caller declare this symbol", NOT "is it subscribed" — use
 // hasLiveNotification for the duplicate decision.
 func (m *notificationManager) hasConfig(symbolName string) bool {
-	_, ok := m.configsByKey[symbolKey(symbolName)]
+	_, ok := m.configsByKey[symtab.Key(symbolName)]
 	return ok
 }
 
@@ -229,9 +231,9 @@ func (m *notificationManager) lowerRegisteredTo(n int) {
 }
 
 func (m *notificationManager) hasLiveNotification(symbolName string) bool {
-	key := symbolKey(symbolName)
+	key := symtab.Key(symbolName)
 	for _, entry := range m.activeNotifications {
-		if entry.Sym != nil && symbolKey(entry.Sym.FullName) == key {
+		if entry.Sym != nil && symtab.Key(entry.Sym.FullName) == key {
 			return true
 		}
 	}
@@ -245,7 +247,7 @@ func (m *notificationManager) liveNotificationNames() map[string]struct{} {
 	live := make(map[string]struct{}, len(m.activeNotifications))
 	for _, entry := range m.activeNotifications {
 		if entry.Sym != nil {
-			live[symbolKey(entry.Sym.FullName)] = struct{}{}
+			live[symtab.Key(entry.Sym.FullName)] = struct{}{}
 		}
 	}
 	return live
@@ -257,7 +259,7 @@ func (m *notificationManager) resetConfigs(p []pendingNotification) {
 	m.pending = p
 	m.configsByKey = make(map[string]struct{}, len(p))
 	for _, entry := range p {
-		m.configsByKey[symbolKey(entry.Config.SymbolName)] = struct{}{}
+		m.configsByKey[symtab.Key(entry.Config.SymbolName)] = struct{}{}
 	}
 }
 
@@ -272,7 +274,7 @@ func (m *notificationManager) resetConfigs(p []pendingNotification) {
 // than the snapshot by construction.
 func (m *notificationManager) restoreConfigs(snapshot []pendingNotification) {
 	for _, entry := range snapshot {
-		if _, present := m.configsByKey[symbolKey(entry.Config.SymbolName)]; present {
+		if _, present := m.configsByKey[symtab.Key(entry.Config.SymbolName)]; present {
 			continue
 		}
 		m.addPending(entry)

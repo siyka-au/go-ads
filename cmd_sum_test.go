@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -282,13 +284,13 @@ func TestSumProbeStateConcurrent(t *testing.T) {
 // Length=1 + DataType="BOOL" parses cleanly; Handle is non-zero so getSymbol
 // skips the PLC GetHandleByName roundtrip.
 func seedSymbol(sess *Session, name string, handle uint32) {
-	sym := &symbol{
+	sym := &symtab.Symbol{
 		FullName: name,
 		Handle:   handle,
 		Length:   1,
 		DataType: "BOOL",
 	}
-	sess.cache.symbols[symbolKey(name)] = sym
+	sess.cache.symbols[symtab.Key(name)] = sym
 }
 
 // TestSession_ReadValues_StaleDetection validates R-CACHE-009
@@ -837,8 +839,8 @@ func TestReadValues_VanishedAndUnparsableAreReported(t *testing.T) {
 	// is about to return.
 	srv.onWriteRead(ams.GroupSumupReadEx2, func(_ []byte) []byte {
 		sess.cache.lock.Lock()
-		delete(sess.cache.symbols, symbolKey("MAIN.gone"))
-		sess.cache.symbols[symbolKey("MAIN.widened")].Length = 8
+		delete(sess.cache.symbols, symtab.Key("MAIN.gone"))
+		sess.cache.symbols[symtab.Key("MAIN.widened")].Length = 8
 		sess.cache.lock.Unlock()
 		return craftSumReadResponse(
 			[]ams.ReturnCode{ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors, ams.ReturnCodeNoErrors},

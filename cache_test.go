@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -29,7 +31,7 @@ import (
 // zero-value Constructed state so bumpEpoch / epoch read paths work.
 func newCacheTestSession() *Session {
 	return &Session{
-		cache:         &symbolCache{symbols: map[string]*symbol{}, onDemandSymbols: map[string]bool{}},
+		cache:         &symbolCache{symbols: map[string]*symtab.Symbol{}, onDemandSymbols: map[string]bool{}},
 		notifications: &notificationManager{activeNotifications: make(map[uint32]activeNotification), configsByKey: make(map[string]struct{}), orphanSeen: make(map[uint32]time.Time), orphanSem: make(chan struct{}, orphanDeleteMaxConcurrency)},
 		lifecycle:     &sessionLifecycle{},
 		logger:        slog.Default(),
@@ -175,7 +177,7 @@ func TestCacheEpoch_BumpsOnSwapNotInsert(t *testing.T) {
 	// In-place insert (mimicking on-demand getSymbol): epoch unchanged.
 	before := sess.epoch()
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey("a")] = &symbol{FullName: "a"}
+	sess.cache.symbols[symtab.Key("a")] = &symtab.Symbol{FullName: "a"}
 	sess.cache.lock.Unlock()
 	if got := sess.epoch(); got != before {
 		t.Errorf("after insert: epoch = %d, want unchanged %d", got, before)
@@ -183,7 +185,7 @@ func TestCacheEpoch_BumpsOnSwapNotInsert(t *testing.T) {
 
 	// Swap (mimicking loadSymbols): bumpEpoch under cache.lock, epoch++.
 	sess.cache.lock.Lock()
-	sess.cache.symbols = map[string]*symbol{symbolKey("b"): {FullName: "b"}}
+	sess.cache.symbols = map[string]*symtab.Symbol{symtab.Key("b"): {FullName: "b"}}
 	sess.bumpEpoch()
 	sess.cache.lock.Unlock()
 	if got := sess.epoch(); got != before+1 {
@@ -193,7 +195,7 @@ func TestCacheEpoch_BumpsOnSwapNotInsert(t *testing.T) {
 	// Second insert into the new map: still no bump.
 	mid := sess.epoch()
 	sess.cache.lock.Lock()
-	sess.cache.symbols[symbolKey("c")] = &symbol{FullName: "c"}
+	sess.cache.symbols[symtab.Key("c")] = &symtab.Symbol{FullName: "c"}
 	sess.cache.lock.Unlock()
 	if got := sess.epoch(); got != mid {
 		t.Errorf("after second insert: epoch = %d, want unchanged %d", got, mid)
@@ -252,7 +254,7 @@ func TestCache_OnDemandResolve_DuplicateHandleReleased(t *testing.T) {
 	sess, _ := newWiredTestSession(t, srv)
 
 	const N = 4
-	results := make([]*symbol, N)
+	results := make([]*symtab.Symbol, N)
 	errs := make([]error, N)
 	var wg sync.WaitGroup
 	for i := 0; i < N; i++ {

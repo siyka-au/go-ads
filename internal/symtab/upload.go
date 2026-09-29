@@ -1,4 +1,4 @@
-package ads
+package symtab
 
 import (
 	"bytes"
@@ -18,7 +18,7 @@ import (
 // not bytes: a BIT member of a struct (ADSDATATYPEFLAG_BITVALUES).
 const datatypeFlagBitValues = 0x20
 
-type datatypeEntry struct {
+type DatatypeEntry struct {
 	EntryLength   uint32
 	Version       uint32
 	HashValue     uint32
@@ -39,15 +39,15 @@ type datatypeArrayInfo struct {
 	Elements uint32
 }
 
-type SymbolUploadDataType struct {
-	DatatypeEntry datatypeEntry
+type TypeInfo struct {
+	DatatypeEntry DatatypeEntry
 	Name          string
 	DataType      string
 	Comment       string
-	Children      map[string]*SymbolUploadDataType
+	Children      map[string]*TypeInfo
 }
 
-type symbolEntry struct {
+type SymbolEntry struct {
 	EntryLength   uint32
 	IGroup        uint32
 	IOffs         uint32
@@ -59,21 +59,21 @@ type symbolEntry struct {
 	CommentLength uint16
 }
 
-type symbolUploadSymbol struct {
-	SymbolEntry symbolEntry
+type UploadSymbol struct {
+	SymbolEntry SymbolEntry
 	Name        string
 	DataType    string
 	Comment     string
-	Children    map[string]*symbolUploadSymbol
+	Children    map[string]*UploadSymbol
 }
 
-func parseUploadSymbolInfoSymbols(data []byte, datatypes map[string]SymbolUploadDataType, lg *slog.Logger) (symbols map[string]*symbol, err error) {
-	symbols = map[string]*symbol{}
+func ParseSymbols(data []byte, datatypes map[string]TypeInfo, lg *slog.Logger) (symbols map[string]*Symbol, err error) {
+	symbols = map[string]*Symbol{}
 	buff := bytes.NewBuffer(data)
 
 	for buff.Len() > 0 {
 		begBuff := buff.Len()
-		result := symbolEntry{}
+		result := SymbolEntry{}
 		if err := binary.Read(buff, binary.LittleEndian, &result); err != nil {
 			return nil, fmt.Errorf("reading symbol entry: %w", err)
 		}
@@ -93,17 +93,17 @@ func parseUploadSymbolInfoSymbols(data []byte, datatypes map[string]SymbolUpload
 			return nil, fmt.Errorf("reading symbol comment: %w", err)
 		}
 		buff.Next(1)
-		item := symbolUploadSymbol{}
+		item := UploadSymbol{}
 		item.Name = string(name)
 		item.DataType = string(dt)
 		item.DataType = normalizeStringDataType(item.DataType)
 		item.Comment = string(comment)
 		item.SymbolEntry = result
 		endBuff := buff.Len()
-		symbol := addSymbol(item, datatypes, lg)
+		symbol := AddSymbol(item, datatypes, lg)
 
-		symbols[symbolKey(item.Name)] = symbol
-		addChildren(symbol, symbols)
+		symbols[Key(item.Name)] = symbol
+		AddChildren(symbol, symbols)
 
 		skip := int(item.SymbolEntry.EntryLength) - (begBuff - endBuff)
 		if skip < 0 {
@@ -117,18 +117,18 @@ func parseUploadSymbolInfoSymbols(data []byte, datatypes map[string]SymbolUpload
 	return
 }
 
-func addChildren(s *symbol, symbols map[string]*symbol) {
+func AddChildren(s *Symbol, symbols map[string]*Symbol) {
 	for _, child := range s.Children {
-		if _, ok := symbols[symbolKey(child.FullName)]; !ok {
-			symbols[symbolKey(child.FullName)] = child
-			addChildren(child, symbols)
+		if _, ok := symbols[Key(child.FullName)]; !ok {
+			symbols[Key(child.FullName)] = child
+			AddChildren(child, symbols)
 		}
 	}
 }
 
-func addSymbol(uploadSym symbolUploadSymbol, datatypes map[string]SymbolUploadDataType, lg *slog.Logger) *symbol {
+func AddSymbol(uploadSym UploadSymbol, datatypes map[string]TypeInfo, lg *slog.Logger) *Symbol {
 	flags := ams.SymbolFlag(uploadSym.SymbolEntry.Flags)
-	sym := &symbol{
+	sym := &Symbol{
 		Name:           uploadSym.Name,
 		LastUpdateTime: time.Now(),
 		FullName:       uploadSym.Name,
@@ -144,7 +144,7 @@ func addSymbol(uploadSym symbolUploadSymbol, datatypes map[string]SymbolUploadDa
 
 	dt, ok := datatypes[uploadSym.DataType]
 	if ok {
-		sym.Children = dt.addOffset(sym, datatypes, sym.Group, lg)
+		sym.Children = dt.AddOffset(sym, datatypes, sym.Group, lg)
 	}
 
 	return sym
@@ -156,12 +156,12 @@ func addSymbol(uploadSym symbolUploadSymbol, datatypes map[string]SymbolUploadDa
 // but not enforced over the wire).
 const addOffsetMaxDepth = 256
 
-func (data *SymbolUploadDataType) addOffset(parent *symbol, datatypes map[string]SymbolUploadDataType, group uint32, lg *slog.Logger) (children map[string]*symbol) {
+func (data *TypeInfo) AddOffset(parent *Symbol, datatypes map[string]TypeInfo, group uint32, lg *slog.Logger) (children map[string]*Symbol) {
 	return data.addOffsetDepth(parent, datatypes, group, 0, lg)
 }
 
-func (data *SymbolUploadDataType) addOffsetDepth(parent *symbol, datatypes map[string]SymbolUploadDataType, group uint32, depth int, lg *slog.Logger) (children map[string]*symbol) {
-	children = map[string]*symbol{}
+func (data *TypeInfo) addOffsetDepth(parent *Symbol, datatypes map[string]TypeInfo, group uint32, depth int, lg *slog.Logger) (children map[string]*Symbol) {
+	children = map[string]*Symbol{}
 	if depth >= addOffsetMaxDepth {
 		logging.Or(lg).Warn("addOffset hit depth cap; possible datatype self-cycle in PLC response",
 			"parent", parent.FullName,
@@ -181,7 +181,7 @@ func (data *SymbolUploadDataType) addOffsetDepth(parent *symbol, datatypes map[s
 			path = fmt.Sprint(parent.FullName, segment.Name)
 		}
 
-		child := symbol{
+		child := Symbol{
 			// Children built here reach the cache through their parent, so the
 			// stamping at ingest never sees them — and rebuildSymbolChildren runs
 			// this path again when the datatype table arrives after the symbol list.
@@ -227,15 +227,15 @@ func (data *SymbolUploadDataType) addOffsetDepth(parent *symbol, datatypes map[s
 // Enums have a parseable base type (e.g. INT, UINT), children
 // (enum constants), and ArrayDim == 0. Arrays of parseable types
 // also have children and a parseable base type but have ArrayDim > 0.
-func isEnumDataType(dt *SymbolUploadDataType) bool {
+func isEnumDataType(dt *TypeInfo) bool {
 	return len(dt.Children) > 0 &&
 		dt.DatatypeEntry.ArrayDim == 0 &&
-		slices.Contains(parseableTypes, dt.DataType)
+		slices.Contains(ParseableTypes, dt.DataType)
 }
 
-func parseUploadSymbolInfoDataTypes(data []byte, lg *slog.Logger) (datatypes map[string]SymbolUploadDataType, err error) {
+func ParseDataTypes(data []byte, lg *slog.Logger) (datatypes map[string]TypeInfo, err error) {
 	buff := bytes.NewBuffer(data)
-	datatypes = make(map[string]SymbolUploadDataType)
+	datatypes = make(map[string]TypeInfo)
 	for buff.Len() > 0 {
 		header, err := decodeSymbolUploadDataType(buff, "", lg)
 		if err != nil {
@@ -246,9 +246,9 @@ func parseUploadSymbolInfoDataTypes(data []byte, lg *slog.Logger) (datatypes map
 	return
 }
 
-func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logger) (header SymbolUploadDataType, err error) {
-	result := datatypeEntry{}
-	header = SymbolUploadDataType{}
+func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logger) (header TypeInfo, err error) {
+	result := DatatypeEntry{}
+	header = TypeInfo{}
 
 	totalSize := data.Len()
 
@@ -310,7 +310,7 @@ func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logg
 
 	buff := bytes.NewBuffer(childData)
 	if header.Children == nil {
-		header.Children = map[string]*SymbolUploadDataType{}
+		header.Children = map[string]*TypeInfo{}
 	}
 	if header.DatatypeEntry.ArrayDim > 0 {
 		// Children is an array
@@ -345,8 +345,8 @@ func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logg
 // 1M is a safety ceiling well above any legitimate use.
 const maxArrayElementsPerLevel = 1_000_000
 
-func makeArrayChildren(levels []datatypeArrayInfo, dt string, size uint32, lg *slog.Logger) (children map[string]*SymbolUploadDataType) {
-	children = map[string]*SymbolUploadDataType{}
+func makeArrayChildren(levels []datatypeArrayInfo, dt string, size uint32, lg *slog.Logger) (children map[string]*TypeInfo) {
+	children = map[string]*TypeInfo{}
 
 	if len(levels) < 1 {
 		return
@@ -387,7 +387,7 @@ func makeArrayChildren(levels []datatypeArrayInfo, dt string, size uint32, lg *s
 	for i := lbound; i < lbound+int64(level.Elements); i++ {
 		name := fmt.Sprintf("[%d]", i)
 
-		child := SymbolUploadDataType{}
+		child := TypeInfo{}
 		child.Name = name
 		child.DataType = dt
 		child.DatatypeEntry.Offs = offset

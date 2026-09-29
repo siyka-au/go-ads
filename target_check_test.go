@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3/internal/testlog"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
 	"github.com/siyka-au/go-ads/v3/router"
@@ -14,13 +16,13 @@ import (
 
 // newTargetCheckSession builds the minimum Session applyTargetCheck touches,
 // with a capturing logger.
-func newTargetCheckSession(t *testing.T, netID string, check TargetCheck) (*Session, *testLogHandler) {
+func newTargetCheckSession(t *testing.T, netID string, check TargetCheck) (*Session, *testlog.Handler) {
 	t.Helper()
 	target, err := ams.NewAddress(netID, 851)
 	if err != nil {
 		t.Fatalf("target %q: %v", netID, err)
 	}
-	logs := &testLogHandler{}
+	logs := &testlog.Handler{}
 	return &Session{
 		ip:          "192.168.3.118",
 		target:      target,
@@ -45,10 +47,10 @@ func TestApplyTargetCheck_Match(t *testing.T) {
 	if err := sess.applyTargetCheck(identityOf(t, "5.66.133.203.1.1")); err != nil {
 		t.Fatalf("applyTargetCheck on a matching NetID: %v", err)
 	}
-	if rec := logs.findByMessage("differs from"); rec != nil {
+	if rec := logs.FindByMessage("differs from"); rec != nil {
 		t.Errorf("unexpected mismatch log on a match: %q", rec.Message)
 	}
-	if rec := logs.findByMessage("confirmed by device"); rec == nil {
+	if rec := logs.FindByMessage("confirmed by device"); rec == nil {
 		t.Error("no confirmation logged")
 	} else if rec.Level != slog.LevelDebug {
 		t.Errorf("confirmation logged at %v, want Debug (a match is not news)", rec.Level)
@@ -62,7 +64,7 @@ func TestApplyTargetCheck_MismatchWarns(t *testing.T) {
 	if err := sess.applyTargetCheck(identityOf(t, "5.66.133.203.1.1")); err != nil {
 		t.Fatalf("TargetCheckWarn returned an error: %v", err)
 	}
-	rec := logs.findByMessage("differs from")
+	rec := logs.FindByMessage("differs from")
 	if rec == nil {
 		t.Fatal("mismatch not logged")
 	}

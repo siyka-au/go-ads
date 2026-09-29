@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/siyka-au/go-ads/v3/internal/symtab"
 )
 
 // SymbolBrowseEntry represents a browsable symbol or child.
@@ -82,7 +84,7 @@ func (sess *Session) browseRoot() []SymbolBrowseEntry {
 		}
 		roots[root] = origRoot
 		// Check if the root itself is a symbol
-		if rootSym, ok := sess.cache.symbols[symbolKey(root)]; ok {
+		if rootSym, ok := sess.cache.symbols[symtab.Key(root)]; ok {
 			entries = append(entries, SymbolBrowseEntry{
 				Name:        rootSym.Name,
 				FullName:    rootSym.FullName,
@@ -112,7 +114,7 @@ func (sess *Session) browseRoot() []SymbolBrowseEntry {
 // Must be called with cache.lock held.
 func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 	// First: check if the exact symbol exists and has Children
-	if sym, ok := sess.cache.symbols[symbolKey(path)]; ok && len(sym.Children) > 0 {
+	if sym, ok := sess.cache.symbols[symtab.Key(path)]; ok && len(sym.Children) > 0 {
 		entries := make([]SymbolBrowseEntry, 0, len(sym.Children))
 		for _, child := range sym.Children {
 			entries = append(entries, SymbolBrowseEntry{
@@ -131,7 +133,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 	}
 
 	// Fallback: scan for symbols with the prefix "path."
-	prefix := symbolKey(path) + "."
+	prefix := symtab.Key(path) + "."
 	seen := make(map[string]bool)
 	var entries []SymbolBrowseEntry
 
@@ -156,7 +158,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 		}
 		seen[childFullName] = true
 
-		if childSym, ok := sess.cache.symbols[symbolKey(childFullName)]; ok {
+		if childSym, ok := sess.cache.symbols[symtab.Key(childFullName)]; ok {
 			entries = append(entries, SymbolBrowseEntry{
 				Name:        childSym.Name,
 				FullName:    childSym.FullName,
@@ -185,7 +187,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 	}
 
 	// Also check for the exact symbol with no deeper children
-	if sym, ok := sess.cache.symbols[symbolKey(path)]; ok && len(entries) == 0 {
+	if sym, ok := sess.cache.symbols[symtab.Key(path)]; ok && len(entries) == 0 {
 		entries = append(entries, SymbolBrowseEntry{
 			Name:        sym.Name,
 			FullName:    sym.FullName,
@@ -204,7 +206,7 @@ func (sess *Session) browseChildren(path string) []SymbolBrowseEntry {
 
 // symbolHasChildren determines if a symbol likely has children.
 // Must be called with cache.lock held.
-func (sess *Session) symbolHasChildren(sym *symbol) bool {
+func (sess *Session) symbolHasChildren(sym *symtab.Symbol) bool {
 	// If we already have expanded children, yes
 	if len(sym.Children) > 0 {
 		return true
@@ -218,7 +220,7 @@ func (sess *Session) symbolHasChildren(sym *symbol) bool {
 	}
 
 	// Heuristic: if the datatype is not a primitive parseable type, it's likely a struct
-	if sym.DataType != "" && !slices.Contains(parseableTypes, sym.DataType) {
+	if sym.DataType != "" && !slices.Contains(symtab.ParseableTypes, sym.DataType) {
 		return true
 	}
 
