@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
+	"github.com/siyka-au/go-ads/v3/router"
 )
 
 // newTargetCheckSession builds the minimum Session applyTargetCheck touches,
@@ -27,13 +29,13 @@ func newTargetCheckSession(t *testing.T, netID string, check TargetCheck) (*Sess
 	}, logs
 }
 
-func identityOf(t *testing.T, netID string) RemoteIdentity {
+func identityOf(t *testing.T, netID string) router.Identity {
 	t.Helper()
 	ams, err := ams.NewAddress(netID, 10000)
 	if err != nil {
 		t.Fatalf("identity %q: %v", netID, err)
 	}
-	return RemoteIdentity{AMS: ams, HostName: "CX-4285CB", Major: 3, Minor: 1, Build: 4024}
+	return router.Identity{Address: ams, HostName: "CX-4285CB", Major: 3, Minor: 1, Build: 4024}
 }
 
 // TestApplyTargetCheck_Match: the device agrees, so nothing is reported to the
@@ -145,5 +147,42 @@ func TestNewSession_LocalModeSkipsDiscovery(t *testing.T) {
 	}
 	if sess.target.NetID != [6]byte{} {
 		t.Errorf("target NetID = %s, want zero (Connect assigns the loopback NetID)", sess.target.NetID.String())
+	}
+}
+
+// TestDiscoverTarget_RefusesPortWithoutVersion: the runtime port is a
+// per-major-version convention, so with no version reported there is nothing to
+// apply. Guessing would plant a port that may address no runtime — the exact
+// silent failure discovery exists to prevent.
+func TestDiscoverTarget_RefusesPortWithoutVersion(t *testing.T) {
+	// Responder that reports a NetID and host name but no version tag.
+	r := fakeplc.NewRouter(t)
+	r.SetIdentity(fakeplc.Identity{
+		NetID: [6]byte{5, 7, 7, 7, 1, 1}, Port: 10000,
+		Tags: []fakeplc.Tag{fakeplc.NameTag("NO-VERSION-CX")},
+	})
+
+	id, err := router.Identify(t.Context(), r.Addr())
+	if err != nil {
+		t.Fatalf("identify: %v", err)
+	}
+	if id.HasVersion() {
+		t.Fatalf("setup: responder reported a version (%s)", id.Version())
+	}
+	// RuntimePort keeps its documented convention; discoverTarget must not lean
+	// on it when there is no version behind it.
+	if got := id.RuntimePort(); got != 851 {
+		t.Errorf("RuntimePort() = %d, want the documented 851 default", got)
+	}
+
+	sess := &Session{ip: r.Host, logger: slog.Default()}
+	err = sess.applyDiscoveredIdentity(id)
+	if err == nil {
+		t.Fatal("discovery accepted a device that reported no version and left the port to be guessed")
+	}
+	for _, want := range []string{"no TwinCAT version", "801", "851"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q: %v", want, err)
+		}
 	}
 }

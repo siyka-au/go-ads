@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/router"
 )
 
 // TestIntegrationIdentifyRemote checks discovery against the configured target:
@@ -19,19 +20,19 @@ func TestIntegrationIdentifyRemote(t *testing.T) {
 	host := getEnvOrDefault("ADS_PLC_IP", "192.168.3.224")
 	want := os.Getenv("ADS_TARGET_AMS")
 
-	id, err := IdentifyRemote(context.Background(), host)
+	id, err := router.Identify(context.Background(), host)
 	if err != nil {
 		t.Fatalf("IdentifyRemote(%s): %v", host, err)
 	}
 	t.Logf("%s: netID=%s host=%q twinCAT=%s runtimePort=%d",
-		host, id.AMS.NetID.String(), id.HostName, id.Version(), id.RuntimePort())
+		host, id.Address.NetID.String(), id.HostName, id.Version(), id.RuntimePort())
 
-	if want != "" && id.AMS.NetID.String() != want {
+	if want != "" && id.Address.NetID.String() != want {
 		t.Errorf("discovered NetID = %s, want %s (ADS_TARGET_AMS) — the env file or the device changed",
-			id.AMS.NetID.String(), want)
+			id.Address.NetID.String(), want)
 	}
-	if id.AMS.Port != 10000 {
-		t.Errorf("reported port = %d, want 10000 (the router's own port)", id.AMS.Port)
+	if id.Address.Port != 10000 {
+		t.Errorf("reported port = %d, want 10000 (the router's own port)", id.Address.Port)
 	}
 	if id.HostName == "" {
 		t.Error("HostName empty; every tested TwinCAT reports one")

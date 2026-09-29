@@ -1,11 +1,10 @@
-package ads
+package router
 
 import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"log/slog"
 	"net"
 	"time"
 
@@ -20,16 +19,17 @@ import (
 // asks the router for its own. Read-only, needs no route or credentials, and
 // answers before any route exists, so it can bootstrap a connection.
 const (
-	routeServiceIdentify = 1
+	serviceIdentify = 1
 
 	// Response tags. Tag 5 is the computer name in both directions (see
 	// tagComputerName, used when registering a route). Tag 3 carries the
 	// TwinCAT version. Tag 4 holds a system-info blob whose layout differs per
-	// platform — surfaced raw in RemoteIdentity.Tags rather than guessed at.
+	// platform — surfaced raw in Identity.Tags rather than guessed at.
 	tagSystemVersion uint16 = 3
 
-	// identifyTimeout is the total budget for a probe, retransmits included.
-	identifyTimeout = 3 * time.Second
+	// IdentifyTimeout is the default budget for Identify, retransmits included.
+	// A context deadline that is sooner wins.
+	IdentifyTimeout = 3 * time.Second
 	// identifyAttempts is how many times the request is sent inside that budget.
 	// UDP has no delivery guarantee and this runs on plant networks: a single
 	// dropped datagram was observed failing NewSession outright, which is a poor
@@ -40,16 +40,16 @@ const (
 	identifyReadBuf = 64 * 1024
 )
 
-// RemoteIdentity is what an AMS router reports about ITSELF, from IdentifyRemote.
+// Identity is what an AMS router reports about ITSELF, from Identify.
 //
-// Read AMS carefully: it identifies the router answering at that IP, not the PLC
-// behind it. On a CX the two are the same device; on an engineering PC or gateway
-// the PLC you want is an entry in its route table. Nothing in the response
-// distinguishes the cases, and NetIDs are not derived from the IP.
-type RemoteIdentity struct {
-	// AMS is the router's own address. The port is the router's (10000), NOT a
-	// PLC runtime port — see RuntimePort.
-	AMS ams.Address
+// Read Address carefully: it identifies the router answering at that IP, not
+// the PLC behind it. On a CX the two are the same device; on an engineering PC
+// or gateway the PLC you want is an entry in its route table. Nothing in the
+// response distinguishes the cases, and NetIDs are not derived from the IP.
+type Identity struct {
+	// Address is the router's own address. The port is the router's (10000),
+	// NOT a PLC runtime port — see RuntimePort.
+	Address ams.Address
 	// HostName is the device's computer name, e.g. "CX-4285CB". Empty if the
 	// device did not report one.
 	HostName string
@@ -66,9 +66,12 @@ type RemoteIdentity struct {
 }
 
 // Version renders the reported TwinCAT version, e.g. "3.1.4024".
-func (id RemoteIdentity) Version() string {
+func (id Identity) Version() string {
 	return fmt.Sprintf("%d.%d.%d", id.Major, id.Minor, id.Build)
 }
+
+// HasVersion reports whether the device reported a TwinCAT version at all.
+func (id Identity) HasVersion() bool { return id.Major != 0 }
 
 // RuntimePort returns the conventional AMS port of the FIRST PLC runtime for
 // the reported TwinCAT major version: PortR0PlcRts1 (801) on TwinCAT 2,
@@ -78,47 +81,30 @@ func (id RemoteIdentity) Version() string {
 // the router's own port and never a runtime port. A TwinCAT 2 project with
 // several runtimes uses 811, 821, 831; a TwinCAT 3 one uses 852, 853, … and a
 // caller targeting any of those must say so explicitly.
-func (id RemoteIdentity) RuntimePort() ams.Port {
+func (id Identity) RuntimePort() ams.Port {
 	if id.Major == 2 {
 		return ams.PortR0PlcRts1
 	}
 	return ams.PortR0PlcTc3
 }
 
-// IdentifyRemote asks the device at host for its own NetID and system details.
-// host may carry a port for NAT forwarding; bare hosts use the protocol's UDP
-// port. Read-only, honouring ctx's deadline if sooner than the default 3s. The
-// answer describes the ROUTER, which is the PLC only when they are one device.
-func IdentifyRemote(ctx context.Context, host string) (RemoteIdentity, error) {
-	return IdentifyRemoteWithLogger(ctx, slog.Default(), host)
-}
-
-// IdentifyRemoteWithLogger is IdentifyRemote with an explicit logger.
-func IdentifyRemoteWithLogger(ctx context.Context, logger *slog.Logger, host string) (RemoteIdentity, error) {
-	h, port, err := splitHostRouterPort(host)
+// Identify asks the device at host for its own NetID and system details. host
+// may carry a port ("10.0.0.5:6499") for a device behind NAT. It is read-only
+// and needs no route or credentials. It gives up after IdentifyTimeout, or at
+// ctx's deadline if that is sooner. The answer describes the ROUTER, which is
+// the PLC only when they are one device.
+func Identify(ctx context.Context, host string, opts ...Option) (Identity, error) {
+	h, cfg, err := resolve(host, opts)
 	if err != nil {
-		return RemoteIdentity{}, fmt.Errorf("identify: %w", err)
+		return Identity{}, fmt.Errorf("identify: %w", err)
 	}
-	return identifyRemoteFrom(ctx, logger, nil, h, port)
+	return identify(ctx, cfg, h)
 }
 
-// identifyRemoteFrom is IdentifyRemoteWithLogger with an explicit local source
-// IP, so a session that pins its outbound interface probes over the same one.
-// Otherwise discovery and verification can traverse a different NIC than the
-// ADS traffic they are meant to describe. localIP nil keeps OS-default routing.
-// port is the router's UDP port to probe: routePort unless the session was given
-// AMSEndpoint.RouterPort (a NAT-forwarded PLC) or the caller embedded one in the
-// host string. Being a parameter also lets tests run a stub responder on an
-// ephemeral port instead of needing the protocol's fixed port to be free.
-func identifyRemoteFrom(ctx context.Context, logger *slog.Logger, localIP net.IP, host string, port int) (RemoteIdentity, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	if host == "" {
-		return RemoteIdentity{}, fmt.Errorf("identify: host must be set")
-	}
+func identify(ctx context.Context, cfg config, host string) (Identity, error) {
+	logger := cfg.logger
 	if err := ctx.Err(); err != nil {
-		return RemoteIdentity{}, fmt.Errorf("identify %s: %w", host, err)
+		return Identity{}, fmt.Errorf("identify %s: %w", host, err)
 	}
 
 	// Resolve through a ctx-aware resolver: net.ResolveUDPAddr ignores the
@@ -126,37 +112,39 @@ func identifyRemoteFrom(ctx context.Context, logger *slog.Logger, localIP net.IP
 	// caller's deadline — inside NewSession, which advertises a few milliseconds.
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return RemoteIdentity{}, fmt.Errorf("identify %s: resolve: %w", host, err)
+		return Identity{}, fmt.Errorf("identify %s: resolve: %w", host, err)
 	}
 	var addr *net.UDPAddr
 	for _, ip := range ips {
 		if v4 := ip.IP.To4(); v4 != nil {
-			addr = &net.UDPAddr{IP: v4, Port: port}
+			addr = &net.UDPAddr{IP: v4, Port: cfg.port}
 			break
 		}
 	}
 	if addr == nil {
-		return RemoteIdentity{}, fmt.Errorf("identify %s: no IPv4 address (the AMS router protocol is IPv4-only)", host)
+		return Identity{}, fmt.Errorf("identify %s: no IPv4 address (the AMS router protocol is IPv4-only)", host)
 	}
 	var laddr *net.UDPAddr
-	if localIP != nil {
-		laddr = &net.UDPAddr{IP: localIP}
+	if cfg.localIP != nil {
+		laddr = &net.UDPAddr{IP: cfg.localIP}
 	}
 	conn, err := net.DialUDP("udp4", laddr, addr)
 	if err != nil {
-		return RemoteIdentity{}, fmt.Errorf("identify %s: dial UDP: %w", host, err)
+		return Identity{}, fmt.Errorf("identify %s: dial UDP: %w", host, err)
 	}
 	defer func() { _ = conn.Close() }()
+	stop := interruptOnDone(ctx, conn)
+	defer stop()
 
 	// Random invokeID so a stray or spoofed datagram cannot be mistaken for
-	// our answer — same reasoning as AddRemoteRouteWithLogger.
+	// our answer — same reasoning as AddRoute.
 	var invokeIDBuf [4]byte
 	if _, err := cryptorand.Read(invokeIDBuf[:]); err != nil {
-		return RemoteIdentity{}, fmt.Errorf("identify %s: generate invokeID: %w", host, err)
+		return Identity{}, fmt.Errorf("identify %s: generate invokeID: %w", host, err)
 	}
 	invokeID := binary.LittleEndian.Uint32(invokeIDBuf[:])
 
-	deadline := time.Now().Add(identifyTimeout)
+	deadline := time.Now().Add(IdentifyTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
@@ -170,9 +158,6 @@ func identifyRemoteFrom(ctx context.Context, logger *slog.Logger, localIP net.IP
 	// must not consume our only read.
 	var lastErr error
 	for attempt := 1; attempt <= identifyAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return RemoteIdentity{}, fmt.Errorf("identify %s: %w", host, err)
-		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
@@ -183,19 +168,27 @@ func identifyRemoteFrom(ctx context.Context, logger *slog.Logger, localIP net.IP
 			window = remaining
 		}
 		if _, err := conn.Write(packet); err != nil {
-			return RemoteIdentity{}, fmt.Errorf("identify %s: send: %w", host, err)
+			return Identity{}, fmt.Errorf("identify %s: send: %w", host, err)
 		}
 		if err := conn.SetReadDeadline(time.Now().Add(window)); err != nil {
-			return RemoteIdentity{}, fmt.Errorf("identify %s: set read deadline: %w", host, err)
+			return Identity{}, fmt.Errorf("identify %s: set read deadline: %w", host, err)
+		}
+		// After setting the deadline, so a cancellation that landed just before
+		// cannot be overwritten by it and wait out the window.
+		if err := ctx.Err(); err != nil {
+			return Identity{}, fmt.Errorf("identify %s: %w", host, err)
 		}
 		for {
 			n, err := conn.Read(respBuf)
 			if err != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return Identity{}, fmt.Errorf("identify %s: %w", host, cerr)
+				}
 				lastErr = err
 				break // window expired: retransmit
 			}
 			if n == len(respBuf) {
-				return RemoteIdentity{}, fmt.Errorf("identify %s: response of %d bytes filled the read buffer", host, n)
+				return Identity{}, fmt.Errorf("identify %s: response of %d bytes filled the read buffer", host, n)
 			}
 			if !identifyResponseIsOurs(respBuf[:n], invokeID) {
 				logger.Debug("identify: ignoring unrelated datagram on port 48899",
@@ -206,21 +199,27 @@ func identifyRemoteFrom(ctx context.Context, logger *slog.Logger, localIP net.IP
 			if err != nil {
 				// Ours by cookie/invokeID/service but undecodable: a real fault,
 				// not a stray, so do not keep waiting on it.
-				return RemoteIdentity{}, fmt.Errorf("identify %s: %w", host, err)
+				return Identity{}, fmt.Errorf("identify %s: %w", host, err)
 			}
 			if attempt > 1 {
 				logger.Debug("identify succeeded after a retransmit", "host", host, "attempt", attempt)
 			}
 			logger.Debug("identified remote",
-				"host", host, "netID", id.AMS.NetID.String(),
+				"host", host, "netID", id.Address.NetID.String(),
 				"hostName", id.HostName, "twinCAT", id.Version())
 			return id, nil
 		}
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("no response within %v", identifyTimeout)
+		lastErr = fmt.Errorf("no response within %v", IdentifyTimeout)
 	}
-	return RemoteIdentity{}, fmt.Errorf("identify %s: no answer after %d attempts: %w", host, identifyAttempts, lastErr)
+	return Identity{}, fmt.Errorf("identify %s: no answer after %d attempts: %w", host, identifyAttempts, lastErr)
+}
+
+// interruptOnDone unblocks a pending read on conn when ctx ends. The returned
+// func unregisters it.
+func interruptOnDone(ctx context.Context, conn *net.UDPConn) func() bool {
+	return context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })
 }
 
 // identifyResponseIsOurs reports whether a datagram is the answer to our
@@ -233,7 +232,7 @@ func identifyResponseIsOurs(data []byte, invokeID uint32) bool {
 	}
 	return binary.LittleEndian.Uint32(data[0:]) == routeCookie &&
 		binary.LittleEndian.Uint32(data[4:]) == invokeID &&
-		binary.LittleEndian.Uint32(data[8:]) == (0x80000000|routeServiceIdentify)
+		binary.LittleEndian.Uint32(data[8:]) == (responseFlag|serviceIdentify)
 }
 
 // buildIdentifyPacket builds the 24-byte, tag-less identify request. The source
@@ -244,7 +243,7 @@ func buildIdentifyPacket(invokeID uint32) []byte {
 	packet := make([]byte, 24)
 	binary.LittleEndian.PutUint32(packet[0:], routeCookie)
 	binary.LittleEndian.PutUint32(packet[4:], invokeID)
-	binary.LittleEndian.PutUint32(packet[8:], routeServiceIdentify)
+	binary.LittleEndian.PutUint32(packet[8:], serviceIdentify)
 	// packet[12:20] source AmsAddr — zero NetID, zero port.
 	// packet[20:24] tagCount — zero.
 	return packet
@@ -255,38 +254,38 @@ func buildIdentifyPacket(invokeID uint32) []byte {
 // where each tag is id(2) + length(2) + data. Unlike a route response, the
 // AmsAddr here is the REMOTE's own address rather than an echo of ours — that
 // is the whole point of the service.
-func parseIdentifyResponse(data []byte, expectedInvokeID uint32) (RemoteIdentity, error) {
+func parseIdentifyResponse(data []byte, expectedInvokeID uint32) (Identity, error) {
 	if len(data) < 24 {
-		return RemoteIdentity{}, fmt.Errorf("identify response too short: %d bytes", len(data))
+		return Identity{}, fmt.Errorf("identify response too short: %d bytes", len(data))
 	}
 	if cookie := binary.LittleEndian.Uint32(data[0:]); cookie != routeCookie {
-		return RemoteIdentity{}, fmt.Errorf("unexpected identify response cookie: 0x%08X", cookie)
+		return Identity{}, fmt.Errorf("unexpected identify response cookie: 0x%08X", cookie)
 	}
 	if got := binary.LittleEndian.Uint32(data[4:]); got != expectedInvokeID {
-		return RemoteIdentity{}, fmt.Errorf("identify response invokeID mismatch: got 0x%08X, expected 0x%08X (possible spoof or stray datagram)", got, expectedInvokeID)
+		return Identity{}, fmt.Errorf("identify response invokeID mismatch: got 0x%08X, expected 0x%08X (possible spoof or stray datagram)", got, expectedInvokeID)
 	}
-	if svc := binary.LittleEndian.Uint32(data[8:]); svc != (0x80000000 | routeServiceIdentify) {
-		return RemoteIdentity{}, fmt.Errorf("unexpected identify response serviceId: 0x%08X", svc)
+	if svc := binary.LittleEndian.Uint32(data[8:]); svc != (responseFlag | serviceIdentify) {
+		return Identity{}, fmt.Errorf("unexpected identify response serviceId: 0x%08X", svc)
 	}
 
-	id := RemoteIdentity{Tags: map[uint16][]byte{}}
-	copy(id.AMS.NetID[:], data[12:18])
-	id.AMS.Port = ams.Port(binary.LittleEndian.Uint16(data[18:20]))
-	if id.AMS.NetID.IsZero() {
-		return RemoteIdentity{}, fmt.Errorf("identify response reported a zero NetID")
+	id := Identity{Tags: map[uint16][]byte{}}
+	copy(id.Address.NetID[:], data[12:18])
+	id.Address.Port = ams.Port(binary.LittleEndian.Uint16(data[18:20]))
+	if id.Address.NetID.IsZero() {
+		return Identity{}, fmt.Errorf("identify response reported a zero NetID")
 	}
 
 	tagCount := binary.LittleEndian.Uint32(data[20:24])
 	offset := 24
 	for i := uint32(0); i < tagCount; i++ {
 		if offset+4 > len(data) {
-			return RemoteIdentity{}, fmt.Errorf("identify response truncated: incomplete tag %d header", i)
+			return Identity{}, fmt.Errorf("identify response truncated: incomplete tag %d header", i)
 		}
 		tid := binary.LittleEndian.Uint16(data[offset:])
 		tlen := int(binary.LittleEndian.Uint16(data[offset+2:]))
 		offset += 4
 		if offset+tlen > len(data) {
-			return RemoteIdentity{}, fmt.Errorf("identify response truncated: tag %d data exceeds response", tid)
+			return Identity{}, fmt.Errorf("identify response truncated: tag %d data exceeds response", tid)
 		}
 		value := make([]byte, tlen)
 		copy(value, data[offset:offset+tlen])

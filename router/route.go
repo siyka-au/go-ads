@@ -1,6 +1,7 @@
-package ads
+package router
 
 import (
+	"context"
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -8,118 +9,113 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
-
 	"github.com/siyka-au/go-ads/v3/internal/logging"
 )
 
-// UDP route registration constants
+// AMS router protocol constants shared by both services.
 const (
-	routePort       = 48899
 	routeCookie     = 0x71146603
-	routeServiceAdd = 6
+	responseFlag    = 0x80000000
+	serviceAddRoute = 6
 
+	tagResponseError uint16 = 1
 	tagPassword      uint16 = 2
 	tagComputerName  uint16 = 5
 	tagNetID         uint16 = 7
 	tagRouteName     uint16 = 12
 	tagUsername      uint16 = 13
-	tagResponseError uint16 = 1
 )
 
-// splitHostRouterPort accepts a bare host or host:port and returns the host plus
-// the router UDP port. A PLC behind NAT answers on a forwarded port derivable from
-// nothing else, and these standalone helpers take no port argument.
-//
-// A present-but-unusable port is an error, not a fallback: folding it back into
-// the hostname turned a typo into a resolution failure for an address nobody
-// typed, and defaulting to 48899 can reach a different device entirely.
-func splitHostRouterPort(host string) (string, int, error) {
-	h, portStr, err := net.SplitHostPort(host)
-	if err != nil {
-		// No port in there at all (a bare host, or a bare IPv6 literal): use the
-		// protocol's own port. A genuinely malformed host is diagnosed by the
-		// resolver, which can say more about it than this can.
-		return host, routePort, nil
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return "", 0, fmt.Errorf("host %q: router port %q is not a number", host, portStr)
-	}
-	if port <= 0 || port > 65535 {
-		return "", 0, fmt.Errorf("host %q: router port %d is out of range", host, port)
-	}
-	return h, port, nil
+const (
+	// routeRegisterAttempts / RouteTimeout mirror identify's retransmit policy.
+	// UDP on a plant network drops datagrams, and a single loss here used to fail
+	// the whole connect.
+	routeRegisterAttempts = 3
+	// RouteTimeout is the default budget for AddRoute, retransmits included. A
+	// context deadline that is sooner wins.
+	RouteTimeout = 6 * time.Second
+)
+
+// Route is a route to register on a device: "reach NetID LocalNetID at address
+// ComputerName".
+type Route struct {
+	// Name labels the route in the device's route table.
+	Name string
+	// LocalNetID is this host's AMS NetID, the one ADS requests will come from.
+	LocalNetID ams.NetID
+	// ComputerName is the address the device should use to reach this host,
+	// normally its IP.
+	ComputerName string
+	// Username and Password are credentials of an account on the device.
+	//
+	// Security: the protocol sends them in cleartext and offers no encrypted
+	// alternative. Use on trusted networks only.
+	Username string
+	Password string
 }
 
-// AddRemoteRoute registers a route on the PLC over UDP 48899, telling it how to
-// reach this client's NetID. remoteHost may carry the router's UDP port
-// ("10.0.0.5:6499") when the PLC is behind NAT; computerName is the address the
-// PLC should dial back.
-//
-// Security: Beckhoff's protocol sends credentials in cleartext and offers no
-// encrypted alternative. Trusted networks only.
-func AddRemoteRoute(remoteHost string, localNetID [6]byte, routeName string, computerName string, username string, password string) error {
-	return AddRemoteRouteWithLogger(slog.Default(), remoteHost, localNetID, routeName, computerName, username, password)
+// LogValue keeps the password out of logs.
+func (r Route) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("name", r.Name),
+		slog.String("localNetID", r.LocalNetID.String()),
+		slog.String("computerName", r.ComputerName),
+		slog.Bool("hasAuth", r.Username != ""),
+	)
 }
 
-// AddRemoteRouteWithLogger is like AddRemoteRoute but accepts an explicit logger.
-func AddRemoteRouteWithLogger(logger *slog.Logger, remoteHost string, localNetID [6]byte, routeName string, computerName string, username string, password string) error {
-	host, port, err := splitHostRouterPort(remoteHost)
+// AddRoute registers r on the device at host over UDP. host may carry the
+// router's port ("10.0.0.5:6499") when the device is behind NAT. It gives up
+// after RouteTimeout, or at ctx's deadline if that is sooner, and returns the
+// device's refusal as an error.
+func AddRoute(ctx context.Context, host string, r Route, opts ...Option) error {
+	h, cfg, err := resolve(host, opts)
 	if err != nil {
 		return fmt.Errorf("add route: %w", err)
 	}
-	return addRemoteRouteFrom(logger, nil, host, port, localNetID, routeName, computerName, username, password)
+	return addRoute(ctx, cfg, h, r)
 }
 
-// addRemoteRouteFrom is AddRemoteRouteWithLogger with an explicit UDP source IP.
-// Matters on a multi-homed host: TC3 records the route against the UDP SOURCE IP,
-// not the computerName tag, so letting the OS choose registers whichever NIC wins
-// the metric and a session on the other one is reset despite a successful
-// registration. nil keeps OS-default routing.
-func addRemoteRouteFrom(logger *slog.Logger, localIP net.IP, remoteHost string, port int, localNetID [6]byte, routeName string, computerName string, username string, password string) error {
-	if logger == nil {
-		logger = slog.Default()
+// addRoute sends the registration. The UDP source matters on a multi-homed
+// host: TC3 records the route against the UDP SOURCE IP, not the computerName
+// tag, so letting the OS choose registers whichever NIC wins the metric and a
+// session on the other one is reset despite a successful registration.
+func addRoute(ctx context.Context, cfg config, remoteHost string, r Route) error {
+	logger := cfg.logger
+	logger.Info("registering route", "remoteHost", remoteHost, "route", r)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("add route: %w", err)
 	}
-	logger.Info("registering route",
-		"remoteHost", remoteHost,
-		"localNetID", ams.Address{NetID: localNetID}.NetID.String(),
-		"computerName", computerName,
-		"routeName", routeName,
-		"hasAuth", username != "")
-	if port <= 0 {
-		port = routePort
-	}
-	addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", remoteHost, port))
+	addr, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(remoteHost, fmt.Sprint(cfg.port)))
 	if err != nil {
 		return fmt.Errorf("failed to resolve remote host: %w", err)
 	}
 
 	var laddr *net.UDPAddr
-	if localIP != nil {
-		laddr = &net.UDPAddr{IP: localIP}
+	if cfg.localIP != nil {
+		laddr = &net.UDPAddr{IP: cfg.localIP}
 	}
 	conn, err := net.DialUDP("udp4", laddr, addr)
 	if err != nil {
 		return fmt.Errorf("failed to dial UDP: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	stop := interruptOnDone(ctx, conn)
+	defer stop()
 
-	// generate random invokeID via crypto/rand for response-echo
-	// validation in parseRouteResponse. Defends against UDP spoofing on the
-	// local network — an attacker would need to predict the random per-call
-	// value to inject a fake "success" response.
+	// Random invokeID, checked against the echo in the response. Defends against
+	// UDP spoofing on the local network — an attacker would need to predict the
+	// per-call value to inject a fake "success" response.
 	var invokeIDBuf [4]byte
 	if _, err := cryptorand.Read(invokeIDBuf[:]); err != nil {
 		return fmt.Errorf("generate invokeID: %w", err)
 	}
 	invokeID := binary.LittleEndian.Uint32(invokeIDBuf[:])
 
-	// Build the route request packet
-	packet := buildRoutePacket(localNetID, routeName, computerName, username, password, invokeID)
+	packet := buildRoutePacket(r, invokeID)
 
 	// Retransmit, like identify does, and for the measured reason: a single dropped
 	// datagram was seen failing NewSession outright, and this runs on the same plant
@@ -131,7 +127,10 @@ func addRemoteRouteFrom(logger *slog.Logger, localIP net.IP, remoteHost string, 
 	// which previously turned somebody else's identify reply into a registration
 	// failure.
 	respBuf := make([]byte, 2048)
-	deadline := time.Now().Add(routeRegisterTotalBudget)
+	deadline := time.Now().Add(RouteTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
 	var lastErr error
 	for attempt := 1; attempt <= routeRegisterAttempts; attempt++ {
 		remaining := time.Until(deadline)
@@ -148,9 +147,15 @@ func addRemoteRouteFrom(logger *slog.Logger, localIP net.IP, remoteHost string, 
 		if err := conn.SetReadDeadline(time.Now().Add(window)); err != nil {
 			return fmt.Errorf("failed to set read deadline: %w", err)
 		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("add route: %w", err)
+		}
 		for {
 			n, rerr := conn.Read(respBuf)
 			if rerr != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return fmt.Errorf("add route: %w", cerr)
+				}
 				lastErr = rerr
 				if !errors.Is(rerr, os.ErrDeadlineExceeded) {
 					// Not the window closing. On a connected UDP socket an ICMP
@@ -189,21 +194,13 @@ func addRemoteRouteFrom(logger *slog.Logger, localIP net.IP, remoteHost string, 
 		lastErr = fmt.Errorf("no answer")
 	}
 	return fmt.Errorf("route registration got no usable answer in %v over %d attempts: %w",
-		routeRegisterTotalBudget, routeRegisterAttempts, lastErr)
+		RouteTimeout, routeRegisterAttempts, lastErr)
 }
-
-const (
-	// routeRegisterAttempts / routeRegisterTotalBudget mirror identify's retransmit
-	// policy. UDP on a plant network drops datagrams, and a single loss here used to
-	// fail the whole connect.
-	routeRegisterAttempts    = 3
-	routeRegisterTotalBudget = 6 * time.Second
-)
 
 // routeResponseIsOurs reports whether a datagram is the answer to OUR registration
 // request, independent of whether that answer is success or refusal.
 //
-// identify.go keeps this split deliberately: ownership is a header question
+// Identify keeps this split deliberately: ownership is a header question
 // (cookie, invokeID, service id), and only once a datagram is ours does its
 // content decide the outcome. Conflating the two meant a refusal — a wrong
 // password, say — was treated as somebody else's traffic and retransmitted until
@@ -218,23 +215,20 @@ func routeResponseIsOurs(data []byte, invokeID uint32) bool {
 	if binary.LittleEndian.Uint32(data[4:8]) != invokeID {
 		return false
 	}
-	service := binary.LittleEndian.Uint32(data[8:12])
 	// The RESPONSE flag, as parseRouteResponse below also checks.
-	return service == (0x80000000 | routeServiceAdd)
+	return binary.LittleEndian.Uint32(data[8:12]) == (responseFlag | serviceAddRoute)
 }
 
-// buildRoutePacket constructs a UDP route registration packet.
-// invokeID is set by the caller (per ADS InvokeID semantics) to identify the
-// command and validate the response echo. Use a random uint32 from crypto/rand
-// to defend against UDP spoofing on the local network.
-func buildRoutePacket(localNetID [6]byte, routeName string, computerName string, username string, password string, invokeID uint32) []byte {
-	// Build tags
+// buildRoutePacket constructs a UDP route registration packet. invokeID
+// identifies the request and is echoed in the response; use a random value
+// from crypto/rand to defend against UDP spoofing on the local network.
+func buildRoutePacket(r Route, invokeID uint32) []byte {
 	tags := [][]byte{
-		buildTag(tagNetID, localNetID[:]),
-		buildTag(tagPassword, appendNull([]byte(password))),
-		buildTag(tagComputerName, appendNull([]byte(computerName))),
-		buildTag(tagRouteName, appendNull([]byte(routeName))),
-		buildTag(tagUsername, appendNull([]byte(username))),
+		buildTag(tagNetID, r.LocalNetID[:]),
+		buildTag(tagPassword, appendNull([]byte(r.Password))),
+		buildTag(tagComputerName, appendNull([]byte(r.ComputerName))),
+		buildTag(tagRouteName, appendNull([]byte(r.Name))),
+		buildTag(tagUsername, appendNull([]byte(r.Username))),
 	}
 
 	var tagsData []byte
@@ -245,10 +239,10 @@ func buildRoutePacket(localNetID [6]byte, routeName string, computerName string,
 	// Header: cookie(4) + invokeID(4) + serviceId(4) + AmsAddr(8) + tagCount(4)
 	header := make([]byte, 24)
 	binary.LittleEndian.PutUint32(header[0:], routeCookie)
-	binary.LittleEndian.PutUint32(header[4:], invokeID) // caller-provided random invokeID for echo validation
-	binary.LittleEndian.PutUint32(header[8:], routeServiceAdd)
+	binary.LittleEndian.PutUint32(header[4:], invokeID)
+	binary.LittleEndian.PutUint32(header[8:], serviceAddRoute)
 	// AmsAddr: NetID(6) + Port(2) — port is 0 per Beckhoff spec
-	copy(header[12:18], localNetID[:])
+	copy(header[12:18], r.LocalNetID[:])
 	binary.LittleEndian.PutUint16(header[18:], 0)
 	binary.LittleEndian.PutUint32(header[20:], uint32(len(tags)))
 
@@ -272,10 +266,10 @@ func appendNull(data []byte) []byte {
 // parseRouteResponse validates the route registration response.
 // Response format: cookie(4) + invokeID(4) + serviceId(4) + AmsAddr(8) + tagCount(4) + tags...
 //
-// expectedInvokeID is the value the caller provided in the request; the PLC
-// echoes it per ADS InvokeID semantics and we reject mismatches as possible
-// UDP-spoofing attempts.
+// expectedInvokeID is the value sent in the request; the device echoes it and a
+// mismatch is rejected as a possible spoof.
 func parseRouteResponse(logger *slog.Logger, data []byte, expectedInvokeID uint32) error {
+	logger = logging.Or(logger)
 	logger.Debug("route response raw bytes", logging.HexAttr("response", data), "length", len(data))
 
 	if len(data) < 24 {
@@ -287,18 +281,14 @@ func parseRouteResponse(logger *slog.Logger, data []byte, expectedInvokeID uint3
 		return fmt.Errorf("unexpected route response cookie: 0x%08X", cookie)
 	}
 
-	// validate invokeID echo. Defends against UDP spoofing on the local
-	// network — an attacker would need to predict the random per-call invokeID
-	// to inject a fake "success" response.
 	gotInvokeID := binary.LittleEndian.Uint32(data[4:])
 	if gotInvokeID != expectedInvokeID {
 		return fmt.Errorf("route response invokeID mismatch: got 0x%08X, expected 0x%08X (possible spoof or PLC misbehavior)", gotInvokeID, expectedInvokeID)
 	}
 
-	serviceId := binary.LittleEndian.Uint32(data[8:])
-	// Response serviceId has the RESPONSE flag (0x80000000) set
-	if serviceId != (0x80000000 | routeServiceAdd) {
-		return fmt.Errorf("unexpected route response serviceId: 0x%08X", serviceId)
+	serviceID := binary.LittleEndian.Uint32(data[8:])
+	if serviceID != (responseFlag | serviceAddRoute) {
+		return fmt.Errorf("unexpected route response serviceId: 0x%08X", serviceID)
 	}
 
 	// Skip AmsAddr (8 bytes at offset 12), tagCount is at offset 20

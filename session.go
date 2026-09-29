@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/router"
 )
 
 // randomAMSPort returns a random AMS source port in the dynamic range. The PLC
@@ -186,7 +187,7 @@ func NewSession(ctx context.Context, remote AMSEndpoint, opts ...SessionOption) 
 		remote.Port = 48898 // TwinCAT TCP default
 	}
 	if remote.RouterPort <= 0 {
-		remote.RouterPort = routePort // TwinCAT UDP default
+		remote.RouterPort = router.DefaultPort // TwinCAT UDP default
 	}
 	if ctx == nil {
 		ctx = context.Background()

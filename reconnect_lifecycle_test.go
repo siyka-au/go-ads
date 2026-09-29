@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/internal/fakeplc"
 )
 
 // reconnect_lifecycle_test.go — how a reconnect ends, and the rule that it can
@@ -625,13 +626,13 @@ func TestConnect_VerifiesTheLinkAnswersEvenWithoutRouteRegistration(t *testing.T
 func TestReconnect_DoesNotReRegisterRouteEveryAttempt(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	router := startRouteResponder(t)
+	router := fakeplc.NewRouter(t)
 
 	// The PLC accepts TCP and answers no ADS request, so every probe fails.
 	srv.delayBefore(ams.CommandRead, uint32(ams.GroupSymbolVersion), time.Hour)
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 6)
-	sess.routerPort = router.port
+	sess.routerPort = router.Port
 	sess.route = &routeManager{
 		name:              "go-ads-test",
 		username:          "Administrator",
@@ -648,7 +649,7 @@ func TestReconnect_DoesNotReRegisterRouteEveryAttempt(t *testing.T) {
 	// route is the measured recovery for a mute router, so a session that has
 	// concluded the PLC is silent is allowed one more — but a plain retry loop
 	// must not register every time round.
-	got := router.registrations()
+	got := router.Registrations()
 	if got == 0 {
 		t.Error("no registration at all; the route was never established")
 	}
@@ -674,12 +675,12 @@ func TestReconnect_DoesNotReRegisterRouteEveryAttempt(t *testing.T) {
 func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	router := startRouteResponder(t)
+	router := fakeplc.NewRouter(t)
 
 	// The device answers only once it has seen a SECOND registration: the first is
 	// the session establishing its route, the second is the healing one.
 	srv.onRead(ams.GroupSymbolVersion, func(_, _, _ uint32) (ams.ReturnCode, []byte) {
-		if router.registrations() < 2 {
+		if router.Registrations() < 2 {
 			// Outlast the client's request timeout without answering: silence, not
 			// a malformed reply, is what a router in this state produces — and only
 			// a plain deadline counts as "unserved".
@@ -689,7 +690,7 @@ func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
 	})
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 40)
-	sess.routerPort = router.port
+	sess.routerPort = router.Port
 	sess.route = &routeManager{
 		name:              "go-ads-test",
 		username:          "Administrator",
@@ -707,13 +708,13 @@ func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("reconnect never recovered: %v (registrations=%d)", err, router.registrations())
+			t.Fatalf("reconnect never recovered: %v (registrations=%d)", err, router.Registrations())
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatalf("reconnect did not finish; registrations=%d", router.registrations())
+		t.Fatalf("reconnect did not finish; registrations=%d", router.Registrations())
 	}
 
-	if got := router.registrations(); got < 2 {
+	if got := router.Registrations(); got < 2 {
 		t.Errorf("registrations = %d, want at least 2: the session must be allowed one healing re-registration after concluding the PLC is silent", got)
 	} else {
 		t.Logf("recovered after %d registrations", got)
@@ -742,7 +743,7 @@ func TestReconnect_ReRegistersRouteToHealAMuteDevice(t *testing.T) {
 func TestReconnect_ForceRegistrationRegistersOnEveryReconnect(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	router := startRouteResponder(t)
+	router := fakeplc.NewRouter(t)
 
 	// Always answered, so the probe and awaitRouteActive both succeed: this
 	// isolates the force flag from the probe-failure fallback path.
@@ -751,7 +752,7 @@ func TestReconnect_ForceRegistrationRegistersOnEveryReconnect(t *testing.T) {
 	})
 
 	sess := newDialableTestSession(t, srv.host, srv.port, 6)
-	sess.routerPort = router.port
+	sess.routerPort = router.Port
 	sess.route = &routeManager{
 		name:                   "go-ads-test",
 		username:               "Administrator",
@@ -765,11 +766,11 @@ func TestReconnect_ForceRegistrationRegistersOnEveryReconnect(t *testing.T) {
 	for i := 1; i <= reconnects; i++ {
 		sess.lifecycle.state.transitionTo(SessionStateDisconnected)
 		if err := sess.Reconnect(context.Background()); err != nil {
-			t.Fatalf("reconnect %d of %d: %v (registrations=%d)", i, reconnects, err, router.registrations())
+			t.Fatalf("reconnect %d of %d: %v (registrations=%d)", i, reconnects, err, router.Registrations())
 		}
 	}
 
-	if got := router.registrations(); got != reconnects {
+	if got := router.Registrations(); got != reconnects {
 		t.Errorf("WithForceRouteRegistration: registrations = %d after %d reconnects, want %d (the godoc and R-ROUTE-005 both say every Connect and Reconnect)",
 			got, reconnects, reconnects)
 	}
@@ -952,7 +953,7 @@ func TestReconnect_DropWhileFinishingIsNotLost(t *testing.T) {
 func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 	srv := startScriptableServer(t)
 	defer srv.stop()
-	router := startRouteResponder(t)
+	router := fakeplc.NewRouter(t)
 
 	// The router ACKs the registration, but the device never serves the route:
 	// silence, which is what awaitRouteActive is there to catch.
@@ -974,7 +975,7 @@ func TestConnect_FailedRouteActivationLeavesNothingRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	sess.routerPort = router.port
+	sess.routerPort = router.Port
 	t.Cleanup(func() { sess.Close() })
 
 	if err := sess.Connect(context.Background()); err == nil {

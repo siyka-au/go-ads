@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
+	"github.com/siyka-au/go-ads/v3/router"
 )
 
 // routeManager holds the credentials and policy state used for AMS route
@@ -95,7 +97,7 @@ func (sess *Session) awaitRouterAwake(ctx context.Context) error {
 	deadline := time.Now().Add(routerDeafGrace)
 	for attempt := 1; ; attempt++ {
 		probeCtx, cancel := context.WithTimeout(ctx, routerAwakePoll)
-		_, err := IdentifyRemoteWithLogger(probeCtx, sess.logger, sess.ip)
+		_, err := router.Identify(probeCtx, sess.ip, sess.routerOptions()...)
 		cancel()
 		if err == nil {
 			if attempt > 1 {
@@ -316,7 +318,7 @@ func (sess *Session) effectiveRouterPort() int {
 	if sess.routerPort > 0 {
 		return sess.routerPort
 	}
-	return routePort
+	return router.DefaultPort
 }
 
 // currentLifecycleCtx returns the live lifecycle context. tearDownAndReset cancels
@@ -554,20 +556,25 @@ func (sess *Session) AddRoute(ctx context.Context, routeName, username, password
 	if hostIP == "" {
 		hostIP = fmt.Sprintf("%d.%d.%d.%d", netID[0], netID[1], netID[2], netID[3])
 	}
-	// AddRemoteRouteWithLogger uses a fixed 5s UDP read deadline internally
-	// and has no context parameter. Wrap in goroutine + select so caller
-	// cancellation unblocks AddRoute promptly even though the underlying
-	// UDP socket keeps draining toward its own deadline in the background.
-	done := make(chan error, 1)
-	go func() {
-		done <- addRemoteRouteFrom(sess.logger, sess.localBindIP, sess.ip, sess.effectiveRouterPort(), netID, routeName, hostIP, username, password)
-	}()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf("AddRoute aborted: %w", ctx.Err())
+	return router.AddRoute(ctx, sess.ip, router.Route{
+		Name:         routeName,
+		LocalNetID:   netID,
+		ComputerName: hostIP,
+		Username:     username,
+		Password:     password,
+	}, sess.routerOptions()...)
+}
+
+// routerOptions addresses the AMS router's UDP service the way this session's
+// ADS traffic is addressed: same local interface, same (possibly NAT-forwarded)
+// router port. Otherwise discovery and registration can traverse a different
+// NIC than the connection they are meant to serve.
+func (sess *Session) routerOptions() []router.Option {
+	opts := []router.Option{router.WithLogger(sess.logger), router.WithPort(sess.effectiveRouterPort())}
+	if ip, ok := netip.AddrFromSlice(sess.localBindIP); ok {
+		opts = append(opts, router.WithLocalIP(ip.Unmap()))
 	}
+	return opts
 }
 
 // isRunningInContainer returns true if the process is running inside a
