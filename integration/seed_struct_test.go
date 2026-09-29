@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 // Struct layout tests against Main.fbStructTest: the same four members
 // (BOOL, DWORD, BOOL, LWORD) under pack_mode 0, 2, 4 and 8, so each member sits
@@ -13,6 +13,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
 )
 
 var packStructs = []struct {
@@ -38,7 +40,7 @@ func packExpected(seed uint32) map[string]any {
 
 // setStructSeed writes FB_StructTest.nSeed, waits for the PLC to apply it, and
 // restores the original when the test ends.
-func setStructSeed(t *testing.T, sess *Session, seed uint32) {
+func setStructSeed(t *testing.T, sess *ads.Session, seed uint32) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -58,7 +60,7 @@ func setStructSeed(t *testing.T, sess *Session, seed uint32) {
 	}
 }
 
-func restoreStructSeed(t *testing.T, sess *Session) {
+func restoreStructSeed(t *testing.T, sess *ads.Session) {
 	t.Helper()
 	saved, err := sess.ReadValue(context.Background(), structFB+"nSeed")
 	if err != nil {

@@ -54,11 +54,13 @@ func (sess *Session) applyDiscoveredIdentity(id router.Identity) error {
 // answer must cost a caller who already knows the address almost nothing.
 const targetVerifyTimeout = time.Second
 
-// verifyTarget compares the device's own NetID with the caller's, turning ADS's
-// worst failure -- socket accepted, every request silently dropped -- into a named
-// answer. An unanswered probe is never a failure in any mode: a device can serve
+// VerifyTarget asks the device for its own NetID and compares it with the target's,
+// turning ADS's worst failure -- socket accepted, every request silently dropped --
+// into a named answer. Connect runs it unless WithTargetCheck(TargetCheckOff); call
+// it yourself to check a configuration without connecting. With TargetCheckWarn a
+// mismatch is only logged. An unanswered probe is never a failure in any mode: a device can serve
 // TCP 48898 with UDP 48899 firewalled off. Only a definite mismatch is reported.
-func (sess *Session) verifyTarget(ctx context.Context) error {
+func (sess *Session) VerifyTarget(ctx context.Context) error {
 	verifyCtx, cancel := context.WithTimeout(ctx, targetVerifyTimeout)
 	defer cancel()
 	id, err := router.Identify(verifyCtx, sess.ip, sess.routerOptions()...)

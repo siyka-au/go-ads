@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 // Write tests against Main.fbWriteTest, which the PLC never modifies. Each
 // value is written by one path and read back, and the structural struct write
@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 
@@ -241,7 +243,7 @@ func TestSeedWriteRejects(t *testing.T) {
 					otherValue = int64(-424242)
 				}
 				_, err := sess.WriteValues(ctx, map[string]any{writeFB + f: bad, other: otherValue})
-				var batchErr *BatchError
+				var batchErr *ads.BatchError
 				if !errors.As(err, &batchErr) || len(batchErr.Items) != 1 || batchErr.Items[0].Symbol != writeFB+f {
 					t.Errorf("WriteValues with a bad %s: err = %v, want a BatchError naming it alone", f, err)
 				}
@@ -386,7 +388,7 @@ func TestSeedMissingSymbol(t *testing.T) {
 		t.Errorf("WriteValue missing: err = %v, want symbol not found", err)
 	}
 	got, err := sess.ReadValues(ctx, []string{missing, writeFB + "bBoolVar"})
-	var batchErr *BatchError
+	var batchErr *ads.BatchError
 	if !errors.As(err, &batchErr) || len(batchErr.Items) != 1 || batchErr.Items[0].Symbol != missing {
 		t.Errorf("ReadValues: err = %v, want a BatchError naming only the missing symbol", err)
 	}

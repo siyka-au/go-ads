@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 import (
 	"context"
@@ -11,6 +11,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
+
+	"github.com/siyka-au/go-ads/v3/internal/testproxy"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 )
@@ -33,14 +37,14 @@ import (
 // which is the proxy. The route for this host already exists on the lab devices,
 // and since the proxy runs locally the PLC still sees this machine's IP as the
 // TCP source, so that route matches.
-func linkLossSession(t *testing.T, p *tcpProxy, target ams.Address) *Session {
+func linkLossSession(t *testing.T, p *testproxy.Proxy, target ams.Address) *ads.Session {
 	t.Helper()
-	opts := []Option{
-		WithRequestTimeout(3 * time.Second),
-		WithAutoReconnect(true),
-		WithMaxReconnectAttempts(0), // unbounded: giving up would close the session
-		WithTargetCheck(TargetCheckOff),
-		WithBackoff(BackoffConfig{
+	opts := []ads.Option{
+		ads.WithRequestTimeout(3 * time.Second),
+		ads.WithAutoReconnect(true),
+		ads.WithMaxReconnectAttempts(0), // unbounded: giving up would close the session
+		ads.WithTargetCheck(ads.TargetCheckOff),
+		ads.WithBackoff(ads.BackoffConfig{
 			InitialInterval: 500 * time.Millisecond,
 			InitialAttempts: 6,
 			MidInterval:     time.Second,
@@ -55,11 +59,11 @@ func linkLossSession(t *testing.T, p *tcpProxy, target ams.Address) *Session {
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, err)
 		}
-		opts = append(opts, WithLocalAddress(local))
+		opts = append(opts, ads.WithLocalAddress(local))
 	}
 
-	sess, err := NewSession(context.Background(),
-		Endpoint{Host: p.host(), Port: p.port(), Target: target}, opts...)
+	sess, err := ads.NewSession(context.Background(),
+		ads.Endpoint{Host: p.Host(), Port: p.Port(), Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession via %s: %v", p, err)
 	}
@@ -85,7 +89,7 @@ func linkLossTarget(t *testing.T) (host string, target ams.Address) {
 
 // subscribeLinkLossSymbols subscribes whatever changing symbols the env offers and
 // returns their count.
-func subscribeLinkLossSymbols(t *testing.T, sess *Session, ch chan *Update) int {
+func subscribeLinkLossSymbols(t *testing.T, sess *ads.Session, ch chan *ads.Update) int {
 	t.Helper()
 	counter := os.Getenv("ADS_READ_COUNTER")
 	if counter == "" {
@@ -97,23 +101,23 @@ func subscribeLinkLossSymbols(t *testing.T, sess *Session, ch chan *Update) int 
 			names = append(names, v)
 		}
 	}
-	configs := make([]NotificationConfig, 0, len(names))
+	configs := make([]ads.NotificationConfig, 0, len(names))
 	for _, n := range names {
-		configs = append(configs, NotificationConfig{
-			Symbol:       n,
-			Mode: ams.TransModeServerOnChange,
-			MaxDelay:         200 * time.Millisecond,
-			CycleTime:        200 * time.Millisecond,
+		configs = append(configs, ads.NotificationConfig{
+			Symbol:    n,
+			Mode:      ams.TransModeServerOnChange,
+			MaxDelay:  200 * time.Millisecond,
+			CycleTime: 200 * time.Millisecond,
 		})
 	}
-	results, err := sess.subscribeAll(context.Background(), configs, ch)
+	results, err := sess.SubscribeAll(context.Background(), configs, ch)
 	if err != nil {
 		t.Fatalf("SubscribeAll: %v", err)
 	}
 	bound := 0
 	for i, r := range results {
-		if r.Skipped != nil || r.Handle == 0 {
-			t.Logf("note: %s not subscribed (%v)", names[i], r.Skipped)
+		if r.Err != nil {
+			t.Logf("note: %s not subscribed (%v)", names[i], r.Err)
 			continue
 		}
 		bound++
@@ -124,7 +128,7 @@ func subscribeLinkLossSymbols(t *testing.T, sess *Session, ch chan *Update) int 
 	return bound
 }
 
-func drainUpdates(ch <-chan *Update, d time.Duration) int {
+func drainUpdates(ch <-chan *ads.Update, d time.Duration) int {
 	n := 0
 	deadline := time.After(d)
 	for {
@@ -137,7 +141,7 @@ func drainUpdates(ch <-chan *Update, d time.Duration) int {
 	}
 }
 
-func awaitQuiet(ch <-chan *Update, quiet, limit time.Duration) bool {
+func awaitQuiet(ch <-chan *ads.Update, quiet, limit time.Duration) bool {
 	deadline := time.After(limit)
 	for {
 		select {
@@ -150,7 +154,7 @@ func awaitQuiet(ch <-chan *Update, quiet, limit time.Duration) bool {
 	}
 }
 
-func awaitUpdate(ch <-chan *Update, limit time.Duration) bool {
+func awaitUpdate(ch <-chan *ads.Update, limit time.Duration) bool {
 	select {
 	case <-ch:
 		return true
@@ -166,7 +170,7 @@ func awaitUpdate(ch <-chan *Update, limit time.Duration) bool {
 // route-idle timeout.
 func TestIntegrationLinkLossBlackhole(t *testing.T) {
 	host, target := linkLossTarget(t)
-	p := startTCPProxy(t, net.JoinHostPort(host, "48898"))
+	p := testproxy.Start(t, net.JoinHostPort(host, "48898"))
 	sess := linkLossSession(t, p, target)
 
 	ctx := context.Background()
@@ -177,7 +181,7 @@ func TestIntegrationLinkLossBlackhole(t *testing.T) {
 		t.Fatalf("LoadSymbols: %v", err)
 	}
 
-	ch := make(chan *Update, 256)
+	ch := make(chan *ads.Update, 256)
 	bound := subscribeLinkLossSymbols(t, sess, ch)
 	if n := drainUpdates(ch, 5*time.Second); n == 0 {
 		t.Fatal("no updates before the outage — fix the setup before testing recovery")
@@ -186,16 +190,14 @@ func TestIntegrationLinkLossBlackhole(t *testing.T) {
 
 	// Sever.
 	darkAt := time.Now()
-	p.blackhole()
+	p.Blackhole()
 	if !awaitQuiet(ch, 3*time.Second, 30*time.Second) {
 		// A device that answers on a connection IT opens to us bypasses the proxy
 		// entirely: the proxy only fronts the connection WE opened, so blackholing it
 		// cannot stop a stream arriving on the device's own socket. Measured against
 		// 192.168.3.224 in that state. Nothing is wrong here — the scenario simply
 		// cannot be staged for such a device with this proxy.
-		sess.peerMu.Lock()
-		viaPeer := sess.peerLn != nil
-		sess.peerMu.Unlock()
+		viaPeer := sess.Info().PeerListening
 		if viaPeer {
 			t.Skip("this device answers on a connection it opens to us, which does not pass through the proxy; " +
 				"link loss cannot be staged for it here")
@@ -217,15 +219,15 @@ func TestIntegrationLinkLossBlackhole(t *testing.T) {
 	}
 
 	// Restore.
-	p.restore()
+	p.Restore()
 	if !awaitUpdate(ch, 90*time.Second) {
-		state := sess.lifecycle.state.load()
+		state := sess.State()
 		t.Fatalf("no updates within 90s of the link returning; state=%v IsClosed=%v", state, sess.IsClosed())
 	}
 	t.Logf("recovered %v after the outage began", time.Since(downAt).Round(time.Second))
 
 	assertHealthyAfterRecovery(t, sess, ch, bound)
-	accepted, toPLC, toClient := p.stats()
+	accepted, toPLC, toClient := p.Stats()
 	t.Logf("proxy: %d connections accepted, %d bytes to PLC, %d bytes to client", accepted, toPLC, toClient)
 	if accepted < 2 {
 		t.Errorf("proxy accepted %d connections; a recovery must have dialed again", accepted)
@@ -238,7 +240,7 @@ func TestIntegrationLinkLossBlackhole(t *testing.T) {
 // closed socket rather than a request deadline.
 func TestIntegrationLinkLossCut(t *testing.T) {
 	host, target := linkLossTarget(t)
-	p := startTCPProxy(t, net.JoinHostPort(host, "48898"))
+	p := testproxy.Start(t, net.JoinHostPort(host, "48898"))
 	sess := linkLossSession(t, p, target)
 
 	ctx := context.Background()
@@ -249,24 +251,24 @@ func TestIntegrationLinkLossCut(t *testing.T) {
 		t.Fatalf("LoadSymbols: %v", err)
 	}
 
-	ch := make(chan *Update, 256)
+	ch := make(chan *ads.Update, 256)
 	bound := subscribeLinkLossSymbols(t, sess, ch)
 	if n := drainUpdates(ch, 5*time.Second); n == 0 {
 		t.Fatal("no updates before the outage")
 	}
 
-	p.cut()
+	p.Cut()
 	if !awaitQuiet(ch, 2*time.Second, 30*time.Second) {
 		t.Fatal("updates never stopped after cutting the link")
 	}
 	downAt := time.Now()
 
 	time.Sleep(5 * time.Second)
-	p.restore()
+	p.Restore()
 
 	if !awaitUpdate(ch, 90*time.Second) {
 		t.Fatalf("no updates within 90s of the link returning; state=%v IsClosed=%v",
-			sess.lifecycle.state.load(), sess.IsClosed())
+			sess.State(), sess.IsClosed())
 	}
 	t.Logf("recovered %v after the cut", time.Since(downAt).Round(time.Second))
 	assertHealthyAfterRecovery(t, sess, ch, bound)
@@ -278,7 +280,7 @@ func TestIntegrationLinkLossCut(t *testing.T) {
 // release them (Beckhoff #268). It also drives the cross-cycle flap cooldown.
 func TestIntegrationLinkLossFlapping(t *testing.T) {
 	host, target := linkLossTarget(t)
-	p := startTCPProxy(t, net.JoinHostPort(host, "48898"))
+	p := testproxy.Start(t, net.JoinHostPort(host, "48898"))
 	sess := linkLossSession(t, p, target)
 
 	ctx := context.Background()
@@ -289,7 +291,7 @@ func TestIntegrationLinkLossFlapping(t *testing.T) {
 		t.Fatalf("LoadSymbols: %v", err)
 	}
 
-	ch := make(chan *Update, 512)
+	ch := make(chan *ads.Update, 512)
 	bound := subscribeLinkLossSymbols(t, sess, ch)
 	if n := drainUpdates(ch, 5*time.Second); n == 0 {
 		t.Fatal("no updates before the first outage")
@@ -297,24 +299,22 @@ func TestIntegrationLinkLossFlapping(t *testing.T) {
 
 	const cycles = 3
 	for i := 1; i <= cycles; i++ {
-		p.cut()
+		p.Cut()
 		if !awaitQuiet(ch, 2*time.Second, 30*time.Second) {
 			t.Fatalf("cycle %d: updates never stopped", i)
 		}
 		time.Sleep(2 * time.Second)
-		p.restore()
+		p.Restore()
 		if !awaitUpdate(ch, 90*time.Second) {
 			t.Fatalf("cycle %d: no recovery within 90s; state=%v IsClosed=%v",
-				i, sess.lifecycle.state.load(), sess.IsClosed())
+				i, sess.State(), sess.IsClosed())
 		}
 		t.Logf("cycle %d recovered", i)
 	}
 
 	assertHealthyAfterRecovery(t, sess, ch, bound)
-	sess.notifications.lock.Lock()
-	active := len(sess.notifications.activeNotifications)
-	pending := len(sess.notifications.pending)
-	sess.notifications.lock.Unlock()
+	active := liveCount(sess)
+	pending := len(sess.Subscriptions())
 	// One entry per subscribed symbol, no matter how many cycles ran: a config
 	// list that grows per flap is the resubscribe path duplicating work.
 	if active != bound || pending != bound {
@@ -325,18 +325,16 @@ func TestIntegrationLinkLossFlapping(t *testing.T) {
 // assertHealthyAfterRecovery checks the session is genuinely usable again, not
 // merely emitting samples: right state, every symbol re-bound and streaming, and
 // the request path working.
-func assertHealthyAfterRecovery(t *testing.T, sess *Session, ch <-chan *Update, want int) {
+func assertHealthyAfterRecovery(t *testing.T, sess *ads.Session, ch <-chan *ads.Update, want int) {
 	t.Helper()
 	if sess.IsClosed() {
 		t.Error("session reports closed although updates resumed")
 	}
-	if state := sess.lifecycle.state.load(); state != SessionStateConnected {
+	if state := sess.State(); state != ads.SessionStateConnected {
 		t.Errorf("state = %v, want Connected", state)
 	}
 
-	sess.notifications.lock.Lock()
-	bound := len(sess.notifications.activeNotifications)
-	sess.notifications.lock.Unlock()
+	bound := liveCount(sess)
 	if bound != want {
 		t.Errorf("bound notifications = %d, want %d — re-subscribe did not restore every symbol", bound, want)
 	}

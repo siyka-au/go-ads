@@ -1,14 +1,17 @@
 //go:build integration
 
-package ads
+package integration
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
 
 	"github.com/siyka-au/go-ads/v3/internal/testlog"
 
@@ -50,7 +53,7 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 		ip:        "192.168.3.224",
 		targetAMS: "5.154.236.19.1.1",
 		routeName: "go-ads-test",
-	}, WithLogger(slog.New(logs)))
+	}, ads.WithLogger(slog.New(logs)))
 
 	if err := conn.LoadSymbols(context.Background()); err != nil {
 		t.Fatalf("LoadSymbols failed: %v", err)
@@ -67,29 +70,30 @@ func TestIntegrationNotificationBatchScale(t *testing.T) {
 		t.Logf("PLC offers %d parseable symbols, requested %d — running with %d", len(names), want, len(names))
 	}
 
-	configs := make([]NotificationConfig, len(names))
+	configs := make([]ads.NotificationConfig, len(names))
 	for i, name := range names {
-		configs[i] = NotificationConfig{
-			Symbol:       name,
-			MaxDelay:         100 * time.Millisecond,
-			CycleTime:        100 * time.Millisecond,
-			Mode: ams.TransModeServerOnChange,
+		configs[i] = ads.NotificationConfig{
+			Symbol:    name,
+			MaxDelay:  100 * time.Millisecond,
+			CycleTime: 100 * time.Millisecond,
+			Mode:      ams.TransModeServerOnChange,
 		}
 	}
 
 	// Buffer generously: a dropped Update would look like a reaped handle.
-	ch := make(chan *Update, 16*len(configs))
-	results, err := conn.subscribeAll(context.Background(), configs, ch)
+	ch := make(chan *ads.Update, 16*len(configs))
+	results, err := conn.SubscribeAll(context.Background(), configs, ch)
 	if err != nil {
 		t.Fatalf("SubscribeAll(%d symbols) failed: %v", len(configs), err)
 	}
 	subscribed := make(map[string]bool, len(results))
 	for i, r := range results {
+		var rc ams.ReturnCode
 		switch {
-		case r.Skipped != nil:
-			t.Errorf("subscribe skipped for %s: %v", names[i], r.Skipped)
-		case r.Error != ams.ReturnCodeNoErrors:
-			t.Errorf("PLC rejected %s: 0x%04X (%v)", names[i], uint32(r.Error), r.Error)
+		case errors.As(r.Err, &rc):
+			t.Errorf("PLC rejected %s: 0x%04X (%v)", names[i], uint32(rc), rc)
+		case r.Err != nil:
+			t.Errorf("subscribe skipped for %s: %v", names[i], r.Err)
 		default:
 			subscribed[names[i]] = true
 		}

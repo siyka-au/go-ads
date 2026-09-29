@@ -95,7 +95,7 @@ func (sess *Session) Connect(ctx context.Context) (retErr error) {
 	// Skipped in local mode, where the target was just overwritten with the
 	// loopback NetID and there is nothing to compare against.
 	if !local && sess.targetCheck != TargetCheckOff {
-		if err := sess.verifyTarget(ctx); err != nil {
+		if err := sess.VerifyTarget(ctx); err != nil {
 			return err
 		}
 	}

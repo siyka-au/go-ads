@@ -17,7 +17,7 @@
 // Validates: R-CACHE-009, R-CACHE-010, R-CACHE-011, R-CACHE-012, R-CACHE-013,
 //            R-NOT-016, R-NOT-017, R-SES-011.
 
-package ads
+package integration
 
 import (
 	"bufio"
@@ -28,6 +28,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
+
+	"github.com/siyka-au/go-ads/v3/ams"
 )
 
 const (
@@ -76,7 +80,7 @@ func waitForOperator(t *testing.T, prompt string) {
 //
 // strategy: "auto" | "close" | "ignore"
 // extraOpts: appended after defaults — used by Close strategy test to wire OnDisconnect.
-func symbolVersionSession(t *testing.T, strategy string, extraOpts ...Option) *Session {
+func symbolVersionSession(t *testing.T, strategy string, extraOpts ...ads.Option) *ads.Session {
 	t.Helper()
 	ip := symVerEnv("ADS_PLC_IP", "192.168.3.224")
 	targetAMS := symVerEnv("ADS_TARGET_AMS", "5.154.236.19.1.1")
@@ -87,35 +91,35 @@ func symbolVersionSession(t *testing.T, strategy string, extraOpts ...Option) *S
 	}
 	localAMS := symVerEnv("ADS_LOCAL_AMS", "auto")
 
-	var opts []Option
+	var opts []ads.Option
 	switch strategy {
 	case "auto":
-		opts = append(opts, WithSymbolVersionStrategy(SymbolVersionAutoReload))
+		opts = append(opts, ads.WithSymbolVersionStrategy(ads.SymbolVersionAutoReload))
 	case "close":
-		opts = append(opts, WithSymbolVersionStrategy(SymbolVersionClose))
+		opts = append(opts, ads.WithSymbolVersionStrategy(ads.SymbolVersionClose))
 	case "ignore":
-		opts = append(opts, WithSymbolVersionStrategy(SymbolVersionIgnore))
+		opts = append(opts, ads.WithSymbolVersionStrategy(ads.SymbolVersionIgnore))
 	default:
 		t.Fatalf("unknown strategy %q", strategy)
 	}
-	opts = append(opts, WithOnSymbolVersionChanged(func(reason Reason) {
+	opts = append(opts, ads.WithOnSymbolVersionChanged(func(reason ads.Reason) {
 		t.Logf("symbol-version-changed callback: reason=%s", reason)
 	}))
-	target, err := NewAddress(targetAMS, uint16(targetPort))
+	target, err := ams.NewAddress(targetAMS, ams.Port(targetPort))
 	if err != nil {
 		t.Fatalf("invalid target AMS: %v", err)
 	}
-	opts = append(opts, WithRequestTimeout(5*time.Second), WithLocalAddress(Address{Port: 11000}))
+	opts = append(opts, ads.WithRequestTimeout(5*time.Second), ads.WithLocalAddress(ams.Address{Port: 11000}))
 	if localAMS != "auto" && localAMS != "" {
-		local, err := NewAddress(localAMS, 11000)
+		local, err := ams.NewAddress(localAMS, 11000)
 		if err != nil {
 			t.Fatalf("invalid local AMS: %v", err)
 		}
-		opts = append(opts, WithLocalAddress(local))
+		opts = append(opts, ads.WithLocalAddress(local))
 	}
 	opts = append(opts, extraOpts...)
 
-	sess, err := NewSession(context.Background(), Endpoint{IP: ip, Port: 48898, AMS: target}, opts...)
+	sess, err := ads.NewSession(context.Background(), ads.Endpoint{Host: ip, Port: 48898, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -131,7 +135,7 @@ func symbolVersionSession(t *testing.T, strategy string, extraOpts ...Option) *S
 }
 
 // assertSymbolPresent fails the test fast if PLC project lacks the online-change test POU.
-func assertSymbolPresent(t *testing.T, sess *Session, name string) {
+func assertSymbolPresent(t *testing.T, sess *ads.Session, name string) {
 	t.Helper()
 	syms, _ := sess.Symbols()
 	if _, ok := syms[name]; !ok {
@@ -146,12 +150,12 @@ func assertSymbolPresent(t *testing.T, sess *Session, name string) {
 // "channel full" warn path.
 type sampleCollector struct {
 	mu      sync.Mutex
-	samples []*Update
+	samples []*ads.Update
 	stop    chan struct{}
 	done    chan struct{}
 }
 
-func startCollector(ch <-chan *Update) *sampleCollector {
+func startCollector(ch <-chan *ads.Update) *sampleCollector {
 	c := &sampleCollector{
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
@@ -189,10 +193,10 @@ func startCollector(ch <-chan *Update) *sampleCollector {
 }
 
 // snapshot returns a copy of samples collected so far.
-func (c *sampleCollector) snapshot() []*Update {
+func (c *sampleCollector) snapshot() []*ads.Update {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]*Update, len(c.samples))
+	out := make([]*ads.Update, len(c.samples))
 	copy(out, c.samples)
 	return out
 }
@@ -228,8 +232,8 @@ func TestSymbolVersionAutoReload_TypeChange(t *testing.T) {
 	// ServerCycle (period sample) — fires every 100ms regardless of value
 	// change. Required because nProbeA may not be written to by PLC code,
 	// so ServerOnChange would yield 0 samples.
-	ch := make(chan *Update, 256)
-	if _, err := sess.Subscribe(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+	ch := make(chan *ads.Update, 256)
+	if _, err := sess.Subscribe(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerCycle, ch); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
@@ -269,13 +273,13 @@ func TestSymbolVersionAutoReload_SymbolRemoved(t *testing.T) {
 	sess := symbolVersionSession(t, "auto")
 	assertSymbolPresent(t, sess, symProbeB)
 
-	ch := make(chan *Update, 16)
-	if _, err := sess.Subscribe(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch); err != nil {
+	ch := make(chan *ads.Update, 16)
+	if _, err := sess.Subscribe(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
 	// Confirm baseline read works.
-	if _, err := sess.ReadFromSymbol(context.Background(), symProbeB); err != nil {
+	if _, err := sess.ReadValue(context.Background(), symProbeB); err != nil {
 		t.Fatalf("baseline read: %v", err)
 	}
 
@@ -283,7 +287,7 @@ func TestSymbolVersionAutoReload_SymbolRemoved(t *testing.T) {
 
 	// Post-change: read should fail; channel may receive Stale terminal sample.
 	time.Sleep(3 * time.Second) // let auto-reload settle
-	if _, err := sess.ReadFromSymbol(context.Background(), symProbeB); err == nil {
+	if _, err := sess.ReadValue(context.Background(), symProbeB); err == nil {
 		t.Error("expected read error after symbol removal, got nil")
 	} else {
 		t.Logf("post-removal read err (expected): %v", err)
@@ -300,8 +304,8 @@ func TestSymbolVersionAutoReload_StructMemberOffsetShift(t *testing.T) {
 	sess := symbolVersionSession(t, "auto")
 	assertSymbolPresent(t, sess, symStructC)
 
-	ch := make(chan *Update, 256)
-	if _, err := sess.Subscribe(context.Background(), symStructC, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+	ch := make(chan *ads.Update, 256)
+	if _, err := sess.Subscribe(context.Background(), symStructC, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerCycle, ch); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
@@ -349,12 +353,12 @@ func TestSymbolVersionClose_OnDetection(t *testing.T) {
 	closed := make(chan struct{})
 	var once sync.Once
 	sess := symbolVersionSession(t, "close",
-		WithOnDisconnect(func() { once.Do(func() { close(closed) }) }),
+		ads.WithOnDisconnect(func() { once.Do(func() { close(closed) }) }),
 	)
 	assertSymbolPresent(t, sess, symProbeA)
 
-	ch := make(chan *Update, 256)
-	if _, err := sess.Subscribe(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+	ch := make(chan *ads.Update, 256)
+	if _, err := sess.Subscribe(context.Background(), symProbeA, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerCycle, ch); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
@@ -366,7 +370,7 @@ func TestSymbolVersionClose_OnDetection(t *testing.T) {
 	// after online change. Detection only triggers via explicit op (Read).
 	// Probe with a Read; under "close" strategy the resulting 0x711/0x0703
 	// must close the session.
-	_, readErr := sess.ReadFromSymbol(context.Background(), symProbeA)
+	_, readErr := sess.ReadValue(context.Background(), symProbeA)
 	t.Logf("post-change probe read err: %v", readErr)
 
 	// Hardware-only assertion: real TC3 detection code surfaces through the
@@ -402,8 +406,8 @@ func TestSymbolVersionIgnore_StaleFlag(t *testing.T) {
 
 	// Counter increments every PLC scan (10ms = 100Hz). Use big buffer +
 	// active drainer goroutine so the channel never blocks the listen loop.
-	ch := make(chan *Update, 1024)
-	if _, err := sess.Subscribe(context.Background(), symCounter, 100*time.Millisecond, 100*time.Millisecond, TransModeServerOnChange, ch); err != nil {
+	ch := make(chan *ads.Update, 1024)
+	if _, err := sess.Subscribe(context.Background(), symCounter, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerOnChange, ch); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
@@ -433,7 +437,7 @@ func TestSymbolVersionIgnore_StaleFlag(t *testing.T) {
 	// (Task 3) does not match this scenario on real hardware — log + skip
 	// the strict assertion rather than fail (no spec violation, just a
 	// real-world coverage gap that would need a different trigger).
-	var firstStale *Update
+	var firstStale *ads.Update
 	for _, u := range post {
 		if u.Stale != nil {
 			firstStale = u
@@ -443,8 +447,8 @@ func TestSymbolVersionIgnore_StaleFlag(t *testing.T) {
 	if firstStale == nil {
 		t.Logf("no Stale sample observed across %d post-change samples — TC3 may not surface a detection code for this scenario via the listener path (operator-handle survival is acceptable Ignore semantics)", len(post))
 	} else {
-		if firstStale.Stale.Reason != ReasonSymbolVersionInvalid {
-			t.Errorf("first Stale sample: Reason=%q, want %q", firstStale.Stale.Reason, ReasonSymbolVersionInvalid)
+		if firstStale.Stale.Reason != ads.ReasonSymbolVersionInvalid {
+			t.Errorf("first Stale sample: Reason=%q, want %q", firstStale.Stale.Reason, ads.ReasonSymbolVersionInvalid)
 		} else {
 			t.Logf("Stale sample observed: Reason=%q value=%v", firstStale.Stale.Reason, firstStale.Value)
 		}
@@ -466,9 +470,9 @@ func TestSymbolVersionIgnore_StaleFlag(t *testing.T) {
 // Validates: R-CACHE-009 (listener-path supplementary detection),
 // R-CACHE-012 (Ignore strategy), R-NOT-016 (callback delivery).
 func TestSymbolVersionIgnore_RemovedSymbolStops(t *testing.T) {
-	cbReason := make(chan Reason, 4)
+	cbReason := make(chan ads.Reason, 4)
 	sess := symbolVersionSession(t, "ignore",
-		WithOnSymbolVersionChanged(func(reason Reason) {
+		ads.WithOnSymbolVersionChanged(func(reason ads.Reason) {
 			select {
 			case cbReason <- reason:
 			default:
@@ -479,8 +483,8 @@ func TestSymbolVersionIgnore_RemovedSymbolStops(t *testing.T) {
 
 	// ServerCycle so we get steady-state samples pre-deletion (proves
 	// subscription alive); silence post-deletion is the assertion target.
-	ch := make(chan *Update, 256)
-	if _, err := sess.Subscribe(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, TransModeServerCycle, ch); err != nil {
+	ch := make(chan *ads.Update, 256)
+	if _, err := sess.Subscribe(context.Background(), symProbeB, 100*time.Millisecond, 100*time.Millisecond, ams.TransModeServerCycle, ch); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	col := startCollector(ch)
@@ -498,15 +502,15 @@ func TestSymbolVersionIgnore_RemovedSymbolStops(t *testing.T) {
 	// Wait up to 5s for the listener-path detection to surface via the
 	// callback (TC3 emits the 0-byte terminal sample whenever it gets
 	// around to it after Activate completes).
-	var detectionReason Reason
+	var detectionReason ads.Reason
 	select {
 	case detectionReason = <-cbReason:
 		t.Logf("listener-path detection callback fired: reason=%s", detectionReason)
 	case <-time.After(5 * time.Second):
 		t.Fatal("onSymbolVersionChanged callback did not fire within 5s after symbol removal — listener-path detection did not trigger")
 	}
-	if detectionReason != ReasonSymbolNotFound {
-		t.Errorf("callback reason = %q, want %q", detectionReason, ReasonSymbolNotFound)
+	if detectionReason != ads.ReasonSymbolNotFound {
+		t.Errorf("callback reason = %q, want %q", detectionReason, ads.ReasonSymbolNotFound)
 	}
 
 	// Mark the post-detection boundary: any sample arriving AFTER the

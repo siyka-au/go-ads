@@ -1,6 +1,7 @@
-//go:build integration
-
-package ads
+// Package testproxy puts a loopback TCP proxy, and a UDP relay for the AMS
+// router's service port, in front of a real PLC, so link faults become method
+// calls instead of someone walking to the rack.
+package testproxy
 
 import (
 	"fmt"
@@ -12,9 +13,6 @@ import (
 	"time"
 )
 
-// testproxy_integration_test.go — a loopback TCP proxy in front of a real PLC, so
-// link faults become method calls instead of someone walking to the rack.
-//
 // Why bother when a stub server can also close a socket: the stub is not a PLC.
 // It has no notification table that survives the outage, no route entry, no
 // symbol version, and no opinion about a client that reconnects with the same
@@ -23,11 +21,12 @@ import (
 // With the proxy the PLC stays completely untouched — only the wire between us
 // dies — which is the one scenario a power cycle cannot produce.
 //
-// The session must reach the PLC over TCP only: no WithRoute (route registration
-// is UDP straight to sess.ip, which would be the proxy) and TargetCheckOff (the
-// identify probe likewise). Both are safe here because the route for this host's
-// NetID already exists on the lab PLCs, and the outbound connection still leaves
-// from this machine, so the PLC sees the source IP its route entry names.
+// A session behind the proxy sends its UDP (identify, route registration) to the
+// proxy's host too. Either keep it off UDP (TargetCheckOff, no WithRoute), which is
+// safe on the lab PLCs because this host's route already exists and the outbound
+// connection still leaves from this machine; or front the router port with a
+// UDPRelay and pass WithHostIP(LocalIPFor(plc)), so the route names this host's
+// real address rather than the loopback the TCP connection now starts from.
 
 type linkState int32
 
@@ -45,7 +44,8 @@ const (
 	linkCut
 )
 
-type tcpProxy struct {
+// Proxy is a loopback TCP proxy in front of a PLC whose link a test can break.
+type Proxy struct {
 	t        *testing.T
 	ln       net.Listener
 	target   string
@@ -59,14 +59,14 @@ type tcpProxy struct {
 	toClient atomic.Int64
 }
 
-// startTCPProxy listens on loopback and forwards to target ("host:port").
-func startTCPProxy(t *testing.T, target string) *tcpProxy {
+// Start listens on loopback and forwards to target ("host:port").
+func Start(t *testing.T, target string) *Proxy {
 	t.Helper()
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("proxy listen: %v", err)
 	}
-	p := &tcpProxy{
+	p := &Proxy{
 		t:      t,
 		ln:     ln,
 		target: target,
@@ -75,13 +75,13 @@ func startTCPProxy(t *testing.T, target string) *tcpProxy {
 	}
 	p.wg.Add(1)
 	go p.acceptLoop()
-	t.Cleanup(p.close)
+	t.Cleanup(p.Close)
 	return p
 }
 
-func (p *tcpProxy) host() string { return "127.0.0.1" }
+func (p *Proxy) Host() string { return "127.0.0.1" }
 
-func (p *tcpProxy) port() int {
+func (p *Proxy) Port() int {
 	addr, ok := p.ln.Addr().(*net.TCPAddr)
 	if !ok {
 		p.t.Fatalf("unexpected proxy addr type %T", p.ln.Addr())
@@ -90,13 +90,13 @@ func (p *tcpProxy) port() int {
 }
 
 // blackhole simulates a pulled cable: bytes stop moving, sockets stay open.
-func (p *tcpProxy) blackhole() {
+func (p *Proxy) Blackhole() {
 	p.state.Store(int32(linkBlackhole))
 	p.t.Logf("[proxy] link blackholed (bytes stop, sockets held)")
 }
 
 // cut simulates a port going down: live connections die now.
-func (p *tcpProxy) cut() {
+func (p *Proxy) Cut() {
 	p.state.Store(int32(linkCut))
 	p.connMu.Lock()
 	n := len(p.conns)
@@ -111,7 +111,7 @@ func (p *tcpProxy) cut() {
 // restore puts the link back. Existing connections are not resurrected — a real
 // link coming back does not revive a dead TCP session either, which is the point:
 // the library has to redial.
-func (p *tcpProxy) restore() {
+func (p *Proxy) Restore() {
 	p.state.Store(int32(linkUp))
 	p.connMu.Lock()
 	for c := range p.conns {
@@ -122,11 +122,11 @@ func (p *tcpProxy) restore() {
 	p.t.Logf("[proxy] link restored")
 }
 
-func (p *tcpProxy) stats() (accepted, toPLC, toClient int64) {
+func (p *Proxy) Stats() (accepted, toPLC, toClient int64) {
 	return p.accepted.Load(), p.toPLC.Load(), p.toClient.Load()
 }
 
-func (p *tcpProxy) close() {
+func (p *Proxy) Close() {
 	select {
 	case <-p.closed:
 		return
@@ -143,7 +143,7 @@ func (p *tcpProxy) close() {
 	p.wg.Wait()
 }
 
-func (p *tcpProxy) acceptLoop() {
+func (p *Proxy) acceptLoop() {
 	defer p.wg.Done()
 	for {
 		client, err := p.ln.Accept()
@@ -156,7 +156,7 @@ func (p *tcpProxy) acceptLoop() {
 	}
 }
 
-func (p *tcpProxy) serve(client net.Conn) {
+func (p *Proxy) serve(client net.Conn) {
 	defer p.wg.Done()
 	defer func() { _ = client.Close() }()
 
@@ -194,7 +194,7 @@ func (p *tcpProxy) serve(client net.Conn) {
 // pump copies src -> dst while the link is up. While blackholed it keeps reading
 // and discards, so the sender sees a healthy TCP window and no answer — the
 // asymmetry that makes a pulled cable look different from a closed port.
-func (p *tcpProxy) pump(src, dst net.Conn, counter *atomic.Int64) {
+func (p *Proxy) pump(src, dst net.Conn, counter *atomic.Int64) {
 	buf := make([]byte, 32*1024)
 	for {
 		select {
@@ -227,7 +227,7 @@ func (p *tcpProxy) pump(src, dst net.Conn, counter *atomic.Int64) {
 
 // holdUntilUp keeps a connection accepted-but-unserved until the link returns or
 // the proxy shuts down.
-func (p *tcpProxy) holdUntilUp(c net.Conn) {
+func (p *Proxy) holdUntilUp(c net.Conn) {
 	for {
 		select {
 		case <-p.closed:
@@ -246,18 +246,18 @@ func (p *tcpProxy) holdUntilUp(c net.Conn) {
 	}
 }
 
-func (p *tcpProxy) track(c net.Conn) {
+func (p *Proxy) track(c net.Conn) {
 	p.connMu.Lock()
 	p.conns[c] = struct{}{}
 	p.connMu.Unlock()
 }
 
-func (p *tcpProxy) untrack(c net.Conn) {
+func (p *Proxy) untrack(c net.Conn) {
 	p.connMu.Lock()
 	delete(p.conns, c)
 	p.connMu.Unlock()
 }
 
-func (p *tcpProxy) String() string {
-	return fmt.Sprintf("proxy %s:%d -> %s", p.host(), p.port(), p.target)
+func (p *Proxy) String() string {
+	return fmt.Sprintf("proxy %s:%d -> %s", p.Host(), p.Port(), p.target)
 }

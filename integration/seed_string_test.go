@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 // String tests against Main.fbStringTest. Go writes sStringVar,
 // sShortStringVar and wsWStringVar; the PLC reports what it sees in them each
@@ -16,6 +16,8 @@ import (
 	"testing"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/siyka-au/go-ads/v3"
 )
 
 const strFB = "Main.fbStringTest."
@@ -93,7 +95,7 @@ func wordsAny(u []uint16, n int) []any {
 }
 
 // prefixOf reads an array and returns its first n elements.
-func prefixOf(sess *Session, name string, n int) func() (any, error) {
+func prefixOf(sess *ads.Session, name string, n int) func() (any, error) {
 	return func() (any, error) {
 		v, err := sess.ReadValue(context.Background(), name)
 		if err != nil {

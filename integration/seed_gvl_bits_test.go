@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 // Tests against FB_GvlTest, which writes the same seed-derived values as
 // FB_TypeTest into the global list GVL_Test, and FB_BitPackingTest, whose
@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
@@ -23,7 +25,7 @@ const (
 )
 
 // restoreControl puts an FB's nSeed and bAutoMode back as they were.
-func restoreControl(t *testing.T, sess *Session, fb string) {
+func restoreControl(t *testing.T, sess *ads.Session, fb string) {
 	t.Helper()
 	names := []string{fb + "nSeed", fb + "bAutoMode", fb + "nAutoTickInterval"}
 	saved, err := sess.ReadValues(context.Background(), names)
@@ -53,7 +55,7 @@ func waitForValue(t *testing.T, what string, want any, read func() (any, error))
 	}
 }
 
-func setGvlSeed(t *testing.T, sess *Session, seed uint32) {
+func setGvlSeed(t *testing.T, sess *ads.Session, seed uint32) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := sess.WriteValues(ctx, map[string]any{gvlFB + "bAutoMode": false, gvlFB + "nSeed": seed}); err != nil {
@@ -190,7 +192,7 @@ func bitPaths(base string) []string {
 	return out
 }
 
-func setBitSeed(t *testing.T, sess *Session, seed uint64) {
+func setBitSeed(t *testing.T, sess *ads.Session, seed uint64) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := sess.WriteValues(ctx, map[string]any{bitsFB + "bAutoMode": false, bitsFB + "nSeed": seed}); err != nil {

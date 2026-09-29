@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 // Integration tests against the AdsGo_Testing PLC project
 // (siyka/ads-go/plc/testing). They assert Go values throughout.
@@ -33,6 +33,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 
@@ -68,14 +70,14 @@ func loadSeedEnv(t *testing.T) {
 
 // seedSession connects to the seed PLC with the datatype table loaded, and
 // restores Main.fbTypeTest's control variables when the test ends.
-func seedSession(t *testing.T) *Session {
+func seedSession(t *testing.T) *ads.Session {
 	t.Helper()
 	sess := openSeedSession(t, true)
 	restoreSeedState(t, sess)
 	return sess
 }
 
-func openSeedSession(t *testing.T, loadSymbols bool) *Session {
+func openSeedSession(t *testing.T, loadSymbols bool) *ads.Session {
 	t.Helper()
 	loadSeedEnv(t)
 	if os.Getenv("ADS_SEED_PLC") == "" {
@@ -93,13 +95,13 @@ func openSeedSession(t *testing.T, loadSymbols bool) *Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var opts []Option
+	var opts []ads.Option
 	if local, _ := strconv.ParseBool(os.Getenv("ADS_LOCAL_MODE")); local {
-		opts = append(opts, WithLocalMode())
+		opts = append(opts, ads.WithLocalMode())
 	}
 	// NewSession's context bounds the session's lifetime, so it must outlive
 	// this function; the timeout applies to connecting only.
-	sess, err := NewSession(context.Background(), Endpoint{Host: getEnvOrDefault("ADS_PLC_IP", "127.0.0.1"), Port: 48898, Target: target}, opts...)
+	sess, err := ads.NewSession(context.Background(), ads.Endpoint{Host: getEnvOrDefault("ADS_PLC_IP", "127.0.0.1"), Port: 48898, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -118,7 +120,7 @@ func openSeedSession(t *testing.T, loadSymbols bool) *Session {
 }
 
 // restoreSeedState puts fbTypeTest's control variables back as they were.
-func restoreSeedState(t *testing.T, sess *Session) {
+func restoreSeedState(t *testing.T, sess *ads.Session) {
 	t.Helper()
 	names := []string{seedFB + "nSeed", seedFB + "bAutoMode", seedFB + "nAutoTickInterval"}
 	saved, err := sess.ReadValues(context.Background(), names)
@@ -134,7 +136,7 @@ func restoreSeedState(t *testing.T, sess *Session) {
 
 // setSeed stops auto-increment and writes nSeed, then confirms both the write
 // (nSeed reads back) and a PLC cycle with it (nUdintVar, derived from nSeed).
-func setSeed(t *testing.T, sess *Session, seed uint32) {
+func setSeed(t *testing.T, sess *ads.Session, seed uint32) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

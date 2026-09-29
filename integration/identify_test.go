@@ -1,12 +1,14 @@
 //go:build integration
 
-package ads
+package integration
 
 import (
 	"context"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/siyka-au/go-ads/v3"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 	"github.com/siyka-au/go-ads/v3/router"
@@ -64,22 +66,22 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 	// NewSession must stay I/O-free for a fully specified target: the check
 	// belongs to Connect.
 	t.Run("NewSession does not verify", func(t *testing.T) {
-		sess, err := NewSession(context.Background(),
-			Endpoint{Host: host, Target: wrong},
-			WithTargetCheck(TargetCheckError))
+		sess, err := ads.NewSession(context.Background(),
+			ads.Endpoint{Host: host, Target: wrong},
+			ads.WithTargetCheck(ads.TargetCheckError))
 		if err != nil {
 			t.Fatalf("NewSession must not verify a supplied target: %v", err)
 		}
 		t.Cleanup(func() { sess.Close() })
-		if sess.target.NetID.String() != "5.99.99.99.1.1" {
-			t.Errorf("NewSession altered the target: %s", sess.target.NetID.String())
+		if sess.Info().Target.NetID.String() != "5.99.99.99.1.1" {
+			t.Errorf("NewSession altered the target: %s", sess.Info().Target.NetID.String())
 		}
 	})
 
 	t.Run("Connect refuses in error mode", func(t *testing.T) {
-		sess, err := NewSession(context.Background(),
-			Endpoint{Host: host, Target: wrong},
-			WithTargetCheck(TargetCheckError))
+		sess, err := ads.NewSession(context.Background(),
+			ads.Endpoint{Host: host, Target: wrong},
+			ads.WithTargetCheck(ads.TargetCheckError))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
@@ -99,9 +101,9 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 	})
 
 	t.Run("warn mode passes verification", func(t *testing.T) {
-		sess, err := NewSession(context.Background(),
-			Endpoint{Host: host, Target: wrong},
-			WithTargetCheck(TargetCheckWarn))
+		sess, err := ads.NewSession(context.Background(),
+			ads.Endpoint{Host: host, Target: wrong},
+			ads.WithTargetCheck(ads.TargetCheckWarn))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
@@ -109,11 +111,11 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 		// Exercise the check itself rather than a full Connect: warn mode is
 		// defined by not blocking, and a genuinely wrong NetID cannot complete
 		// a connection anyway.
-		if err := sess.verifyTarget(context.Background()); err != nil {
+		if err := sess.VerifyTarget(context.Background()); err != nil {
 			t.Errorf("warn mode must not fail verification: %v", err)
 		}
-		if sess.target.NetID.String() != "5.99.99.99.1.1" {
-			t.Errorf("verification altered the target: %s", sess.target.NetID.String())
+		if sess.Info().Target.NetID.String() != "5.99.99.99.1.1" {
+			t.Errorf("verification altered the target: %s", sess.Info().Target.NetID.String())
 		}
 	})
 
@@ -122,14 +124,14 @@ func TestIntegrationTargetCheckCatchesWrongNetID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("real address: %v", err)
 		}
-		sess, err := NewSession(context.Background(),
-			Endpoint{Host: host, Target: right},
-			WithTargetCheck(TargetCheckError))
+		sess, err := ads.NewSession(context.Background(),
+			ads.Endpoint{Host: host, Target: right},
+			ads.WithTargetCheck(ads.TargetCheckError))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
 		t.Cleanup(func() { sess.Close() })
-		if err := sess.verifyTarget(context.Background()); err != nil {
+		if err := sess.VerifyTarget(context.Background()); err != nil {
 			t.Errorf("error mode rejected the correct NetID: %v", err)
 		}
 	})
@@ -141,43 +143,43 @@ func TestIntegrationSessionDiscoversTarget(t *testing.T) {
 	host := getEnvOrDefault("ADS_PLC_IP", "192.168.3.224")
 	wantNetID := os.Getenv("ADS_TARGET_AMS")
 
-	var opts []Option
+	var opts []ads.Option
 	if hostIP := os.Getenv("ADS_HOST_IP"); hostIP != "" {
-		opts = append(opts, WithHostIP(hostIP))
+		opts = append(opts, ads.WithHostIP(hostIP))
 	}
 	if user, pass := os.Getenv("ADS_ROUTE_USER"), os.Getenv("ADS_ROUTE_PASS"); user != "" && pass != "" {
 		routeName := "go-ads-discover"
-		opts = append(opts, WithRoute(routeName, user, pass))
+		opts = append(opts, ads.WithRoute(routeName, user, pass))
 	}
 	if localAMS := os.Getenv("ADS_LOCAL_AMS"); localAMS != "" {
 		local, err := ams.NewAddress(localAMS, 10500)
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS: %v", err)
 		}
-		opts = append(opts, WithLocalAddress(local))
+		opts = append(opts, ads.WithLocalAddress(local))
 	}
 
 	// No AMS field at all: NetID and port both come from the device.
-	sess, err := NewSession(context.Background(), Endpoint{Host: host}, opts...)
+	sess, err := ads.NewSession(context.Background(), ads.Endpoint{Host: host}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession without a target AMS address: %v", err)
 	}
 	t.Cleanup(func() { sess.Close() })
 
-	if wantNetID != "" && sess.target.NetID.String() != wantNetID {
-		t.Errorf("resolved NetID = %s, want %s", sess.target.NetID.String(), wantNetID)
+	if wantNetID != "" && sess.Info().Target.NetID.String() != wantNetID {
+		t.Errorf("resolved NetID = %s, want %s", sess.Info().Target.NetID.String(), wantNetID)
 	}
 	if envPort := os.Getenv("ADS_TARGET_PORT"); envPort != "" {
-		t.Logf("resolved port %d, env says %s", sess.target.Port, envPort)
+		t.Logf("resolved port %d, env says %s", sess.Info().Target.Port, envPort)
 	}
 
 	// Resolution is only worth anything if the session then works.
 	if err := sess.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect with a discovered target: %v", err)
 	}
-	version, err := sess.client.Load().GetSymbolVersion(context.Background())
+	version, err := sess.Client().SymbolVersion(context.Background())
 	if err != nil {
 		t.Fatalf("GetSymbolVersion over a discovered target: %v", err)
 	}
-	t.Logf("connected via discovered target %s: symbol version %d", sess.target.String(), version)
+	t.Logf("connected via discovered target %s: symbol version %d", sess.Info().Target.String(), version)
 }

@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 // Notification tests against Main.fbTypeTest. Values arrive in Update.Value as
 // the same Go types ReadValue returns, and are checked against what the PLC
@@ -14,23 +14,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyka-au/go-ads/v3"
+
 	"github.com/siyka-au/go-ads/v3/ams"
 )
 
-func subscribe(t *testing.T, sess *Session, names []string, mode ams.TransMode, cycle time.Duration) chan *Update {
+func subscribe(t *testing.T, sess *ads.Session, names []string, mode ams.TransMode, cycle time.Duration) chan *ads.Update {
 	t.Helper()
-	ch := make(chan *Update, 4096)
-	configs := make([]NotificationConfig, len(names))
+	ch := make(chan *ads.Update, 4096)
+	configs := make([]ads.NotificationConfig, len(names))
 	for i, n := range names {
-		configs[i] = NotificationConfig{Symbol: n, CycleTime: cycle, Mode: mode}
+		configs[i] = ads.NotificationConfig{Symbol: n, CycleTime: cycle, Mode: mode}
 	}
-	results, err := sess.subscribeAll(context.Background(), configs, ch)
+	results, err := sess.SubscribeAll(context.Background(), configs, ch)
 	if err != nil {
 		t.Fatalf("SubscribeAll: %v", err)
 	}
 	for i, r := range results {
-		if r.Skipped != nil || r.Error != ams.ReturnCodeNoErrors {
-			t.Fatalf("subscribe %s: skipped=%v code=%v", names[i], r.Skipped, r.Error)
+		if r.Err != nil {
+			t.Fatalf("subscribe %s: %v", names[i], r.Err)
 		}
 	}
 	return ch
@@ -38,7 +40,7 @@ func subscribe(t *testing.T, sess *Session, names []string, mode ams.TransMode, 
 
 // awaitValues reads updates until every name has delivered want[name], or the
 // timeout passes; it reports the last value seen for any that never matched.
-func awaitValues(t *testing.T, ch chan *Update, want map[string]any, timeout time.Duration) {
+func awaitValues(t *testing.T, ch chan *ads.Update, want map[string]any, timeout time.Duration) {
 	t.Helper()
 	last := map[string]any{}
 	pending := len(want)
@@ -240,7 +242,7 @@ collect:
 func TestSeedNotifyUnsubscribe(t *testing.T) {
 	sess := seedSession(t)
 	setSeed(t, sess, 1)
-	ch := make(chan *Update, 64)
+	ch := make(chan *ads.Update, 64)
 	h, err := sess.Subscribe(context.Background(), seedFB+"nUdintVar", 0, 10*time.Millisecond, ams.TransModeServerOnChange, ch)
 	if err != nil {
 		t.Fatal(err)

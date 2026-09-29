@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
 )
 
 // TestBrowseAllSymbols connects to the PLC, loads all symbols slowly (chunked),
@@ -26,7 +28,7 @@ func TestBrowseAllSymbols(t *testing.T) {
 	ip := getEnvOrDefault("ADS_PLC_IP", "192.168.0.1")
 
 	// Load all symbols + datatypes slowly to avoid disrupting PLC real-time tasks.
-	err := conn.LoadSymbolsSlow(context.Background(), SlowDiscoveryConfig{
+	err := conn.LoadSymbolsSlow(context.Background(), ads.SlowDiscoveryConfig{
 		ChunkSize:  4096,
 		ChunkDelay: 100 * time.Millisecond,
 	})
@@ -42,7 +44,7 @@ func TestBrowseAllSymbols(t *testing.T) {
 	t.Logf("Loaded %d symbols from %s", len(symbols), ip)
 
 	// Get device info for the header.
-	info, err := conn.client.Load().ReadDeviceInfo(context.Background())
+	info, err := conn.Client().ReadDeviceInfo(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDeviceInfo failed: %v", err)
 	}
@@ -85,7 +87,7 @@ func TestBrowseAllSymbols(t *testing.T) {
 	t.Logf("Wrote %s (%d symbols)", filename, len(symbols))
 }
 
-func browseSetupConnection(t *testing.T) *Session {
+func browseSetupConnection(t *testing.T) *ads.Session {
 	t.Helper()
 	return setupConnectionWithDefaults(t, connDefaults{
 		ip:        "192.168.0.1",

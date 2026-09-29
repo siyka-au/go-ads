@@ -1,6 +1,6 @@
 //go:build integration
 
-package ads
+package integration
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/siyka-au/go-ads/v3"
 
 	"github.com/siyka-au/go-ads/v3/ams"
 )
@@ -101,11 +103,14 @@ var manualFillerTypes = map[string]bool{
 // every subscribed symbol to deliver again, and a constant symbol on-change is
 // legitimately silent forever, which would make this test fail for a reason that
 // is not a defect. The env-named symbols stay on-change, so both modes are covered.
-func fillerSymbols(sess *Session, exclude map[string]bool, want int) []string {
-	sess.cache.lock.Lock()
-	candidates := make([]string, 0, len(sess.cache.symbols))
-	for _, sym := range sess.cache.symbols {
-		if sym == nil || exclude[strings.ToLower(sym.FullName)] {
+func fillerSymbols(sess *ads.Session, exclude map[string]bool, want int) []string {
+	symbols, err := sess.Symbols()
+	if err != nil {
+		return nil
+	}
+	candidates := make([]string, 0, len(symbols))
+	for _, sym := range symbols {
+		if exclude[strings.ToLower(sym.FullName)] {
 			continue
 		}
 		if !manualFillerTypes[strings.ToUpper(sym.DataType)] {
@@ -116,7 +121,6 @@ func fillerSymbols(sess *Session, exclude map[string]bool, want int) []string {
 		}
 		candidates = append(candidates, sym.FullName)
 	}
-	sess.cache.lock.Unlock()
 	sort.Strings(candidates)
 	if len(candidates) > want {
 		candidates = candidates[:want]
@@ -158,33 +162,33 @@ func TestManualRestartRecovery(t *testing.T) {
 		t.Fatalf("target AMS: %v", err)
 	}
 
-	opts := []Option{
-		WithRequestTimeout(5 * time.Second),
-		WithAutoReconnect(true),
+	opts := []ads.Option{
+		ads.WithRequestTimeout(5 * time.Second),
+		ads.WithAutoReconnect(true),
 		// Unbounded: giving up would close the session, and a PLC that takes two
 		// minutes to boot is not a failure.
-		WithMaxReconnectAttempts(0),
-		WithSymbolVersionStrategy(SymbolVersionAutoReload),
+		ads.WithMaxReconnectAttempts(0),
+		ads.WithSymbolVersionStrategy(ads.SymbolVersionAutoReload),
 	}
 	if hostIP := os.Getenv("ADS_HOST_IP"); hostIP != "" {
-		opts = append(opts, WithHostIP(hostIP))
+		opts = append(opts, ads.WithHostIP(hostIP))
 	}
 	if u, p := os.Getenv("ADS_ROUTE_USER"), os.Getenv("ADS_ROUTE_PASS"); u != "" && p != "" {
-		opts = append(opts, WithRoute("go-ads-manual-restart", u, p))
+		opts = append(opts, ads.WithRoute("go-ads-manual-restart", u, p))
 	}
 	if localAMS := os.Getenv("ADS_LOCAL_AMS"); localAMS != "" {
 		local, err := ams.NewAddress(localAMS, 10500)
 		if err != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, err)
 		}
-		opts = append(opts, WithLocalAddress(local))
+		opts = append(opts, ads.WithLocalAddress(local))
 	}
 	if bindIP := os.Getenv("ADS_LOCAL_BIND_IP"); bindIP != "" {
-		opts = append(opts, WithLocalBindIP(bindIP))
+		opts = append(opts, ads.WithLocalBindIP(bindIP))
 	}
 
 	ctx := context.Background()
-	sess, err := NewSession(ctx, Endpoint{Host: host, Target: target}, opts...)
+	sess, err := ads.NewSession(ctx, ads.Endpoint{Host: host, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -217,28 +221,28 @@ func TestManualRestartRecovery(t *testing.T) {
 	if len(names) < manualSubscriptionCount {
 		t.Logf("note: only %d subscribable symbols found, wanted %d", len(names), manualSubscriptionCount)
 	}
-	configs := make([]NotificationConfig, 0, len(names))
+	configs := make([]ads.NotificationConfig, 0, len(names))
 	for i, n := range names {
 		mode := ams.TransModeServerCycle
 		if i < onChange {
 			mode = ams.TransModeServerOnChange
 		}
-		configs = append(configs, NotificationConfig{
-			Symbol:       n,
-			Mode: mode,
-			MaxDelay:         200 * time.Millisecond,
-			CycleTime:        200 * time.Millisecond,
+		configs = append(configs, ads.NotificationConfig{
+			Symbol:    n,
+			Mode:      mode,
+			MaxDelay:  200 * time.Millisecond,
+			CycleTime: 200 * time.Millisecond,
 		})
 	}
-	ch := make(chan *Update, 256)
-	results, err := sess.subscribeAll(ctx, configs, ch)
+	ch := make(chan *ads.Update, 256)
+	results, err := sess.SubscribeAll(ctx, configs, ch)
 	if err != nil {
 		t.Fatalf("SubscribeAll: %v", err)
 	}
 	subscribed := 0
 	for i, r := range results {
-		if r.Skipped != nil || r.Handle == 0 {
-			t.Logf("note: %s not subscribed (%v)", names[i], r.Skipped)
+		if r.Err != nil {
+			t.Logf("note: %s not subscribed (%v)", names[i], r.Err)
 			continue
 		}
 		subscribed++
@@ -322,7 +326,7 @@ func TestManualRestartRecovery(t *testing.T) {
 
 	recovered := waitForStreamResume(ch, manualRecoveryGrace)
 	if !recovered {
-		state := sess.lifecycle.state.load()
+		state := sess.State()
 		t.Fatalf("no updates within %v of the disruption; session state = %v, IsClosed=%v",
 			manualRecoveryGrace, state, sess.IsClosed())
 	}
@@ -339,8 +343,8 @@ func TestManualRestartRecovery(t *testing.T) {
 	// wait has to be explicit rather than a sleep.
 	settleDeadline := time.Now().Add(60 * time.Second)
 	for {
-		state := sess.lifecycle.state.load()
-		if state == SessionStateConnected || sess.IsClosed() {
+		state := sess.State()
+		if state == ads.SessionStateConnected || sess.IsClosed() {
 			break
 		}
 		if time.Now().After(settleDeadline) {
@@ -352,13 +356,11 @@ func TestManualRestartRecovery(t *testing.T) {
 	if sess.IsClosed() {
 		t.Error("session reports closed although updates resumed")
 	}
-	if state := sess.lifecycle.state.load(); state != SessionStateConnected {
+	if state := sess.State(); state != ads.SessionStateConnected {
 		t.Errorf("state = %v, want Connected after recovery", state)
 	}
 
-	sess.notifications.lock.Lock()
-	bound := len(sess.notifications.activeNotifications)
-	sess.notifications.lock.Unlock()
+	bound := liveCount(sess)
 	if bound != subscribed {
 		t.Errorf("bound notifications = %d, want %d — re-subscribe did not restore every symbol", bound, subscribed)
 	}
@@ -388,7 +390,7 @@ func TestManualRestartRecovery(t *testing.T) {
 }
 
 // drainFor counts updates arriving during d.
-func drainFor(ch <-chan *Update, d time.Duration) int {
+func drainFor(ch <-chan *ads.Update, d time.Duration) int {
 	n := 0
 	deadline := time.After(d)
 	for {
@@ -403,7 +405,7 @@ func drainFor(ch <-chan *Update, d time.Duration) int {
 
 // waitForStreamStop reports whether the update stream went quiet for a stretch
 // long enough that the PLC is clearly gone, within limit.
-func waitForStreamStop(ch <-chan *Update, limit time.Duration) bool {
+func waitForStreamStop(ch <-chan *ads.Update, limit time.Duration) bool {
 	quietFor := 5 * time.Second
 	if limit < 30*time.Second {
 		// Smoke-test sizing: a five-second quiet threshold would eat the whole
@@ -424,7 +426,7 @@ func waitForStreamStop(ch <-chan *Update, limit time.Duration) bool {
 }
 
 // waitForStreamResume reports whether updates started flowing again within limit.
-func waitForStreamResume(ch <-chan *Update, limit time.Duration) bool {
+func waitForStreamResume(ch <-chan *ads.Update, limit time.Duration) bool {
 	deadline := time.After(limit)
 	for {
 		select {
@@ -482,29 +484,29 @@ func TestManualConfigToRun(t *testing.T) {
 		t.Fatalf("target AMS: %v", err)
 	}
 
-	opts := []Option{
-		WithRequestTimeout(5 * time.Second),
-		WithAutoReconnect(true),
-		WithMaxReconnectAttempts(0),
+	opts := []ads.Option{
+		ads.WithRequestTimeout(5 * time.Second),
+		ads.WithAutoReconnect(true),
+		ads.WithMaxReconnectAttempts(0),
 	}
 	if hostIP := os.Getenv("ADS_HOST_IP"); hostIP != "" {
-		opts = append(opts, WithHostIP(hostIP))
+		opts = append(opts, ads.WithHostIP(hostIP))
 	}
 	if u, p := os.Getenv("ADS_ROUTE_USER"), os.Getenv("ADS_ROUTE_PASS"); u != "" && p != "" {
 		// Reuse the route this suite already registered rather than adding another
 		// entry to the device's table.
-		opts = append(opts, WithRoute("go-ads-manual-restart", u, p))
+		opts = append(opts, ads.WithRoute("go-ads-manual-restart", u, p))
 	}
 	if localAMS := os.Getenv("ADS_LOCAL_AMS"); localAMS != "" {
 		local, lerr := ams.NewAddress(localAMS, 10600)
 		if lerr != nil {
 			t.Fatalf("ADS_LOCAL_AMS %q: %v", localAMS, lerr)
 		}
-		opts = append(opts, WithLocalAddress(local))
+		opts = append(opts, ads.WithLocalAddress(local))
 	}
 
 	ctx := context.Background()
-	sess, err := NewSession(ctx, Endpoint{Host: host, Target: target}, opts...)
+	sess, err := ads.NewSession(ctx, ads.Endpoint{Host: host, Target: target}, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -531,17 +533,17 @@ func TestManualConfigToRun(t *testing.T) {
 
 	// Phase 2 — symbol work must refuse, with a cause a consumer can branch on.
 	lerr := sess.LoadSymbols(ctx)
-	if !errors.Is(lerr, ErrRuntimeNotRunning) {
+	if !errors.Is(lerr, ads.ErrRuntimeNotRunning) {
 		t.Errorf("LoadSymbols error = %v, want one wrapping ErrRuntimeNotRunning so a plugin can tell 'retry later' from 'broken'", lerr)
 	} else {
 		timeline("LoadSymbols refused as expected: %v", lerr)
 	}
-	ch := make(chan *Update, 256)
-	_, serr := sess.subscribeAll(ctx, []NotificationConfig{{
-		Symbol:       symbol,
-		Mode: ams.TransModeServerOnChange,
+	ch := make(chan *ads.Update, 256)
+	_, serr := sess.SubscribeAll(ctx, []ads.NotificationConfig{{
+		Symbol: symbol,
+		Mode:   ams.TransModeServerOnChange,
 	}}, ch)
-	if !errors.Is(serr, ErrRuntimeNotRunning) {
+	if !errors.Is(serr, ads.ErrRuntimeNotRunning) {
 		t.Errorf("SubscribeAll error = %v, want ErrRuntimeNotRunning", serr)
 	} else {
 		timeline("subscribe refused as expected")
@@ -557,13 +559,12 @@ func TestManualConfigToRun(t *testing.T) {
 
 	deadline := time.Now().Add(manualDisruptWait)
 	for {
-		if s, known := sess.knownRuntimeState(); known && s == ams.StateRun {
+		if info := sess.Info(); info.RuntimeKnown && info.Runtime == ams.StateRun {
 			break
 		}
 		if time.Now().After(deadline) {
-			s, _ := sess.knownRuntimeState()
-			t.Fatalf("the poll never reported RUN within %v (last state %d) — a session that connected during CONFIG would "+
-				"never start working", manualDisruptWait, uint16(s))
+			t.Fatalf("the poll never reported RUN within %v (last state %v) — a session that connected during CONFIG would "+
+				"never start working", manualDisruptWait, sess.Info().Runtime)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -573,11 +574,11 @@ func TestManualConfigToRun(t *testing.T) {
 	if err := sess.LoadSymbols(ctx); err != nil {
 		t.Fatalf("LoadSymbols after RUN: %v", err)
 	}
-	results, err := sess.subscribeAll(ctx, []NotificationConfig{{
-		Symbol:       symbol,
-		Mode: ams.TransModeServerOnChange,
-		MaxDelay:         200 * time.Millisecond,
-		CycleTime:        200 * time.Millisecond,
+	results, err := sess.SubscribeAll(ctx, []ads.NotificationConfig{{
+		Symbol:    symbol,
+		Mode:      ams.TransModeServerOnChange,
+		MaxDelay:  200 * time.Millisecond,
+		CycleTime: 200 * time.Millisecond,
 	}}, ch)
 	if err != nil {
 		t.Fatalf("subscribe after RUN: %v", err)
