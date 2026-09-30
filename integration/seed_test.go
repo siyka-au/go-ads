@@ -205,6 +205,13 @@ func seedFields() []string {
 	return fields
 }
 
+// subRangeValue is what FB_TypeTest.nSubRange computes from nSeed. It is a
+// top-level-only field: unlike every other seedScalars entry, it is not
+// mirrored into ST_TypeTestStruct/ST_TypeTestSubStruct, nor into GVL_Test
+// (which reuses seedScalars/seedFields for its own, unrelated variables) --
+// so it is tested separately rather than folded into seedScalars.
+func subRangeValue(s uint32) int16 { return int16(int32(s%21) - 10) }
+
 // sameValue compares Go values as the library returns them, treating NaNs of
 // the same type as equal and telling -0 from +0.
 func sameValue(a, b any) bool {
@@ -258,6 +265,24 @@ func assertValue(t *testing.T, label string, got, want any) {
 	if !sameValue(got, want) {
 		t.Errorf("%s = %#v (%T), want %#v (%T)", label, got, got, want, want)
 	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
+// sameRange compares two possibly-nil subrange bounds: equal if both nil, or
+// both non-nil with the same value.
+func sameRange(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func fmtRangeBound(v *int64) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return strconv.FormatInt(*v, 10)
 }
 
 // Seeds cover the wrap of every narrow type, float32's last exact integer and
@@ -333,10 +358,11 @@ func TestSeedReadMatrix(t *testing.T) {
 	sess := seedSession(t)
 	ctx := context.Background()
 	fields := seedFields()
-	names := make([]string, len(fields))
+	names := make([]string, len(fields), len(fields)+1)
 	for i, f := range fields {
 		names[i] = seedFB + f
 	}
+	names = append(names, seedFB+"nSubRange")
 	for _, tc := range seedCases {
 		t.Run(tc.name, func(t *testing.T) {
 			setSeed(t, sess, tc.seed)
@@ -349,6 +375,7 @@ func TestSeedReadMatrix(t *testing.T) {
 			for _, f := range fields {
 				assertValue(t, f, got[seedFB+f], want[f])
 			}
+			assertValue(t, "nSubRange", got[seedFB+"nSubRange"], subRangeValue(tc.seed))
 
 			v, err := sess.ReadValue(ctx, seedFB+"stStructVar")
 			if err != nil {
@@ -468,38 +495,43 @@ func TestSeedCompositeNeedsDatatypeTable(t *testing.T) {
 func TestSeedSymbolMetadata(t *testing.T) {
 	sess := seedSession(t)
 	tests := []struct {
-		name, dataType string
-		length         uint32
+		name, dataType     string
+		length             uint32
+		rangeMin, rangeMax *int64 // both nil except for nSubRange
 	}{
-		{"bBoolVar", "BOOL", 1},
-		{"nSintVar", "SINT", 1},
-		{"nUsintVar", "USINT", 1},
-		{"nByteVar", "BYTE", 1},
-		{"nIntVar", "INT", 2},
-		{"nUintVar", "UINT", 2},
-		{"nWordVar", "WORD", 2},
-		{"nDintVar", "DINT", 4},
-		{"nUdintVar", "UDINT", 4},
-		{"nDwordVar", "DWORD", 4},
-		{"nLintVar", "LINT", 8},
-		{"nUlintVar", "ULINT", 8},
-		{"nLwordVar", "LWORD", 8},
-		{"fRealVar", "REAL", 4},
-		{"fLrealVar", "LREAL", 8},
-		{"tTimeVar", "TIME", 4},
-		{"tdTimeOfDayVar", "TIME_OF_DAY", 4},
-		{"dDateVar", "DATE", 4},
-		{"dtDateTimeVar", "DATE_AND_TIME", 4},
-		{"tLtimeVar", "LTIME", 8},
-		{"tdLTimeOfDayVar", "LTIME_OF_DAY", 8},
-		{"dLDateVar", "LDATE", 8},
-		{"dtLDateTimeVar", "LDATE_AND_TIME", 8},
-		{"sStringVar", "STRING", 256},
-		{"aIntArray", "ARRAY [0..9] OF INT", 20},
-		{"aDintArray", "ARRAY [-9..9] OF DINT", 76},
-		{"aStructVar", "ARRAY [0..9] OF ST_TypeTestSubStruct", 0},
-		{"aIntArray2d", "ARRAY [0..2,0..2] OF INT", 18},
-		{"stStructVar", "ST_TypeTestStruct", 0}, // size logged, not fixed here
+		{"bBoolVar", "BOOL", 1, nil, nil},
+		{"nSintVar", "SINT", 1, nil, nil},
+		{"nUsintVar", "USINT", 1, nil, nil},
+		{"nByteVar", "BYTE", 1, nil, nil},
+		{"nIntVar", "INT", 2, nil, nil},
+		{"nUintVar", "UINT", 2, nil, nil},
+		{"nWordVar", "WORD", 2, nil, nil},
+		{"nDintVar", "DINT", 4, nil, nil},
+		{"nUdintVar", "UDINT", 4, nil, nil},
+		{"nDwordVar", "DWORD", 4, nil, nil},
+		{"nLintVar", "LINT", 8, nil, nil},
+		{"nUlintVar", "ULINT", 8, nil, nil},
+		{"nLwordVar", "LWORD", 8, nil, nil},
+		{"fRealVar", "REAL", 4, nil, nil},
+		{"fLrealVar", "LREAL", 8, nil, nil},
+		// TwinCAT reports the subrange declaration "INT(-10..10)" as the type
+		// name "INT (-10..10)" (a space before the parenthesis, unlike
+		// STRING(n)); resolveDataType strips it to "INT" and recovers the bound.
+		{"nSubRange", "INT", 2, ptrTo(int64(-10)), ptrTo(int64(10))},
+		{"tTimeVar", "TIME", 4, nil, nil},
+		{"tdTimeOfDayVar", "TIME_OF_DAY", 4, nil, nil},
+		{"dDateVar", "DATE", 4, nil, nil},
+		{"dtDateTimeVar", "DATE_AND_TIME", 4, nil, nil},
+		{"tLtimeVar", "LTIME", 8, nil, nil},
+		{"tdLTimeOfDayVar", "LTIME_OF_DAY", 8, nil, nil},
+		{"dLDateVar", "LDATE", 8, nil, nil},
+		{"dtLDateTimeVar", "LDATE_AND_TIME", 8, nil, nil},
+		{"sStringVar", "STRING", 256, nil, nil},
+		{"aIntArray", "ARRAY [0..9] OF INT", 20, nil, nil},
+		{"aDintArray", "ARRAY [-9..9] OF DINT", 76, nil, nil},
+		{"aStructVar", "ARRAY [0..9] OF ST_TypeTestSubStruct", 0, nil, nil},
+		{"aIntArray2d", "ARRAY [0..2,0..2] OF INT", 18, nil, nil},
+		{"stStructVar", "ST_TypeTestStruct", 0, nil, nil}, // size logged, not fixed here
 	}
 	for _, tt := range tests {
 		v, err := sess.Symbol(context.Background(), seedFB+tt.name)
@@ -512,6 +544,11 @@ func TestSeedSymbolMetadata(t *testing.T) {
 		}
 		if tt.length != 0 && v.Length != tt.length {
 			t.Errorf("%s: Length %d, want %d", tt.name, v.Length, tt.length)
+		}
+		if !sameRange(v.RangeMin, tt.rangeMin) || !sameRange(v.RangeMax, tt.rangeMax) {
+			t.Errorf("%s: range = %s..%s, want %s..%s",
+				tt.name, fmtRangeBound(v.RangeMin), fmtRangeBound(v.RangeMax),
+				fmtRangeBound(tt.rangeMin), fmtRangeBound(tt.rangeMax))
 		}
 		if tt.length == 0 {
 			t.Logf("%s: Length %d, %d members", tt.name, v.Length, len(v.Children()))

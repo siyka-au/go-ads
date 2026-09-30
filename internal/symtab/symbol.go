@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,13 +35,71 @@ func normalizeStringDataType(dt string) string {
 	}
 }
 
+// subrangeBaseTypes are the integer types IEC 61131-3 allows a subrange
+// restriction on. Not BOOL, REAL/LREAL, STRING, or the TIME/DATE family --
+// TwinCAT does not emit a range suffix for those.
+var subrangeBaseTypes = map[string]bool{
+	"SINT": true, "USINT": true, "BYTE": true,
+	"INT": true, "UINT": true, "WORD": true,
+	"DINT": true, "UDINT": true, "DWORD": true,
+	"LINT": true, "ULINT": true, "LWORD": true,
+}
+
+// parseIntRange extracts a subrange annotation like "INT (-10..10)" -- how
+// TwinCAT reports an IEC 61131-3 subrange restriction (e.g. declared
+// `nSubRange : INT(-10..10);`) in a symbol's type name. Mirrors
+// normalizeStringDataType's STRING(n)/WSTRING(n) handling, but for integer
+// subranges, which carry two bounds instead of a length, and a space before
+// the parenthesis where STRING(n) has none.
+//
+// Returns ok=false, leaving dt to be handled as an ordinary type name, if dt
+// doesn't have this shape, its base isn't a subrange-eligible integer type,
+// or the bounds don't parse as low <= high.
+func parseIntRange(dt string) (name string, low, high int64, ok bool) {
+	open := strings.IndexByte(dt, '(')
+	if open < 0 || dt[len(dt)-1] != ')' {
+		return "", 0, 0, false
+	}
+	name = strings.TrimSpace(dt[:open])
+	if !subrangeBaseTypes[name] {
+		return "", 0, 0, false
+	}
+	lowStr, highStr, ok := strings.Cut(dt[open+1:len(dt)-1], "..")
+	if !ok {
+		return "", 0, 0, false
+	}
+	low, err := strconv.ParseInt(strings.TrimSpace(lowStr), 10, 64)
+	if err != nil {
+		return "", 0, 0, false
+	}
+	high, err = strconv.ParseInt(strings.TrimSpace(highStr), 10, 64)
+	if err != nil || low > high {
+		return "", 0, 0, false
+	}
+	return name, low, high, true
+}
+
+// resolveDataType normalizes a PLC-reported type name for storage on a Symbol
+// or TypeInfo: STRING(n)/WSTRING(n) collapse to their bare name (see
+// normalizeStringDataType), and a subrange like INT(-10..10) collapses to its
+// base name with rangeMin/rangeMax set. A name is never both -- STRING and an
+// integer subrange are mutually exclusive shapes -- so callers get exactly one
+// of the two treatments.
+func resolveDataType(dt string) (name string, rangeMin, rangeMax *int64) {
+	if base, low, high, ok := parseIntRange(dt); ok {
+		return base, &low, &high
+	}
+	return normalizeStringDataType(dt), nil, nil
+}
+
 // symbol is the internal cache record; external callers use SymbolView.
 //
-// Field guards: the metadata (FullName, DataType, Group, Offset, Length,
-// BaseType, Flags, Parent, Children) is immutable after construction and needs no
-// lock. Value, Valid, ValueParsed and LastUpdateTime are guarded by cache.lock, as
-// is Handle -- zeroed on reload, and an observed zero simply fails the next PLC
-// call and prompts a re-resolve. Parent/Children form a tree fixed at discovery.
+// Field guards: the metadata (FullName, DataType, RangeMin, RangeMax, Group,
+// Offset, Length, BaseType, Flags, Parent, Children) is immutable after
+// construction and needs no lock. Value, Valid, ValueParsed and LastUpdateTime
+// are guarded by cache.lock, as is Handle -- zeroed on reload, and an observed
+// zero simply fails the next PLC call and prompts a re-resolve. Parent/Children
+// form a tree fixed at discovery.
 type Symbol struct {
 	FullName       string
 	LastUpdateTime time.Time
@@ -54,6 +113,12 @@ type Symbol struct {
 	BaseType       ams.DataType // protocol ADST_ code (e.g., DataTypeReal32=4 for REAL)
 	Flags          ams.SymbolFlag
 	ContextMask    uint8 // PLC task context (bits 8-11 of Flags); 0 = no task binding
+
+	// RangeMin/RangeMax are the declared bounds of an IEC 61131-3 subrange type
+	// (e.g. INT(-10..10)), parsed from the type name by parseIntRange. Both nil
+	// for a symbol with no subrange restriction; 0 is a legitimate bound, so
+	// presence is signaled by non-nil rather than a separate flag.
+	RangeMin, RangeMax *int64
 
 	Value       any // decoded to its Go type; see value.go
 	Valid       bool
@@ -179,10 +244,13 @@ func ParseSymbolInfo(resp []byte) (ams.SymbolInfo, error) {
 // FromInfo builds a symbol from a single-name lookup. It has no children:
 // struct and array members need the full symbol and data type tables.
 func FromInfo(info ams.SymbolInfo) *Symbol {
+	dataType, rangeMin, rangeMax := resolveDataType(info.DataType)
 	return &Symbol{
 		FullName:       info.Name,
 		Name:           info.Name,
-		DataType:       normalizeStringDataType(info.DataType),
+		DataType:       dataType,
+		RangeMin:       rangeMin,
+		RangeMax:       rangeMax,
 		Comment:        info.Comment,
 		Group:          uint32(info.Group),
 		Offset:         info.Offset,

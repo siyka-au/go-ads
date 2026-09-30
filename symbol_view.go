@@ -48,6 +48,11 @@ type SymbolView struct {
 	BitMember   bool  // a BIT member of a struct: Offset and Length count bits
 	Value       any   // the cached value as its Go type (see internal/symtab/value.go); a copy
 
+	// RangeMin/RangeMax are the declared bounds of an IEC 61131-3 subrange type
+	// (e.g. INT(-10..10)). Both nil for a symbol with no subrange restriction;
+	// 0 is a legitimate bound, so presence is signaled by non-nil.
+	RangeMin, RangeMax *int64
+
 	conn *Session
 }
 
@@ -253,6 +258,8 @@ func viewOf(s *symtab.Symbol, conn *Session) SymbolView {
 		IsRoot:      s.Parent == nil,
 		BitMember:   s.BitMember,
 		Value:       symtab.CopyValue(s.Value),
+		RangeMin:    s.RangeMin,
+		RangeMax:    s.RangeMax,
 		conn:        conn,
 	}
 }

@@ -43,8 +43,11 @@ type TypeInfo struct {
 	DatatypeEntry DatatypeEntry
 	Name          string
 	DataType      string
-	Comment       string
-	Children      map[string]*TypeInfo
+	// RangeMin/RangeMax are the declared bounds of an IEC 61131-3 subrange type
+	// (e.g. INT(-10..10)); both nil when DataType carries no subrange.
+	RangeMin, RangeMax *int64
+	Comment            string
+	Children           map[string]*TypeInfo
 }
 
 type SymbolEntry struct {
@@ -60,11 +63,12 @@ type SymbolEntry struct {
 }
 
 type UploadSymbol struct {
-	SymbolEntry SymbolEntry
-	Name        string
-	DataType    string
-	Comment     string
-	Children    map[string]*UploadSymbol
+	SymbolEntry        SymbolEntry
+	Name               string
+	DataType           string
+	RangeMin, RangeMax *int64
+	Comment            string
+	Children           map[string]*UploadSymbol
 }
 
 func ParseSymbols(data []byte, datatypes map[string]TypeInfo, lg *slog.Logger) (symbols map[string]*Symbol, err error) {
@@ -95,8 +99,7 @@ func ParseSymbols(data []byte, datatypes map[string]TypeInfo, lg *slog.Logger) (
 		buff.Next(1)
 		item := UploadSymbol{}
 		item.Name = string(name)
-		item.DataType = string(dt)
-		item.DataType = normalizeStringDataType(item.DataType)
+		item.DataType, item.RangeMin, item.RangeMax = resolveDataType(string(dt))
 		item.Comment = string(comment)
 		item.SymbolEntry = result
 		endBuff := buff.Len()
@@ -133,6 +136,8 @@ func AddSymbol(uploadSym UploadSymbol, datatypes map[string]TypeInfo, lg *slog.L
 		LastUpdateTime: time.Now(),
 		FullName:       uploadSym.Name,
 		DataType:       uploadSym.DataType,
+		RangeMin:       uploadSym.RangeMin,
+		RangeMax:       uploadSym.RangeMax,
 		Comment:        uploadSym.Comment,
 		Length:         uploadSym.SymbolEntry.Size,
 		BaseType:       ams.DataType(uploadSym.SymbolEntry.DataType),
@@ -192,6 +197,8 @@ func (data *TypeInfo) addOffsetDepth(parent *Symbol, datatypes map[string]TypeIn
 			LastUpdateTime: time.Now(),
 			FullName:       path,
 			DataType:       segment.DataType,
+			RangeMin:       segment.RangeMin,
+			RangeMax:       segment.RangeMax,
 			Comment:        segment.Comment,
 			Length:         segment.DatatypeEntry.Size,
 			// Left at DataTypeVoid, a member resolved by guess instead: BOOL became
@@ -292,7 +299,7 @@ func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logg
 
 	header.DatatypeEntry = result
 
-	header.DataType = normalizeStringDataType(header.DataType)
+	header.DataType, header.RangeMin, header.RangeMax = resolveDataType(header.DataType)
 
 	childLen := int(result.EntryLength) - (totalSize - data.Len())
 	if childLen <= 0 {
