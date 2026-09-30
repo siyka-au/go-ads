@@ -94,12 +94,12 @@ func resolveDataType(dt string) (name string, rangeMin, rangeMax *int64) {
 
 // symbol is the internal cache record; external callers use SymbolView.
 //
-// Field guards: the metadata (FullName, DataType, RangeMin, RangeMax, Group,
-// Offset, Length, BaseType, Flags, Parent, Children) is immutable after
-// construction and needs no lock. Value, Valid, ValueParsed and LastUpdateTime
-// are guarded by cache.lock, as is Handle -- zeroed on reload, and an observed
-// zero simply fails the next PLC call and prompts a re-resolve. Parent/Children
-// form a tree fixed at discovery.
+// Field guards: the metadata (FullName, DataType, RangeMin, RangeMax,
+// Constants, Group, Offset, Length, BaseType, Flags, Parent, Children) is
+// immutable after construction and needs no lock. Value, Valid, ValueParsed
+// and LastUpdateTime are guarded by cache.lock, as is Handle -- zeroed on
+// reload, and an observed zero simply fails the next PLC call and prompts a
+// re-resolve. Parent/Children form a tree fixed at discovery.
 type Symbol struct {
 	FullName       string
 	LastUpdateTime time.Time
@@ -119,6 +119,11 @@ type Symbol struct {
 	// for a symbol with no subrange restriction; 0 is a legitimate bound, so
 	// presence is signaled by non-nil rather than a separate flag.
 	RangeMin, RangeMax *int64
+
+	// Constants is an enum's declared members, parsed from its datatype-table
+	// entry's EnumInfo block (see decodeExtendedDatatypeInfo). Nil for a
+	// non-enum symbol, or an enum whose datatype table wasn't loaded.
+	Constants []EnumConstant
 
 	Value       any // decoded to its Go type; see value.go
 	Valid       bool

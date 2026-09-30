@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -386,6 +387,25 @@ func uintInRange(dataType string, v any, hi uint64) (uint64, error) {
 	return n, nil
 }
 
+// checkEnumMember rejects writing a value that isn't one of an enum's
+// declared constants. v must be an integer Go type (any width/sign
+// encodeScalar itself would accept); dataType is only used to phrase the
+// error the same way encodeScalar's own range errors read.
+func checkEnumMember(dataType string, v any, constants []EnumConstant) error {
+	n, err := intInRange(dataType, v, math.MinInt64, math.MaxInt64)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(constants, func(c EnumConstant) bool { return c.Value == n }) {
+		return nil
+	}
+	declared := make([]string, len(constants))
+	for i, c := range constants {
+		declared[i] = fmt.Sprintf("%s=%d", c.Name, c.Value)
+	}
+	return fmt.Errorf("%d is not a declared member of %s (%s)", n, dataType, strings.Join(declared, ", "))
+}
+
 // encode serialises v, in the shape ReadValue returns for this symbol, into
 // the symbol's bytes. A struct takes a map naming every member and nothing
 // else; an array a slice of exactly its element count, nested per dimension.
@@ -394,6 +414,11 @@ func (s *Symbol) Encode(v any, datatypes map[string]TypeInfo) ([]byte, error) {
 		dt, err := s.scalarType(datatypes)
 		if err != nil {
 			return nil, err
+		}
+		if len(s.Constants) > 0 {
+			if err := checkEnumMember(s.DataType, v, s.Constants); err != nil {
+				return nil, err
+			}
 		}
 		b, err := encodeScalar(dt, v, s.Length)
 		if err != nil {

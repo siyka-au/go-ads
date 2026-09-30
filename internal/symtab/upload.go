@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -17,6 +18,25 @@ import (
 // datatypeFlagBitValues marks a datatype entry whose Offs and Size count bits,
 // not bytes: a BIT member of a struct (ADSDATATYPEFLAG_BITVALUES).
 const datatypeFlagBitValues = 0x20
+
+// Datatype-entry extended-data flags: each introduces an optional block after
+// ArrayInfo/SubItems, in this fixed order. TC3 does not document this format;
+// go-ads previously discarded all of it as unaccounted-for padding.
+const (
+	datatypeFlagTypeGuid   = 0x80   // 16-byte type GUID
+	datatypeFlagCopyMask   = 0x200  // Size bytes
+	datatypeFlagMethods    = 0x800  // RPC methods; variable-length, not supported here
+	datatypeFlagAttributes = 0x1000 // {attribute 'k':='v'} pragma list
+	datatypeFlagEnumInfo   = 0x2000 // enum constant name/value table -- the target
+)
+
+// EnumConstant is one named member of an enum, parsed from the EnumInfo block
+// of its datatype-table entry (datatypeFlagEnumInfo) -- not from SubItems,
+// which TC3 leaves at 0 for every enum regardless of the 'strict' attribute.
+type EnumConstant struct {
+	Name  string
+	Value int64
+}
 
 type DatatypeEntry struct {
 	EntryLength   uint32
@@ -46,8 +66,10 @@ type TypeInfo struct {
 	// RangeMin/RangeMax are the declared bounds of an IEC 61131-3 subrange type
 	// (e.g. INT(-10..10)); both nil when DataType carries no subrange.
 	RangeMin, RangeMax *int64
-	Comment            string
-	Children           map[string]*TypeInfo
+	// Constants is an enum's declared members; nil for a non-enum type.
+	Constants []EnumConstant
+	Comment   string
+	Children  map[string]*TypeInfo
 }
 
 type SymbolEntry struct {
@@ -149,6 +171,7 @@ func AddSymbol(uploadSym UploadSymbol, datatypes map[string]TypeInfo, lg *slog.L
 
 	dt, ok := datatypes[uploadSym.DataType]
 	if ok {
+		sym.Constants = dt.Constants
 		sym.Children = dt.AddOffset(sym, datatypes, sym.Group, lg)
 	}
 
@@ -209,6 +232,14 @@ func (data *TypeInfo) addOffsetDepth(parent *Symbol, datatypes map[string]TypeIn
 			Offset:    segment.DatatypeEntry.Offs,
 			BitMember: segment.DatatypeEntry.Flags&datatypeFlagBitValues != 0,
 			Parent:    parent,
+		}
+
+		// A struct member's or array element's Constants live on the datatype
+		// table entry its DataType names (e.g. "E_Something"), not on segment
+		// itself (segment is the field/element entry, not the type entry) --
+		// look them up regardless of whether that type also gets expanded below.
+		if dt, ok := datatypes[segment.DataType]; ok {
+			child.Constants = dt.Constants
 		}
 
 		// An outer dimension of a multi-dimensional array carries its inner
@@ -343,7 +374,124 @@ func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logg
 		}
 	}
 
+	header.Constants, err = decodeExtendedDatatypeInfo(buff, result.Flags, result.Size, ams.DataType(result.DataType), header.Name)
+	if err != nil {
+		return header, err
+	}
+
 	return
+}
+
+// decodeExtendedDatatypeInfo reads the optional TypeGuid/CopyMask/Methods/
+// Attributes/EnumInfo blocks that follow a datatype entry's ArrayInfo/SubItems
+// region, in that fixed order, gated by bits of flags -- see the
+// datatypeFlag* constants. Only EnumInfo's content is retained (as
+// constants); the others are parsed only far enough to skip them correctly,
+// so a type that happens to set them doesn't desync the buffer for whatever
+// follows. baseTypeID is the entry's ADST_ code, used the same way a normal
+// value read resolves a type's decode width and sign, to interpret each
+// enum constant's value bytes correctly.
+func decodeExtendedDatatypeInfo(buf *bytes.Buffer, flags uint32, size uint32, baseTypeID ams.DataType, name string) (constants []EnumConstant, err error) {
+	if flags&datatypeFlagTypeGuid != 0 {
+		if buf.Len() < 16 {
+			return nil, fmt.Errorf("%s: TypeGuid flag set but only %d bytes remain, want 16", name, buf.Len())
+		}
+		buf.Next(16)
+	}
+	if flags&datatypeFlagCopyMask != 0 {
+		if uint32(buf.Len()) < size {
+			return nil, fmt.Errorf("%s: CopyMask flag set but only %d bytes remain, want %d", name, buf.Len(), size)
+		}
+		buf.Next(int(size))
+	}
+	if flags&datatypeFlagMethods != 0 {
+		return nil, fmt.Errorf("%s: Methods flag (0x800) is not supported", name)
+	}
+	if flags&datatypeFlagAttributes != 0 {
+		count, err := readUint16(buf, name, "attribute count")
+		if err != nil {
+			return nil, err
+		}
+		for i := range int(count) {
+			if buf.Len() < 2 {
+				return nil, fmt.Errorf("%s: attribute %d: only %d bytes remain, want at least 2", name, i, buf.Len())
+			}
+			hdr := buf.Next(2)
+			nameLen, valueLen := int(hdr[0]), int(hdr[1])
+			skip := (nameLen + 1) + (valueLen + 1)
+			if buf.Len() < skip {
+				return nil, fmt.Errorf("%s: attribute %d: only %d bytes remain, want %d", name, i, buf.Len(), skip)
+			}
+			buf.Next(skip)
+		}
+	}
+	if flags&datatypeFlagEnumInfo != 0 {
+		count, err := readUint16(buf, name, "enum info count")
+		if err != nil {
+			return nil, err
+		}
+		base := baseTypeID.IECName()
+		if base == "" {
+			return nil, fmt.Errorf("%s: cannot resolve enum base type from ADST code %v", name, baseTypeID)
+		}
+		constants = make([]EnumConstant, 0, count)
+		for i := range int(count) {
+			if buf.Len() < 1 {
+				return nil, fmt.Errorf("%s: enum constant %d: no bytes remain for name length", name, i)
+			}
+			nameLen := int(buf.Next(1)[0])
+			if buf.Len() < nameLen+1 {
+				return nil, fmt.Errorf("%s: enum constant %d: only %d bytes remain, want %d for name", name, i, buf.Len(), nameLen+1)
+			}
+			cname := strings.TrimSuffix(string(buf.Next(nameLen+1)), "\x00")
+			if uint32(buf.Len()) < size {
+				return nil, fmt.Errorf("%s: enum constant %q: only %d bytes remain, want %d for value", name, cname, buf.Len(), size)
+			}
+			v, err := decodeScalar(base, buf.Next(int(size)))
+			if err != nil {
+				return nil, fmt.Errorf("%s: enum constant %q: %w", name, cname, err)
+			}
+			iv, ok := scalarToInt64(v)
+			if !ok {
+				return nil, fmt.Errorf("%s: enum constant %q: unexpected decoded type %T", name, cname, v)
+			}
+			constants = append(constants, EnumConstant{Name: cname, Value: iv})
+		}
+	}
+	return constants, nil
+}
+
+func readUint16(buf *bytes.Buffer, name, what string) (uint16, error) {
+	if buf.Len() < 2 {
+		return 0, fmt.Errorf("%s: only %d bytes remain, want 2 for %s", name, buf.Len(), what)
+	}
+	return binary.LittleEndian.Uint16(buf.Next(2)), nil
+}
+
+// scalarToInt64 narrows one of decodeScalar's integer result types to int64,
+// for comparing/storing an enum constant's value uniformly regardless of its
+// backing width or signedness.
+func scalarToInt64(v any) (int64, bool) {
+	switch x := v.(type) {
+	case int8:
+		return int64(x), true
+	case uint8:
+		return int64(x), true
+	case int16:
+		return int64(x), true
+	case uint16:
+		return int64(x), true
+	case int32:
+		return int64(x), true
+	case uint32:
+		return int64(x), true
+	case int64:
+		return x, true
+	case uint64:
+		return int64(x), true
+	default:
+		return 0, false
+	}
 }
 
 // maxArrayElementsPerLevel caps PLC-declared array Elements per dimension to

@@ -53,6 +53,11 @@ type SymbolView struct {
 	// 0 is a legitimate bound, so presence is signaled by non-nil.
 	RangeMin, RangeMax *int64
 
+	// Constants is an enum's declared members (name and value), recovered from
+	// its datatype-table entry. Nil for a non-enum symbol, or an enum whose
+	// datatype table wasn't loaded.
+	Constants []symtab.EnumConstant
+
 	conn *Session
 }
 
@@ -260,6 +265,7 @@ func viewOf(s *symtab.Symbol, conn *Session) SymbolView {
 		Value:       symtab.CopyValue(s.Value),
 		RangeMin:    s.RangeMin,
 		RangeMax:    s.RangeMax,
+		Constants:   s.Constants,
 		conn:        conn,
 	}
 }
