@@ -2,11 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-This project uses [Conventional Commits](https://www.conventionalcommits.org/) and
-[go-semantic-release](https://github.com/go-semantic-release/semantic-release) for
-automated versioning and changelog generation.
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) for
+commit messages. Releases are explicit: pushing to `master` never publishes anything
+by itself — a release happens only when someone tags a version and pushes that tag
+(`git tag vX.Y.Z && git push origin vX.Y.Z`), which the Release workflow turns into
+a GitHub release with auto-generated notes. This file is still hand-maintained.
 
-## v3.0.0 (unreleased): package split and consumer-driven Session API
+## v3.0.0: package split and consumer-driven Session API
 
 The single package is split along its layers, and the Session API is reshaped
 around what a real consumer (bento-ads) had to work around.
@@ -66,7 +68,7 @@ around what a real consumer (bento-ads) had to work around.
   like discovery and registration already did.
 - `symbol_version_hardware` tests compile again.
 
-## v3.0.0 (unreleased): values are Go types
+## v3.0.0: values are Go types
 
 A **major** release. The string layer is gone: values are read and written as Go
 types, and turning them into text, JSON or anything else is the caller's job.

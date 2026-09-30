@@ -2,8 +2,8 @@
 
 package integration
 
-// Integration tests against the AdsGo_Testing PLC project's FB_EnumTest
-// fixture (Main.fbEnumTest), a distinct fixture from FB_TypeTest: its 15
+// Integration tests against the AdsClient_DeterministicTester PLC project's
+// FB_EnumTest fixture (Main.fbEnumTest), a distinct fixture from FB_TypeTest: its 15
 // named enum types plus one anonymous inline enum (eImplicit) are all
 // selected by nSeed MOD 3 picking an ordinal (A/B/C), not by the
 // UDINT_TO_x arithmetic FB_TypeTest uses -- so it gets its own file rather

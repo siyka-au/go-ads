@@ -2,8 +2,10 @@
 
 package integration
 
-// Integration tests against the AdsGo_Testing PLC project
-// (siyka/ads-go/plc/testing). They assert Go values throughout.
+// Integration tests against the AdsClient_DeterministicTester PLC project,
+// part of the AdsClient_Tester TwinCAT solution
+// (https://github.com/siyka-au/ads-client-tester). They assert Go values
+// throughout.
 //
 //   - Main.fbTypeTest computes every output from nSeed each cycle, so reads are
 //     checked against values the PLC itself derived, independent of this

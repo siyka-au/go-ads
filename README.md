@@ -688,7 +688,7 @@ connection for all communication including notifications.
 
 ### Integration tests
 
-Integration tests require a real Beckhoff PLC on the network. They live in `integration/`, use only the public API, and are gated behind a build tag. Link faults are staged through a local TCP/UDP proxy (`internal/testproxy`) rather than by touching the session.
+Integration tests require a real Beckhoff PLC on the network, running the `AdsClient_DeterministicTester` PLC project from the [ads-client-tester](https://github.com/siyka-au/ads-client-tester) TwinCAT solution. They live in `integration/`, use only the public API, and are gated behind a build tag. Link faults are staged through a local TCP/UDP proxy (`internal/testproxy`) rather than by touching the session.
 
 **Environment file format** (`.env.integration.XXX`):
 
@@ -734,7 +734,7 @@ The `.var` files list all symbols with name, datatype, size, index group, offset
 
 ### CI
 
-CI runs automatically on pull requests to `main` with 4 parallel jobs: lint, test, test-race, and build. All must pass before merging.
+CI runs automatically on pull requests to `master` with 4 parallel jobs: lint, test, test-race, and build. All must pass before merging.
 
 ## TODO
 
