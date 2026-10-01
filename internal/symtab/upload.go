@@ -25,7 +25,7 @@ const datatypeFlagBitValues = 0x20
 const (
 	datatypeFlagTypeGuid   = 0x80   // 16-byte type GUID
 	datatypeFlagCopyMask   = 0x200  // Size bytes
-	datatypeFlagMethods    = 0x800  // RPC methods; variable-length, not supported here
+	datatypeFlagMethods    = 0x800  // PLC-declared methods on a function block; skipped, not retained
 	datatypeFlagAttributes = 0x1000 // {attribute 'k':='v'} pragma list
 	datatypeFlagEnumInfo   = 0x2000 // enum constant name/value table -- the target
 )
@@ -234,6 +234,7 @@ func (data *TypeInfo) addOffsetDepth(parent *Symbol, datatypes map[string]TypeIn
 			Parent:    parent,
 		}
 
+
 		// A struct member's or array element's Constants live on the datatype
 		// table entry its DataType names (e.g. "E_Something"), not on segment
 		// itself (segment is the field/element entry, not the type entry) --
@@ -405,7 +406,28 @@ func decodeExtendedDatatypeInfo(buf *bytes.Buffer, flags uint32, size uint32, ba
 		buf.Next(int(size))
 	}
 	if flags&datatypeFlagMethods != 0 {
-		return nil, fmt.Errorf("%s: Methods flag (0x800) is not supported", name)
+		count, err := readUint16(buf, name, "method count")
+		if err != nil {
+			return nil, err
+		}
+		// Each method entry is self-length-prefixed (its own uint32 total size,
+		// itself included), so it can be skipped whole without decoding its
+		// name/return type/parameters/attributes -- none of which this library
+		// has any use for.
+		for i := range int(count) {
+			if buf.Len() < 4 {
+				return nil, fmt.Errorf("%s: method %d: only %d bytes remain, want 4 for entry length", name, i, buf.Len())
+			}
+			entryLen := int(binary.LittleEndian.Uint32(buf.Next(4)))
+			skip := entryLen - 4
+			if skip < 0 {
+				return nil, fmt.Errorf("%s: method %d: entry declares invalid length %d", name, i, entryLen)
+			}
+			if buf.Len() < skip {
+				return nil, fmt.Errorf("%s: method %d: only %d bytes remain, want %d", name, i, buf.Len(), skip)
+			}
+			buf.Next(skip)
+		}
 	}
 	if flags&datatypeFlagAttributes != 0 {
 		count, err := readUint16(buf, name, "attribute count")

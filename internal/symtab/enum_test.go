@@ -3,7 +3,6 @@ package symtab
 import (
 	"bytes"
 	"encoding/binary"
-	"strings"
 	"testing"
 
 	"github.com/siyka-au/go-ads/v3/ams"
@@ -13,12 +12,15 @@ import (
 type attrKV struct{ name, value string }
 
 // buildEnumDatatypeEntry constructs the raw bytes for one datatype-table
-// entry shaped like a real TwinCAT enum: header, strings, TypeGuid,
-// Attributes, EnumInfo. Flags is fixed at
+// entry shaped like a real TwinCAT enum: header, strings, TypeGuid, an
+// optional Methods block, Attributes, EnumInfo. Flags is fixed at
 // datatypeFlagTypeGuid|datatypeFlagAttributes|datatypeFlagEnumInfo (0x3081,
-// matching every FB_EnumTest type observed live), overridable via
-// extraFlags for the Methods-unsupported test.
-func buildEnumDatatypeEntry(t *testing.T, name, baseType string, baseADST ams.DataType, size uint32, attrs []attrKV, members []EnumConstant, extraFlags uint32) []byte {
+// matching every FB_EnumTest type observed live), plus datatypeFlagMethods
+// when methodEntrySizes is non-empty, overridable further via extraFlags.
+// methodEntrySizes are the (self-length-prefixed) total byte size of each
+// synthetic method entry to insert -- content is arbitrary filler, since
+// go-ads only needs to skip a method entry correctly, never decode it.
+func buildEnumDatatypeEntry(t *testing.T, name, baseType string, baseADST ams.DataType, size uint32, methodEntrySizes []int, attrs []attrKV, members []EnumConstant, extraFlags uint32) []byte {
 	t.Helper()
 
 	var body bytes.Buffer
@@ -29,6 +31,16 @@ func buildEnumDatatypeEntry(t *testing.T, name, baseType string, baseADST ams.Da
 
 	// TypeGuid: 16 arbitrary bytes.
 	body.Write(bytes.Repeat([]byte{0xAB}, 16))
+
+	var methodsFlag uint32
+	if len(methodEntrySizes) > 0 {
+		methodsFlag = datatypeFlagMethods
+		binary.Write(&body, binary.LittleEndian, uint16(len(methodEntrySizes)))
+		for _, sz := range methodEntrySizes {
+			binary.Write(&body, binary.LittleEndian, uint32(sz))
+			body.Write(bytes.Repeat([]byte{0xCD}, sz-4))
+		}
+	}
 
 	// Attributes: uint16 count, then per entry [nameLen byte][valueLen byte][name+\0][value+\0].
 	binary.Write(&body, binary.LittleEndian, uint16(len(attrs)))
@@ -53,7 +65,7 @@ func buildEnumDatatypeEntry(t *testing.T, name, baseType string, baseADST ams.Da
 	entry := DatatypeEntry{
 		Size:          size,
 		DataType:      uint32(baseADST),
-		Flags:         datatypeFlagTypeGuid | datatypeFlagAttributes | datatypeFlagEnumInfo | extraFlags,
+		Flags:         datatypeFlagTypeGuid | methodsFlag | datatypeFlagAttributes | datatypeFlagEnumInfo | extraFlags,
 		NameLength:    nameLen,
 		TypeLength:    typeLen,
 		CommentLength: 0,
@@ -100,7 +112,7 @@ func TestDecodeEnumInfo_RealWireFormat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw := buildEnumDatatypeEntry(t, tt.name, tt.baseType, tt.adst, tt.size, defaultAttrs(), tt.members, 0)
+			raw := buildEnumDatatypeEntry(t, tt.name, tt.baseType, tt.adst, tt.size, nil, defaultAttrs(), tt.members, 0)
 			buf := bytes.NewBuffer(raw)
 			header, err := decodeSymbolUploadDataType(buf, "", nil)
 			if err != nil {
@@ -133,7 +145,7 @@ func TestDecodeEnumInfo_RealWireFormat(t *testing.T) {
 func TestDecodeEnumInfo_Implicit(t *testing.T) {
 	attrs := []attrKV{{"qualified_only", ""}, {"generate_implicit_init_function", ""}}
 	members := []EnumConstant{{"eImplicitOptionA", 0}, {"eImplicitOptionB", 1}, {"eImplicitOptionC", 2}}
-	raw := buildEnumDatatypeEntry(t, "Implicit_Enum__FB_EnumTest__eImplicit", "INT", ams.DataTypeInt16, 2, attrs, members, 0)
+	raw := buildEnumDatatypeEntry(t, "Implicit_Enum__FB_EnumTest__eImplicit", "INT", ams.DataTypeInt16, 2, nil, attrs, members, 0)
 	header, err := decodeSymbolUploadDataType(bytes.NewBuffer(raw), "", nil)
 	if err != nil {
 		t.Fatalf("decodeSymbolUploadDataType: %v", err)
@@ -148,11 +160,27 @@ func TestDecodeEnumInfo_Implicit(t *testing.T) {
 	}
 }
 
-func TestDecodeEnumInfo_MethodsFlagUnsupported(t *testing.T) {
-	raw := buildEnumDatatypeEntry(t, "E_WithMethods", "INT", ams.DataTypeInt16, 2, nil, nil, datatypeFlagMethods)
-	_, err := decodeSymbolUploadDataType(bytes.NewBuffer(raw), "", nil)
-	if err == nil || !strings.Contains(err.Error(), "Methods") {
-		t.Fatalf("err = %v, want an error mentioning the unsupported Methods flag", err)
+// TestDecodeEnumInfo_MethodsAreSkipped reproduces a real function block with
+// a declared PLC method ahead of its Attributes/EnumInfo (observed live: a
+// type named AngleProvider on a production PLC broke LoadSymbols entirely
+// because the Methods block was, at the time, a hard error rather than
+// skipped). Each method entry here is filler content -- go-ads doesn't
+// decode method bodies, only needs to skip correctly past them using each
+// entry's own self-length-prefix.
+func TestDecodeEnumInfo_MethodsAreSkipped(t *testing.T) {
+	members := []EnumConstant{{"eOptionA", 0}, {"eOptionB", 1}, {"eOptionC", 2}}
+	raw := buildEnumDatatypeEntry(t, "E_WithMethods", "INT", ams.DataTypeInt16, 2, []int{24, 40}, defaultAttrs(), members, 0)
+	header, err := decodeSymbolUploadDataType(bytes.NewBuffer(raw), "", nil)
+	if err != nil {
+		t.Fatalf("decodeSymbolUploadDataType: %v", err)
+	}
+	if len(header.Constants) != len(members) {
+		t.Fatalf("Constants = %v, want %v", header.Constants, members)
+	}
+	for i, m := range members {
+		if header.Constants[i] != m {
+			t.Errorf("Constants[%d] = %+v, want %+v", i, header.Constants[i], m)
+		}
 	}
 }
 
@@ -161,7 +189,7 @@ func TestDecodeEnumInfo_MethodsFlagUnsupported(t *testing.T) {
 // still carries the referenced enum's Constants.
 func TestDecodeEnumInfo_InArray(t *testing.T) {
 	elemMembers := []EnumConstant{{"eOptionA", 0}, {"eOptionB", 1}, {"eOptionC", 2}}
-	elemRaw := buildEnumDatatypeEntry(t, "E_Byte", "BYTE", ams.DataTypeUint8, 1, defaultAttrs(), elemMembers, 0)
+	elemRaw := buildEnumDatatypeEntry(t, "E_Byte", "BYTE", ams.DataTypeUint8, 1, nil, defaultAttrs(), elemMembers, 0)
 	elemHeader, err := decodeSymbolUploadDataType(bytes.NewBuffer(elemRaw), "", nil)
 	if err != nil {
 		t.Fatalf("decoding element type: %v", err)
@@ -202,7 +230,7 @@ func TestDecodeEnumInfo_InArray(t *testing.T) {
 // struct+array expansion.
 func TestDecodeEnumInfo_InStructArray(t *testing.T) {
 	enumMembers := []EnumConstant{{"eOptionA", 0}, {"eOptionB", 1}, {"eOptionC", 2}}
-	enumRaw := buildEnumDatatypeEntry(t, "E_Byte", "BYTE", ams.DataTypeUint8, 1, defaultAttrs(), enumMembers, 0)
+	enumRaw := buildEnumDatatypeEntry(t, "E_Byte", "BYTE", ams.DataTypeUint8, 1, nil, defaultAttrs(), enumMembers, 0)
 	enumHeader, err := decodeSymbolUploadDataType(bytes.NewBuffer(enumRaw), "", nil)
 	if err != nil {
 		t.Fatalf("decoding enum type: %v", err)
