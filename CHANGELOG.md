@@ -8,6 +8,30 @@ by itself — a release happens only when someone tags a version and pushes that
 (`git tag vX.Y.Z && git push origin vX.Y.Z`), which the Release workflow turns into
 a GitHub release with auto-generated notes. This file is still hand-maintained.
 
+## Unreleased
+
+### New
+
+- `WithOnRuntimeStateChange(fn func(from, to ams.State))`: fires on every PLC
+  runtime state transition observed by `RuntimeState`/the runtime-state poll
+  (same point `recordRuntimeState` logs "PLC runtime state changed"). Not
+  called for the first-ever reading, which has no real "from".
+- `WithOnReconnectAttempt(fn func(attempt int, err error))`: fires after each
+  reconnect-loop iteration that fails, so a caller can count reconnect
+  failures. The attempt deferred because the runtime is merely not serving yet
+  (`ErrRuntimeNotRunning`) does not fire this — it isn't charged against the
+  attempt budget either.
+- `WithOnNotificationDropped(fn func(symbol string))`: fires wherever
+  `deliverNotification` drops a sample because the caller's channel was full.
+- `WithOnHeartbeatSilent(fn func())`: fires once per silent-window detection in
+  `heartbeatWatch`, at the one point shared by every `HeartbeatRecovery` mode
+  (immediately before the mode-specific branch), so a mode that waits for a
+  second window (`Confirm`) or never recovers at all (`Observe`) does not fire
+  it a second time for the same episode.
+- All four follow the existing `WithOnDisconnect`/`WithOnReconnect` contract:
+  invoked asynchronously (`go fn(...)`) so a slow callback cannot stall the
+  session, and never invoked once the session has reached `Closed`.
+
 ## v3.0.0: package split and consumer-driven Session API
 
 The single package is split along its layers, and the Session API is reshaped

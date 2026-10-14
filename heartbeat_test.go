@@ -1516,3 +1516,50 @@ func TestHeartbeat_RecoversWhenTheBeatIsSlowerThanTheTick(t *testing.T) {
 	t.Fatalf("never recovered with a beat slower than the tick: want=%d have=%d — "+
 		"beatless ticks are resetting the gap counter", w, h)
 }
+
+// TestWithOnHeartbeatSilent: the callback fires once the watcher has concluded
+// a silent window counts as evidence of dead subscriptions, under a recovery
+// mode (Observe) that otherwise leaves the subscriptions alone -- so the fire is
+// attributable to the single shared detection point, not to a side effect of
+// re-subscribing.
+func TestWithOnHeartbeatSilent(t *testing.T) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+
+	var nextHandle atomic.Uint32
+	nextHandle.Store(0xD00)
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
+	})
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+
+	var fired atomic.Int32
+	sess, c := newWiredTestSession(t, srv,
+		WithNotificationHeartbeat(50*time.Millisecond, 2),
+		WithHeartbeatRecovery(HeartbeatRecoveryObserve),
+		WithOnHeartbeatSilent(func() { fired.Add(1) }),
+	)
+	c.SetNotificationHandler(sess.handleNotification)
+	if !c.Capabilities().SumAddNotifStateCAS(0, 2) || !c.Capabilities().SumDeleteNotifStateCAS(0, 2) {
+		t.Fatal("could not force the sum commands into the unsupported state")
+	}
+	preSeedTypedSymbol(sess, "MAIN.silent", 0xF900)
+	ch := make(chan *Update, 4)
+	if _, err := sess.Subscribe(context.Background(), "MAIN.silent", 0, 0,
+		ams.TransModeServerOnChange, ch); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Never deliver a beat or a sample: the watcher's silent-window path is what
+	// must fire the callback. Observe mode never re-subscribes, so a fire here
+	// can only come from the shared detection point, not from recovery's own
+	// side effects.
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if fired.Load() > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("WithOnHeartbeatSilent never fired despite the heartbeat going silent")
+}

@@ -483,6 +483,12 @@ func (sess *Session) heartbeatWatch() {
 		} else {
 			sess.logger.Debug(msg, append(args, "retry", consecutiveFailures)...)
 		}
+		// Single point for every recovery mode: fired here, not inside the
+		// mode-specific branches below, so Confirm's extra wait-for-a-second-window
+		// log and Observe's own Error log do not double-count the same episode.
+		if sess.onHeartbeatSilent != nil && !sess.isClosed() {
+			go sess.onHeartbeatSilent()
+		}
 
 		switch mode := sess.heartbeatRecoveryMode(); mode {
 		case HeartbeatRecoveryConfirm:

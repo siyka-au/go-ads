@@ -352,6 +352,56 @@ func WithOnReconnect(fn func()) Option {
 	}
 }
 
+// WithOnRuntimeStateChange registers a callback invoked whenever the polled PLC
+// runtime state (see RuntimeState, Info().Runtime) changes, at the same point
+// recordRuntimeState logs "PLC runtime state changed". Not called for the first
+// reading (there is no "from" yet). The callback runs in a separate goroutine
+// and must not block.
+func WithOnRuntimeStateChange(fn func(from, to ams.State)) Option {
+	return func(s *Session) {
+		s.onRuntimeStateChange = fn
+	}
+}
+
+// WithOnReconnectAttempt registers a callback invoked after each reconnect
+// attempt that fails (err is never nil) -- one call per iteration of
+// Reconnect's retry loop, counted the same way the loop itself counts attempts
+// against WithMaxReconnectAttempts. The attempt where the runtime is merely not
+// serving yet (ErrRuntimeNotRunning) is deferred, not failed, and does not fire
+// this callback, matching the loop not charging it against the attempt budget.
+// The callback runs in a separate goroutine and must not block.
+func WithOnReconnectAttempt(fn func(attempt int, err error)) Option {
+	return func(s *Session) {
+		s.onReconnectAttempt = fn
+	}
+}
+
+// WithOnNotificationDropped registers a callback invoked whenever a notification
+// is dropped because the caller's update channel was full, at the point
+// deliverNotification logs "notification dropped". The callback runs in a
+// separate goroutine and must not block.
+func WithOnNotificationDropped(fn func(symbol string)) Option {
+	return func(s *Session) {
+		s.onNotificationDropped = fn
+	}
+}
+
+// WithOnHeartbeatSilent registers a callback invoked each time the heartbeat
+// watcher decides a silent window has gone on long enough to count as evidence
+// the caller's subscriptions have died -- the one point in heartbeatWatch common
+// to every HeartbeatRecovery mode, immediately before it decides how to react
+// (re-subscribe immediately, wait for a second window under Confirm, or merely
+// report under Observe). Firing there, rather than inside each mode's branch,
+// means exactly one call per detected episode: the Confirm branch's extra
+// "waiting for a second window" log and the Observe branch's own Error log are
+// both downstream of this same point and do not fire it again. The callback
+// runs in a separate goroutine and must not block.
+func WithOnHeartbeatSilent(fn func()) Option {
+	return func(s *Session) {
+		s.onHeartbeatSilent = fn
+	}
+}
+
 // WithSymbolVersionStrategy selects the online-change handling strategy.
 // Default: SymbolVersionAutoReload (zero-value, applies if option not set).
 //

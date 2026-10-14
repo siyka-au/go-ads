@@ -1585,3 +1585,53 @@ func TestReconnect_LogsEveryFailedAttemptAtError(t *testing.T) {
 			"so an outage outlasting the consumer's error window reads as healthy", failures, attempts)
 	}
 }
+
+// TestWithOnReconnectAttempt: every failed attempt against an unreachable PLC
+// must fire the callback with a non-nil error, counted the same way the loop
+// itself counts attempts (one call per TestReconnect_LogsEveryFailedAttemptAtError
+// failure line above).
+func TestWithOnReconnectAttempt(t *testing.T) {
+	const attempts = 3
+	sess := unreachableSession(t, attempts)
+
+	type call struct {
+		attempt int
+		err     error
+	}
+	var mu sync.Mutex
+	var calls []call
+	sess.onReconnectAttempt = func(attempt int, err error) {
+		mu.Lock()
+		calls = append(calls, call{attempt, err})
+		mu.Unlock()
+	}
+
+	if err := sess.Reconnect(context.Background()); err == nil {
+		t.Fatal("Reconnect against an unreachable PLC returned nil")
+	}
+	// Fired in its own goroutine; give it a moment to land.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		got := len(calls)
+		mu.Unlock()
+		if got >= attempts {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d calls after %d attempts", got, attempts)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, c := range calls {
+		if c.err == nil {
+			t.Errorf("attempt %d fired with a nil error", c.attempt)
+		}
+		if c.attempt <= 0 {
+			t.Errorf("attempt number = %d, want > 0", c.attempt)
+		}
+	}
+}

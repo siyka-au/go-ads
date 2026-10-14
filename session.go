@@ -127,8 +127,12 @@ type Session struct {
 	stateOnce sync.Once
 
 	// Event callbacks (run in goroutine, must not block)
-	onDisconnect func()
-	onReconnect  func()
+	onDisconnect          func()
+	onReconnect           func()
+	onRuntimeStateChange  func(from, to ams.State)
+	onReconnectAttempt    func(attempt int, err error)
+	onNotificationDropped func(symbol string)
+	onHeartbeatSilent     func()
 
 	// Online-change handling (R-SES-011, R-CACHE-013).
 	versionStrategy   SymbolVersionStrategy

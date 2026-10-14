@@ -78,6 +78,52 @@ func TestDeliverNotification_DropsWhenChannelFull(t *testing.T) {
 	}
 }
 
+// TestWithOnNotificationDropped: the callback must fire with the symbol name
+// exactly when a sample is dropped for a full channel, and not on a successful
+// delivery.
+func TestWithOnNotificationDropped(t *testing.T) {
+	t.Run("fires on drop", func(t *testing.T) {
+		ch := make(chan *Update, 1)
+		ch <- &Update{Symbol: "filler"} // fill buffer
+
+		got := make(chan string, 1)
+		conn := &Session{
+			logger:                slog.Default(),
+			lifecycle:             &sessionLifecycle{closedCh: make(chan struct{})},
+			onNotificationDropped: func(symbol string) { got <- symbol },
+		}
+		update := &Update{Symbol: "x", Value: "1", Time: time.Now()}
+		conn.deliverNotification(context.Background(), ch, update, 42, "MAIN.x")
+
+		select {
+		case symbol := <-got:
+			if symbol != "MAIN.x" {
+				t.Errorf("callback symbol = %q, want %q", symbol, "MAIN.x")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("WithOnNotificationDropped never fired for a dropped sample")
+		}
+	})
+
+	t.Run("does not fire on a successful delivery", func(t *testing.T) {
+		ch := make(chan *Update, 1)
+		fired := make(chan struct{}, 1)
+		conn := &Session{
+			logger:                slog.Default(),
+			lifecycle:             &sessionLifecycle{closedCh: make(chan struct{})},
+			onNotificationDropped: func(string) { fired <- struct{}{} },
+		}
+		update := &Update{Symbol: "x", Value: "1", Time: time.Now()}
+		conn.deliverNotification(context.Background(), ch, update, 42, "MAIN.x")
+
+		select {
+		case <-fired:
+			t.Fatal("callback fired although the sample delivered successfully")
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
+}
+
 // ==========================================================================
 // DeviceNotification parsing — binary packet tests
 // ==========================================================================

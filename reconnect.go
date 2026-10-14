@@ -35,6 +35,15 @@ func (sess *Session) logAttempt(msg string, args ...any) {
 	sess.logger.Error(msg, args...)
 }
 
+// fireReconnectAttempt notifies WithOnReconnectAttempt of a failed attempt.
+// err is never nil here -- a successful attempt exits the retry loop instead
+// of reaching either call site.
+func (sess *Session) fireReconnectAttempt(attempt int, err error) {
+	if sess.onReconnectAttempt != nil && !sess.isClosed() {
+		go sess.onReconnectAttempt(attempt, err)
+	}
+}
+
 // reconnectSleep sleeps for the appropriate backoff duration based on the attempt
 // number. Returns early if Close() is called.
 func (sess *Session) reconnectSleep(ctx context.Context, attempt int) error {
@@ -342,6 +351,7 @@ func (sess *Session) Reconnect(ctx context.Context) error {
 		sess.logAttempt("reconnect step failed, retrying",
 			"stage", stage, "error", err, "attempt", attempts,
 			"servedNothing", servedNothing)
+		sess.fireReconnectAttempt(attempts, err)
 		sess.resetForRetry()
 		// isUnservedError alone misses the field shape: the PLC accepts the TCP and
 		// RSTs it within ~40ms having served nothing -- the same "said nothing", with
@@ -390,6 +400,7 @@ func (sess *Session) Reconnect(ctx context.Context) error {
 			lastErr = err
 			sess.logAttempt("reconnect dial/start failed, retrying",
 				"error", err, "ip", sess.ip, "port", sess.port, "attempt", attempts)
+			sess.fireReconnectAttempt(attempts, err)
 			if err := sess.reconnectSleep(ctx, attempts); err != nil {
 				return err
 			}

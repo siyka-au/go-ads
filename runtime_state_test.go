@@ -3,7 +3,9 @@ package ads
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -174,6 +176,43 @@ func TestRuntimeState_ReadingExpires(t *testing.T) {
 	}
 	if err := sess.requireRunningRuntime("probe"); err != nil {
 		t.Errorf("a stale reading still refuses: %v", err)
+	}
+}
+
+// TestWithOnRuntimeStateChange: the callback fires on a genuine transition and
+// not on the first reading, which has no "from" to report.
+func TestWithOnRuntimeStateChange(t *testing.T) {
+	sess := &Session{logger: slog.Default(), lifecycle: &sessionLifecycle{closedCh: make(chan struct{})}}
+	type transition struct{ from, to ams.State }
+	var got []transition
+	var mu sync.Mutex
+	done := make(chan struct{}, 1)
+	WithOnRuntimeStateChange(func(from, to ams.State) {
+		mu.Lock()
+		got = append(got, transition{from, to})
+		mu.Unlock()
+		done <- struct{}{}
+	})(sess)
+
+	// The first reading has nothing to compare against and must not fire.
+	sess.recordRuntimeState(ams.StateRun)
+	select {
+	case <-done:
+		t.Fatal("callback fired on the first-ever reading, which has no real \"from\" state")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	sess.recordRuntimeState(ams.StateConfig)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WithOnRuntimeStateChange never fired for a genuine transition")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0].from != ams.StateRun || got[0].to != ams.StateConfig {
+		t.Errorf("callback saw %+v, want exactly one transition Run -> Config", got)
 	}
 }
 

@@ -168,5 +168,8 @@ func (sess *Session) deliverNotification(ctx context.Context, ch chan<- *Update,
 		sess.logger.Warn("notification dropped (channel full, receiver too slow)",
 			"handle", handle,
 			"symbol", fullName)
+		if sess.onNotificationDropped != nil && !sess.isClosed() {
+			go sess.onNotificationDropped(fullName)
+		}
 	}
 }

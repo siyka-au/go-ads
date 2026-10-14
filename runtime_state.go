@@ -66,6 +66,9 @@ func (sess *Session) recordRuntimeState(state ams.State) {
 	// No nudge into the heartbeat watcher. One was written and removed: with
 	// deferrals no longer counted as failures the interval never inflates while the
 	// runtime is away, so no test could tell the nudge from its absence.
+	if sess.onRuntimeStateChange != nil && !sess.isClosed() {
+		go sess.onRuntimeStateChange(previous, state)
+	}
 }
 
 // runtimeStateTTL is how long a reading is trusted; beyond it the gates permit
