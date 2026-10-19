@@ -2464,15 +2464,10 @@ const tc211StructMemberReply = "4700000040400000c30f0000080000000500000002000000
 	"2100050000002e53544d414348494e455354415455532e53544d4f544f52312e4653504545440000" +
 	"4c5245414c0000"
 
-// TestSubscribe_TC211NulName_DeliversSamples reproduces the customer symptom
-// fixed by porting upstream fd2b37c into internal/symtab: on a TC2 2.11 PLC,
-// GetSymbolInfoByName's NameLength counts the NUL terminator for struct
-// members, so the on-demand subscribe path used to cache the symbol under a
-// name carrying a trailing NUL. Notification dispatch looks the symbol up by
-// handle (not name), so the actual failure was a decode further down the
-// chain; this test instead pins the user-visible contract: subscribing by
-// the clean name must resolve the symbol on demand (no pre-seeded cache) and
-// deliver decoded samples.
+// The customer symptom: every sample dropped with "notification target
+// symbol no longer in cache" because the cache key carried the NUL. The
+// on-demand subscribe path cached the symbol under the name the PLC returned,
+// and on TC2 2.11 that name ends in the terminator NameLength counted.
 func TestSubscribe_TC211NulName_DeliversSamples(t *testing.T) {
 	srv := fakeplc.StartPLC(t)
 	defer srv.Stop()
