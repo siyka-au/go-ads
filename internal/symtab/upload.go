@@ -120,9 +120,9 @@ func ParseSymbols(data []byte, datatypes map[string]TypeInfo, lg *slog.Logger) (
 		}
 		buff.Next(1)
 		item := UploadSymbol{}
-		item.Name = string(name)
-		item.DataType, item.RangeMin, item.RangeMax = resolveDataType(string(dt))
-		item.Comment = string(comment)
+		item.Name = cString(name)
+		item.DataType, item.RangeMin, item.RangeMax = resolveDataType(cString(dt))
+		item.Comment = cString(comment)
 		item.SymbolEntry = result
 		endBuff := buff.Len()
 		symbol := AddSymbol(item, datatypes, lg)
@@ -325,9 +325,9 @@ func decodeSymbolUploadDataType(data *bytes.Buffer, parent string, lg *slog.Logg
 	}
 	data.Next(1)
 
-	header.Name = string(name)
-	header.DataType = string(dt)
-	header.Comment = string(comment)
+	header.Name = cString(name)
+	header.DataType = cString(dt)
+	header.Comment = cString(comment)
 
 	header.DatatypeEntry = result
 

@@ -3,9 +3,11 @@ package ads
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -2450,4 +2452,80 @@ func TestReleaseCleanupCtx_NilLifecycleCtxDoesNotPanic(t *testing.T) {
 	if err := got.Err(); err != nil {
 		t.Errorf("replacement context is done (%v) on a session with no lifecycle context", err)
 	}
+}
+
+// tc211StructMemberReply is the raw 0xF009 (GroupSymbolInfoByNameEx) reply for
+// .stMachineStatus.stMotor1.fSpeed, captured from a CX on TwinCAT 2.11.2234.
+// Mirrors internal/symtab's symbol_test.go fixture of the same name: TC2 2.11
+// counts the NUL terminator in NameLength for struct members, so the
+// on-demand lookup below exercises exactly the decoder path that drops the
+// name's trailing NUL before caching it.
+const tc211StructMemberReply = "4700000040400000c30f0000080000000500000002000000" +
+	"2100050000002e53544d414348494e455354415455532e53544d4f544f52312e4653504545440000" +
+	"4c5245414c0000"
+
+// TestSubscribe_TC211NulName_DeliversSamples reproduces the customer symptom
+// fixed by porting upstream fd2b37c into internal/symtab: on a TC2 2.11 PLC,
+// GetSymbolInfoByName's NameLength counts the NUL terminator for struct
+// members, so the on-demand subscribe path used to cache the symbol under a
+// name carrying a trailing NUL. Notification dispatch looks the symbol up by
+// handle (not name), so the actual failure was a decode further down the
+// chain; this test instead pins the user-visible contract: subscribing by
+// the clean name must resolve the symbol on demand (no pre-seeded cache) and
+// deliver decoded samples.
+func TestSubscribe_TC211NulName_DeliversSamples(t *testing.T) {
+	srv := fakeplc.StartPLC(t)
+	defer srv.Stop()
+
+	reply := mustHexPacket(t, tc211StructMemberReply)
+	srv.OnWriteRead(ams.GroupSymbolInfoByNameEx, func(_ []byte) []byte { return reply })
+
+	// Distinct handles: the heartbeat subscription takes one too.
+	var nextHandle atomic.Uint32
+	nextHandle.Store(0x50)
+	srv.OnAddDeviceNotification(func(_ fakeplc.AddNotifRequest) fakeplc.AddNotifResponse {
+		return fakeplc.AddNotifResponse{Handle: nextHandle.Add(1)}
+	})
+	srv.OnDeleteDeviceNotification(func(_ uint32) ams.ReturnCode { return ams.ReturnCodeNoErrors })
+	var symHandle atomic.Uint32
+	symHandle.Store(0x900)
+	srv.OnWriteRead(ams.GroupSymbolHandleByName, func(_ []byte) []byte {
+		return fakeplc.HandlePayload(symHandle.Add(1))
+	})
+
+	sess, client := newWiredTestSession(t, srv)
+	client.SetNotificationHandler(sess.handleNotification)
+	ctx := context.Background()
+
+	// Deliberately NOT pre-seeded: the point of this test is the on-demand
+	// lookup path (sess.getSymbol -> GetSymbolInfoByName -> symtab.ParseSymbolInfo).
+	ch := make(chan *Update, 1)
+	notifHandle, err := sess.Subscribe(ctx, ".stMachineStatus.stMotor1.fSpeed", 0, 0, ams.TransModeServerOnChange, ch)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	sample := make([]byte, 8)
+	binary.LittleEndian.PutUint64(sample, math.Float64bits(12.5))
+	if err := sess.drivePacket(ctx, buildNotificationPacket(notifHandle, 0, sample)); err != nil {
+		t.Fatalf("drivePacket: %v", err)
+	}
+	select {
+	case u := <-ch:
+		if u.Value != 12.5 {
+			t.Errorf("Update.Value = %#v, want float64(12.5)", u.Value)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sample dropped: no update delivered within 2s (notification target symbol no longer in cache?)")
+	}
+}
+
+// mustHexPacket decodes a hex-encoded fixture, failing the test on error.
+func mustHexPacket(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("bad fixture: %v", err)
+	}
+	return b
 }

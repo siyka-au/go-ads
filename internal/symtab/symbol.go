@@ -18,6 +18,15 @@ import (
 // ensures consistent lookups regardless of caller or PLC casing.
 func Key(name string) string { return strings.ToLower(name) }
 
+// cString cuts b at its first NUL. TC2 2.11 counts the terminator in
+// NameLength for struct members and array elements.
+func cString(b []byte) string {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		b = b[:i]
+	}
+	return string(b)
+}
+
 // normalizeStringDataType strips trailing array/length suffixes from STRING
 // and WSTRING type names. The PLC reports types like "STRING(80)" or
 // "WSTRING(255)"; the library treats all string variants of the same kind
@@ -235,9 +244,9 @@ func ParseSymbolInfo(resp []byte) (ams.SymbolInfo, error) {
 		return ams.SymbolInfo{}, fmt.Errorf("read symbol comment: %w", err)
 	}
 	return ams.SymbolInfo{
-		Name:     string(name), // PLC-returned casing (authoritative)
-		DataType: string(dt),
-		Comment:  string(comment),
+		Name:     cString(name), // PLC-returned casing (authoritative)
+		DataType: cString(dt),
+		Comment:  cString(comment),
 		Group:    ams.Group(entry.IGroup),
 		Offset:   entry.IOffs,
 		Length:   entry.Size,

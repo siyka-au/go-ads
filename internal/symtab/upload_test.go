@@ -909,3 +909,26 @@ func TestAddOffsetChildBaseType(t *testing.T) {
 		t.Errorf("grandchild nDeep BaseType = %d, want %d (DINT)", deep.BaseType, ams.DataTypeInt32)
 	}
 }
+
+// TC2 2.11 counts the NUL terminator in NameLength for struct members and
+// array elements; ParseSymbols must cut it rather than fold it into the key.
+// Fixtures mirror internal/symtab's symbol_test.go (tc211StructMemberReply /
+// tc211ArrayElementReply) -- raw 0xF00B upload replies captured from a CX on
+// TwinCAT 2.11.2234.
+func TestParseSymbols_TC211NulCountedInName(t *testing.T) {
+	data := append(mustHex(t, tc211StructMemberReply), mustHex(t, tc211ArrayElementReply)...)
+	syms, err := ParseSymbols(data, nil, nil)
+	if err != nil {
+		t.Fatalf("ParseSymbols: %v", err)
+	}
+	for _, name := range []string{".STMACHINESTATUS.STMOTOR1.FSPEED", ".ANCOUNTERS[1]"} {
+		sym, ok := syms[Key(name)]
+		if !ok {
+			t.Errorf("%q missing from parsed table (%d entries)", name, len(syms))
+			continue
+		}
+		if sym.FullName != name {
+			t.Errorf("FullName = %q, want %q", sym.FullName, name)
+		}
+	}
+}

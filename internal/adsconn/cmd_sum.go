@@ -85,7 +85,7 @@ func executeSumCommand[Req any, Res any](ctx context.Context, c *Conn, spec sumC
 // SumRead performs a batch read of multiple index group/offset/length combinations
 // in a single ADS round-trip.
 //
-// Tries SumReadEx2 (0xF084, TC3), then SumReadEx (0xF083, TC2+TC3), then
+// Tries SumReadEx2 (0xF084; TC3 and TC2 2.11), then SumReadEx (0xF083), then
 // individual reads. Both sum variants share one response format, and the detected
 // level is cached until reconnect. Deliberately not on executeSumCommand: the
 // two-command-ID fallback does not fit its single-spec contract.
